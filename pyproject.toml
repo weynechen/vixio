@@ -1,0 +1,133 @@
+[project]
+name = "vixio"
+version = "0.1.0"
+description = "Voice-Powered Agent Framework"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+authors = [
+    {name = "Vixio Team"}
+]
+keywords = ["voice", "agent", "ai", "speech", "framework"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+dependencies = [
+    # Web framework
+    "fastapi>=0.110.0",
+    "uvicorn[standard]>=0.27.0",
+    "websockets>=14.0,<15.0",
+    "httpx>=0.28.0",
+    "aiohttp>=3.13.0",
+    "aiohttp-cors>=0.8.0",
+    
+    # Agent frameworks
+    "openai-agents[litellm]>=0.4.2",
+    "openai>=2.7.0",
+    
+    # Audio processing
+    "torch>=2.2.0,<2.3.0",
+    "torchaudio>=2.2.0,<2.3.0",
+    "numpy>=1.26.0,<1.27.0",
+    "opuslib_next>=1.1.5",
+    "pydub>=0.25.1",
+    "silero-vad>=6.1.0",
+    
+    # ASR/TTS providers
+    "edge-tts>=7.2.3",
+    "sherpa-onnx>=1.12.15",
+    "dashscope>=1.24.6",
+    
+    # MCP
+    "mcp>=1.20.0",
+    "mcp-proxy>=0.10.0",
+    
+    # Configuration and logging
+    "pydantic>=2.5.0",
+    "pydantic-settings>=2.1.0",
+    "ruamel.yaml>=0.18.16",
+    "loguru>=0.7.3",
+    
+    # Utilities
+    "PyJWT>=2.10.0",
+    "psutil>=7.0.0",
+    "aioconsole>=0.8.2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.1.0",
+    "black>=23.7.0",
+    "isort>=5.12.0",
+    "mypy>=1.5.0",
+    "ruff>=0.0.287",
+]
+
+langchain = [
+    "langchain>=0.1.0",
+    "langchain-openai>=0.0.5",
+]
+
+langgraph = [
+    "langgraph>=0.0.20",
+]
+
+all = [
+    "vixio[dev,langchain,langgraph]",
+]
+
+[project.urls]
+Homepage = "https://github.com/weynechen/vixio"
+Repository = "https://github.com/weynechen/vixio"
+Issues = "https://github.com/weynechen/vixio/issues"
+
+[project.scripts]
+vixio = "vixio.cli:main"
+
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "."}
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["vixio*"]
+exclude = ["tests*", "docs*", "examples*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --cov=vixio --cov-report=term-missing"
+
+[tool.black]
+line-length = 100
+target-version = ["py312"]
+include = '\.pyi?$'
+
+[tool.isort]
+profile = "black"
+line_length = 100
+
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+

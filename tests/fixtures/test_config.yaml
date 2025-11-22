@@ -1,0 +1,41 @@
+# Test configuration file
+
+server:
+  host: "0.0.0.0"
+  port: 8080
+  transport: "xiaozhi"
+
+pipeline:
+  vad:
+    provider: "silero"
+    threshold: 0.5
+    min_speech_duration_ms: 250
+  
+  turn_detector:
+    silence_threshold_ms: 800
+  
+  asr:
+    provider: "sense_voice"
+    model_path: "models/SenseVoiceSmall"
+    device: "cpu"
+    language: "auto"
+  
+  agent:
+    provider: "qwen"
+    model: "qwen-turbo"
+    api_key: "test-api-key"
+    system_prompt: "You are a helpful voice assistant."
+    temperature: 0.7
+    max_tokens: 2000
+  
+  tts:
+    provider: "fish_audio"
+    model: "fish-speech-1.2"
+    voice_id: "default"
+    sample_rate: 16000
+    streaming: true
+
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
