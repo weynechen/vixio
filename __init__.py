@@ -16,7 +16,7 @@ Supported Providers:
 __version__ = "0.1.0"
 
 # Core abstractions
-from vixio.core.chunk import (
+from core.chunk import (
     Chunk,
     ChunkType,
     AudioChunk,
@@ -31,10 +31,10 @@ from vixio.core.chunk import (
     is_control_chunk,
     is_event_chunk,
 )
-from vixio.core.station import Station, PassthroughStation
-from vixio.core.pipeline import Pipeline
-from vixio.core.transport import TransportBase, TransportBufferMixin
-from vixio.core.session import SessionManager
+from core.station import Station, PassthroughStation
+from core.pipeline import Pipeline
+from core.transport import TransportBase, TransportBufferMixin
+from core.session import SessionManager
 
 __all__ = [
     # Version

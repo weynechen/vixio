@@ -4,7 +4,7 @@ VAD provider interface
 
 from abc import abstractmethod
 from typing import Dict, Any
-from vixio.providers.base import BaseProvider
+from providers.base import BaseProvider
 
 
 class VADProvider(BaseProvider):

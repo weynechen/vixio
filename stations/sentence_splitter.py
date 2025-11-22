@@ -7,8 +7,8 @@ Output: TEXT (complete sentences)
 
 import re
 from typing import AsyncIterator, List
-from vixio.core.station import Station
-from vixio.core.chunk import Chunk, ChunkType, TextChunk, TextDeltaChunk
+from core.station import Station
+from core.chunk import Chunk, ChunkType, TextChunk, TextDeltaChunk
 
 
 class SentenceSplitter:

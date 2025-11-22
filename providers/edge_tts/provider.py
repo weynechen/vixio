@@ -4,7 +4,7 @@ Edge TTS provider implementation
 
 import asyncio
 from typing import AsyncIterator, Dict, Any
-from vixio.providers.tts import TTSProvider
+from providers.tts import TTSProvider
 
 
 class EdgeTTSProvider(TTSProvider):

@@ -7,17 +7,17 @@ This package contains both:
 """
 
 # Provider interfaces
-from vixio.providers.base import BaseProvider
-from vixio.providers.vad import VADProvider
-from vixio.providers.asr import ASRProvider
-from vixio.providers.tts import TTSProvider
-from vixio.providers.agent import AgentProvider, Tool
+from providers.base import BaseProvider
+from providers.vad import VADProvider
+from providers.asr import ASRProvider
+from providers.tts import TTSProvider
+from providers.agent import AgentProvider, Tool
 
 # Provider implementations
-from vixio.providers.silero_vad.provider import SileroVADProvider
-from vixio.providers.sherpa_onnx_local.provider import SherpaOnnxLocalProvider
-from vixio.providers.edge_tts.provider import EdgeTTSProvider
-from vixio.providers.openai_agent.provider import OpenAIAgentProvider
+from providers.silero_vad.provider import SileroVADProvider
+from providers.sherpa_onnx_local.provider import SherpaOnnxLocalProvider
+from providers.edge_tts.provider import EdgeTTSProvider
+from providers.openai_agent.provider import OpenAIAgentProvider
 
 __all__ = [
     # Interfaces

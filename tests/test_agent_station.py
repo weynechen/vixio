@@ -3,9 +3,9 @@ Unit tests for AgentStation
 """
 
 import pytest
-from vixio.core.chunk import Chunk, ChunkType, TextChunk, TextDeltaChunk, EventChunk, ControlChunk
-from vixio.stations.agent import AgentStation
-from vixio.providers.agent import AgentProvider
+from core.chunk import Chunk, ChunkType, TextChunk, TextDeltaChunk, EventChunk, ControlChunk
+from stations.agent import AgentStation
+from providers.agent import AgentProvider
 from typing import AsyncIterator, Dict, Any, Optional
 
 
@@ -204,7 +204,7 @@ async def test_agent_passthrough_non_text_chunks(agent_station):
     session_id = "test-session"
     
     # Send audio chunk
-    from vixio.core.chunk import AudioChunk
+    from core.chunk import AudioChunk
     audio_chunk = AudioChunk(
         type=ChunkType.AUDIO_RAW,
         data=b'\x00\x01' * 100,

@@ -8,8 +8,8 @@ Output: EVENT_TURN_END (after silence threshold)
 import asyncio
 import time
 from typing import AsyncIterator, Optional
-from vixio.core.station import Station
-from vixio.core.chunk import Chunk, ChunkType, EventChunk
+from core.station import Station
+from core.chunk import Chunk, ChunkType, EventChunk
 
 
 class TurnDetectorStation(Station):

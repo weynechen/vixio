@@ -3,9 +3,9 @@ Unit tests for TTSStation
 """
 
 import pytest
-from vixio.core.chunk import Chunk, ChunkType, TextChunk, TextDeltaChunk, AudioChunk, EventChunk, ControlChunk
-from vixio.stations.tts import TTSStation
-from vixio.providers.tts import TTSProvider
+from core.chunk import Chunk, ChunkType, TextChunk, TextDeltaChunk, AudioChunk, EventChunk, ControlChunk
+from stations.tts import TTSStation
+from providers.tts import TTSProvider
 from typing import AsyncIterator
 
 

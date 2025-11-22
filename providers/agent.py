@@ -4,7 +4,7 @@ Agent provider interface
 
 from abc import abstractmethod
 from typing import Any, AsyncIterator, Dict, List, Optional
-from vixio.providers.base import BaseProvider
+from providers.base import BaseProvider
 
 
 class Tool:

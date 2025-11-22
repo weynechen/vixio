@@ -4,7 +4,7 @@ ASR provider interface
 
 from abc import abstractmethod
 from typing import List, Dict, Any
-from vixio.providers.base import BaseProvider
+from providers.base import BaseProvider
 
 
 class ASRProvider(BaseProvider):

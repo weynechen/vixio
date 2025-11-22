@@ -6,9 +6,9 @@ Output: TEXT (transcription result)
 """
 
 from typing import AsyncIterator, List
-from vixio.core.station import Station
-from vixio.core.chunk import Chunk, ChunkType, TextChunk, is_audio_chunk
-from vixio.providers.asr import ASRProvider
+from core.station import Station
+from core.chunk import Chunk, ChunkType, TextChunk, is_audio_chunk
+from providers.asr import ASRProvider
 
 
 class ASRStation(Station):

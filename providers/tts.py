@@ -4,7 +4,7 @@ TTS provider interface
 
 from abc import abstractmethod
 from typing import AsyncIterator, Dict, Any
-from vixio.providers.base import BaseProvider
+from providers.base import BaseProvider
 
 
 class TTSProvider(BaseProvider):

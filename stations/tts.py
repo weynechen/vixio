@@ -6,9 +6,9 @@ Output: AUDIO_ENCODED (streaming) + EVENT_TTS_START/STOP
 """
 
 from typing import AsyncIterator
-from vixio.core.station import Station
-from vixio.core.chunk import Chunk, ChunkType, AudioChunk, EventChunk, is_text_chunk
-from vixio.providers.tts import TTSProvider
+from core.station import Station
+from core.chunk import Chunk, ChunkType, AudioChunk, EventChunk, is_text_chunk
+from providers.tts import TTSProvider
 
 
 class TTSStation(Station):

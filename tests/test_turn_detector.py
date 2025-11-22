@@ -4,8 +4,8 @@ Unit tests for TurnDetectorStation
 
 import pytest
 import asyncio
-from vixio.core.chunk import Chunk, ChunkType, EventChunk, ControlChunk
-from vixio.stations.turn_detector import TurnDetectorStation
+from core.chunk import Chunk, ChunkType, EventChunk, ControlChunk
+from stations.turn_detector import TurnDetectorStation
 
 
 @pytest.fixture

@@ -11,7 +11,7 @@ Responsibilities:
 
 from abc import ABC, abstractmethod
 from typing import AsyncIterator, Callable, Awaitable, Optional
-from vixio.core.chunk import Chunk, ChunkType
+from core.chunk import Chunk, ChunkType
 import asyncio
 from collections import deque
 import logging

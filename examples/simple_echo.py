@@ -7,10 +7,10 @@ Demonstrates basic Transport and Pipeline integration.
 
 import asyncio
 import logging
-from vixio.core.pipeline import Pipeline
-from vixio.core.station import PassthroughStation
-from vixio.core.session import SessionManager
-from vixio.transports.xiaozhi import XiaozhiTransport
+from core.pipeline import Pipeline
+from core.station import PassthroughStation
+from core.session import SessionManager
+from transports.xiaozhi import XiaozhiTransport
 
 # Configure logging
 logging.basicConfig(

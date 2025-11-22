@@ -5,7 +5,7 @@ Silero VAD provider implementation
 import numpy as np
 import torch
 from typing import Dict, Any
-from vixio.providers.vad import VADProvider
+from providers.vad import VADProvider
 
 
 class SileroVADProvider(VADProvider):

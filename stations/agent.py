@@ -6,9 +6,9 @@ Output: TEXT_DELTA (streaming) + EVENT_AGENT_START/STOP
 """
 
 from typing import AsyncIterator
-from vixio.core.station import Station
-from vixio.core.chunk import Chunk, ChunkType, TextChunk, TextDeltaChunk, EventChunk, is_text_chunk
-from vixio.providers.agent import AgentProvider
+from core.station import Station
+from core.chunk import Chunk, ChunkType, TextChunk, TextDeltaChunk, EventChunk, is_text_chunk
+from providers.agent import AgentProvider
 
 
 class AgentStation(Station):

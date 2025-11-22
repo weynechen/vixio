@@ -4,7 +4,7 @@ Sherpa-ONNX local ASR provider implementation
 
 import numpy as np
 from typing import List, Dict, Any
-from vixio.providers.asr import ASRProvider
+from providers.asr import ASRProvider
 
 
 class SherpaOnnxLocalProvider(ASRProvider):

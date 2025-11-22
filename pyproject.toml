@@ -90,7 +90,7 @@ Repository = "https://github.com/weynechen/vixio"
 Issues = "https://github.com/weynechen/vixio/issues"
 
 [project.scripts]
-vixio = "vixio.cli:main"
+vixio = "cli:main"
 
 [build-system]
 requires = ["setuptools>=68.0", "wheel"]

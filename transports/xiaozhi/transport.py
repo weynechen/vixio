@@ -1,406 +1,446 @@
 """
-Xiaozhi WebSocket Transport with built-in protocol
+Xiaozhi transport implementation using FastAPI
 
-This implementation includes:
-1. Xiaozhi protocol handling (audio + control messages)
-2. Input buffering before VAD
-3. Output buffering for smooth playback
-4. WebSocket server management
+Provides WebSocket and HTTP endpoints for Xiaozhi devices
 """
 
 import asyncio
-import json
-import logging
 import uuid
-from typing import AsyncIterator, Callable, Awaitable, Optional, Dict
-import websockets
-from websockets.server import WebSocketServerProtocol
+from typing import AsyncIterator, Dict, Optional, Callable, Coroutine, Any
 
-from vixio.core.transport import TransportBase, TransportBufferMixin
-from vixio.core.chunk import (
-    Chunk,
-    ChunkType,
-    AudioChunk,
-    ControlChunk,
-    EventChunk,
-    is_event_chunk,
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi.responses import JSONResponse
+import uvicorn
+import logging
+
+from core.transport import TransportBase, TransportBufferMixin
+from core.chunk import (
+    Chunk, ChunkType, AudioChunk, TextChunk, ControlChunk, EventChunk
+)
+from transports.xiaozhi.protocol import (
+    XiaozhiProtocol,
+    XiaozhiMessageType,
+    XiaozhiControlAction,
 )
 
-logger = logging.getLogger(__name__)
+
+# Type alias for connection handler
+ConnectionHandler = Callable[[str], Coroutine[Any, Any, None]]
 
 
 class XiaozhiTransport(TransportBase, TransportBufferMixin):
     """
-    Xiaozhi WebSocket Transport.
+    Xiaozhi transport implementation using FastAPI.
     
-    This implementation includes:
-    1. Xiaozhi protocol handling (audio + control messages)
-    2. Input buffering before VAD
-    3. Output buffering for smooth playback
-    4. WebSocket server management
-    
-    User only needs to instantiate this class - protocol is built-in.
-    
-    Xiaozhi Protocol:
-    - Binary messages: PCM audio (16kHz, mono, 16-bit)
-    - JSON messages: Control commands
-      {"type": "interrupt"} - Interrupt bot
-      {"type": "hello", "data": {...}} - Handshake
-      {"type": "stop"} - Stop session
+    Features:
+    - WebSocket endpoint for voice chat
+    - HTTP endpoints for health check and status
+    - Protocol-based message encoding/decoding
+    - Input/output buffering support
     """
     
-    def __init__(self, host: str = "0.0.0.0", port: int = 8080):
+    def __init__(
+        self,
+        host: str = "0.0.0.0",
+        port: int = 8080,
+        websocket_path: str = "/xiaozhi/v1/",
+        app: Optional[FastAPI] = None,
+    ):
         """
         Initialize Xiaozhi transport.
         
         Args:
-            host: Host to bind to (default: 0.0.0.0)
-            port: Port to listen on (default: 8080)
+            host: Host to bind to
+            port: Port to listen on
+            websocket_path: WebSocket endpoint path
+            app: Optional FastAPI app instance
         """
-        TransportBufferMixin.__init__(self)
-        self._host = host
-        self._port = port
-        self._connections: Dict[str, WebSocketServerProtocol] = {}  # connection_id -> websocket
-        self._connection_handlers = []
-        self._server = None
-        self._running = False
-        self.logger = logging.getLogger("vixio.transport.Xiaozhi")
+        self.host = host
+        self.port = port
+        self.websocket_path = websocket_path
+        
+        # Create or use provided FastAPI app
+        self.app = app or FastAPI(
+            title="Vixio Xiaozhi Server",
+            version="0.1.0",
+            description="Voice-powered AI agent server for Xiaozhi devices"
+        )
+        
+        # Protocol handler
+        self.protocol = XiaozhiProtocol()
+        
+        # Connection management
+        self._connections: Dict[str, WebSocket] = {}
+        self._connection_handler: Optional[ConnectionHandler] = None
+        self._server_task: Optional[asyncio.Task] = None
+        
+        # Buffering (from TransportBufferMixin)
+        self._buffers: Dict[str, Dict] = {}  # session_id -> {input: Queue, output: Queue}
+        
+        # Logger
+        self.logger = logging.getLogger("XiaozhiTransport")
+        
+        # Setup routes
+        self._setup_routes()
+    
+    def _setup_routes(self) -> None:
+        """Setup FastAPI routes"""
+        
+        @self.app.get("/")
+        async def root():
+            """Root endpoint - server info"""
+            return JSONResponse({
+                "name": "Vixio Xiaozhi Server",
+                "version": "0.1.0",
+                "status": "running",
+                "connections": len(self._connections),
+                "websocket_path": self.websocket_path,
+            })
+        
+        @self.app.get("/health")
+        async def health():
+            """Health check endpoint"""
+            return JSONResponse({
+                "status": "healthy",
+                "connections": len(self._connections),
+            })
+        
+        @self.app.get("/connections")
+        async def connections():
+            """Get active connections"""
+            return JSONResponse({
+                "count": len(self._connections),
+                "sessions": list(self._connections.keys()),
+            })
+        
+        @self.app.websocket(self.websocket_path)
+        async def websocket_endpoint(websocket: WebSocket):
+            """WebSocket endpoint for voice chat"""
+            await self._handle_websocket(websocket)
+    
+    def set_connection_handler(self, handler: ConnectionHandler) -> None:
+        """
+        Set connection handler callback.
+        
+        Args:
+            handler: Async function to handle new connections
+        """
+        self._connection_handler = handler
     
     async def start(self) -> None:
-        """Start Xiaozhi WebSocket server"""
-        if self._running:
-            self.logger.warning("Server already running")
-            return
+        """Start the FastAPI server"""
+        config = uvicorn.Config(
+            self.app,
+            host=self.host,
+            port=self.port,
+            log_level="info",
+            access_log=False,
+        )
+        server = uvicorn.Server(config)
         
-        async def handle_client(websocket: WebSocketServerProtocol, path: str):
-            """Handle new WebSocket connection"""
-            connection_id = str(uuid.uuid4())
-            self._connections[connection_id] = websocket
-            self._init_buffers(connection_id)
-            
-            self.logger.info(f"New connection: {connection_id[:8]} from {websocket.remote_address}")
-            
-            try:
-                # Notify handlers about new connection
-                for handler in self._connection_handlers:
-                    # Run handler in background
-                    asyncio.create_task(handler(connection_id))
-                
-                # Keep connection alive until client disconnects
-                # The actual message handling is done in input_stream()
-                await websocket.wait_closed()
-            
-            except Exception as e:
-                self.logger.error(f"Error handling connection {connection_id[:8]}: {e}")
-            
-            finally:
-                # Cleanup
-                self._cleanup_buffers(connection_id)
-                if connection_id in self._connections:
-                    del self._connections[connection_id]
-                self.logger.info(f"Connection closed: {connection_id[:8]}")
-        
-        try:
-            self._server = await websockets.serve(
-                handle_client,
-                self._host,
-                self._port
-            )
-            self._running = True
-            self.logger.info(f"Xiaozhi server started on ws://{self._host}:{self._port}")
-        
-        except Exception as e:
-            self.logger.error(f"Failed to start server: {e}")
-            raise
+        self._server_task = asyncio.create_task(server.serve())
+        self.logger.info(
+            f"Xiaozhi server started on http://{self.host}:{self.port}"
+        )
+        self.logger.info(
+            f"WebSocket endpoint: ws://{self.host}:{self.port}{self.websocket_path}"
+        )
     
     async def stop(self) -> None:
-        """Stop WebSocket server"""
-        if not self._running:
-            return
-        
-        self.logger.info("Stopping Xiaozhi server...")
-        
+        """Stop the FastAPI server"""
         # Close all connections
-        for connection_id, ws in list(self._connections.items()):
+        for session_id in list(self._connections.keys()):
             try:
-                await ws.close()
+                websocket = self._connections[session_id]
+                await websocket.close()
             except Exception as e:
-                self.logger.error(f"Error closing connection {connection_id[:8]}: {e}")
+                self.logger.error(f"Error closing connection {session_id}: {e}")
+        
+        self._connections.clear()
+        self._buffers.clear()
         
         # Stop server
-        if self._server:
-            self._server.close()
-            await self._server.wait_closed()
+        if self._server_task:
+            self._server_task.cancel()
+            try:
+                await self._server_task
+            except asyncio.CancelledError:
+                pass
         
-        self._running = False
         self.logger.info("Xiaozhi server stopped")
     
-    async def input_stream(self, connection_id: str) -> AsyncIterator[Chunk]:
+    async def input_stream(self, session_id: str) -> AsyncIterator[Chunk]:
         """
-        Convert Xiaozhi WebSocket messages to Chunk stream.
-        
-        Xiaozhi protocol:
-        - Binary data: PCM audio (16kHz, mono, 16-bit)
-        - JSON: Control messages (interrupt, hello, etc.)
-        
-        Buffering strategy:
-        - Buffer audio chunks initially
-        - When VAD detects voice (EVENT_VAD_START), flush buffer and passthrough
-        - When VAD stops (EVENT_VAD_END), resume buffering
+        Get input stream for a session.
         
         Args:
-            connection_id: Connection ID to get input from
+            session_id: Session identifier
             
         Yields:
-            Chunks from client
+            Input chunks from client
         """
-        websocket = self._connections.get(connection_id)
+        websocket = self._connections.get(session_id)
         if not websocket:
-            self.logger.error(f"Connection not found: {connection_id[:8]}")
-            return
+            raise ConnectionError(f"Session {session_id} not found")
         
-        self.logger.debug(f"Starting input stream for connection {connection_id[:8]}")
+        # Initialize buffer for this session
+        self._init_buffer(session_id)
         
         try:
-            async for raw_message in websocket:
-                # Decode Xiaozhi message to Chunk
-                chunk = self._decode_xiaozhi_message(raw_message, connection_id)
-                if not chunk:
-                    continue
+            while True:
+                # Receive message from WebSocket
+                data = await websocket.receive()
                 
-                # Handle VAD events to control buffering
-                if chunk.type == ChunkType.EVENT_VAD_START:
-                    self.logger.debug(f"VAD started for {connection_id[:8]}, flushing buffer")
-                    self._enable_input_passthrough(connection_id)
-                    
-                    # Flush buffered audio first
-                    buffered = self._get_buffered_input(connection_id)
-                    for buffered_chunk in buffered:
-                        yield buffered_chunk
-                    
-                    yield chunk
-                
-                elif chunk.type == ChunkType.EVENT_VAD_END:
-                    self.logger.debug(f"VAD ended for {connection_id[:8]}, resuming buffering")
-                    yield chunk
-                    self._disable_input_passthrough(connection_id)
-                
-                # Audio chunks: buffer or passthrough based on VAD state
-                elif chunk.type == ChunkType.AUDIO_RAW:
-                    if self._should_buffer_input(connection_id):
-                        # Buffer audio (before VAD detection)
-                        self._add_to_input_buffer(connection_id, chunk)
-                    else:
-                        # Passthrough audio (after VAD detection)
+                if "text" in data:
+                    # JSON message
+                    message = self.protocol.parse_message(data["text"])
+                    chunk = await self._decode_message(message, session_id)
+                    if chunk:
                         yield chunk
                 
-                # Other chunks: always passthrough
-                else:
-                    yield chunk
+                elif "bytes" in data:
+                    # Binary audio message
+                    message = self.protocol.parse_message(data["bytes"])
+                    chunk = await self._decode_message(message, session_id)
+                    if chunk:
+                        yield chunk
         
-        except websockets.exceptions.ConnectionClosed:
-            self.logger.info(f"WebSocket connection closed for {connection_id[:8]}")
-        
+        except WebSocketDisconnect:
+            self.logger.info(f"WebSocket disconnected: {session_id}")
         except Exception as e:
-            self.logger.error(f"Input stream error for {connection_id[:8]}: {e}", exc_info=True)
-            yield EventChunk(
-                type=ChunkType.EVENT_ERROR,
-                event_data={"error": str(e), "source": "input_stream"},
-                source_station="XiaozhiTransport",
-                session_id=connection_id
-            )
+            self.logger.error(f"Error in input stream for {session_id}: {e}")
+            raise
+        finally:
+            self._cleanup_buffer(session_id)
     
-    async def output_chunk(self, connection_id: str, chunk: Chunk) -> None:
+    async def output_chunk(self, session_id: str, chunk: Chunk) -> None:
         """
-        Convert Chunk to Xiaozhi message and send.
-        
-        Output buffering strategy:
-        - Buffer audio chunks
-        - Play at controlled rate (20ms per chunk)
-        - This prevents overwhelming the client
+        Send output chunk to client.
         
         Args:
-            connection_id: Connection to send to
+            session_id: Session identifier
             chunk: Chunk to send
         """
-        websocket = self._connections.get(connection_id)
+        websocket = self._connections.get(session_id)
         if not websocket:
-            self.logger.warning(f"Cannot send to disconnected client: {connection_id[:8]}")
+            self.logger.warning(f"Cannot send to {session_id}: connection not found")
             return
         
-        try:
-            # Convert chunk to Xiaozhi message
-            raw_message = self._encode_xiaozhi_message(chunk)
-            if not raw_message:
-                return
-            
-            # Audio chunks: buffer and control playback
-            if chunk.type == ChunkType.AUDIO_ENCODED:
-                self._add_to_output_buffer(connection_id, chunk)
-                
-                # Start playback if not already playing
-                if not self._output_playing.get(connection_id):
-                    await self._flush_output_buffer(
-                        connection_id,
-                        lambda data: websocket.send(data)
-                    )
-            else:
-                # Non-audio: send immediately
-                await websocket.send(raw_message)
+        # Encode chunk to message
+        message = await self._encode_chunk(chunk)
+        if not message:
+            return
         
-        except websockets.exceptions.ConnectionClosed:
-            self.logger.debug(f"Connection closed while sending to {connection_id[:8]}")
+        # Send message
+        try:
+            encoded = self.protocol.encode_message(message)
+            
+            if isinstance(encoded, bytes):
+                await websocket.send_bytes(encoded)
+            else:
+                await websocket.send_text(encoded)
         
         except Exception as e:
-            self.logger.error(f"Output error for {connection_id[:8]}: {e}")
+            self.logger.error(f"Error sending to {session_id}: {e}")
     
-    async def on_new_connection(
-        self,
-        handler: Callable[[str], Awaitable[None]]
-    ) -> None:
+    async def on_new_connection(self, session_id: str) -> None:
         """
-        Register callback for new connections.
+        Handle new connection.
         
         Args:
-            handler: Async function called with connection_id when client connects
+            session_id: Session identifier
         """
-        self._connection_handlers.append(handler)
-        self.logger.debug(f"Registered connection handler, total: {len(self._connection_handlers)}")
+        self.logger.info(f"New connection: {session_id}")
+        
+        # Send HELLO message
+        hello_msg = self.protocol.create_hello_message(session_id=session_id)
+        await self._send_message(session_id, hello_msg)
     
-    # ============ Xiaozhi Protocol Methods ============
+    async def _handle_websocket(self, websocket: WebSocket) -> None:
+        """
+        Handle WebSocket connection lifecycle.
+        
+        Args:
+            websocket: WebSocket connection
+        """
+        # Generate session ID
+        session_id = str(uuid.uuid4())
+        
+        try:
+            # Accept connection
+            await websocket.accept()
+            self._connections[session_id] = websocket
+            self.logger.info(f"WebSocket accepted: {session_id}")
+            
+            # Notify new connection
+            await self.on_new_connection(session_id)
+            
+            # Call connection handler if set
+            if self._connection_handler:
+                await self._connection_handler(session_id)
+            else:
+                # Default: just keep connection alive
+                try:
+                    while True:
+                        await websocket.receive()
+                except WebSocketDisconnect:
+                    pass
+        
+        except WebSocketDisconnect:
+            self.logger.info(f"WebSocket disconnected: {session_id}")
+        except Exception as e:
+            self.logger.error(f"WebSocket error for {session_id}: {e}", exc_info=True)
+        finally:
+            # Cleanup
+            self._connections.pop(session_id, None)
+            self._cleanup_buffer(session_id)
+            self.logger.info(f"WebSocket closed: {session_id}")
     
-    def _decode_xiaozhi_message(self, raw_message, connection_id: str) -> Optional[Chunk]:
+    async def _decode_message(
+        self,
+        message: Dict[str, Any],
+        session_id: str
+    ) -> Optional[Chunk]:
         """
         Decode Xiaozhi message to Chunk.
         
-        Xiaozhi protocol:
-        - JSON: {"type": "interrupt"} -> CONTROL_INTERRUPT
-        - JSON: {"type": "hello", "data": {...}} -> CONTROL_HELLO
-        - JSON: {"type": "stop"} -> CONTROL_STOP
-        - Binary: PCM audio data -> AUDIO_RAW
-        
         Args:
-            raw_message: Raw message from WebSocket (bytes or str)
-            connection_id: Connection ID for session tracking
+            message: Parsed message dictionary
+            session_id: Session identifier
             
         Returns:
-            Decoded Chunk or None if invalid
+            Chunk or None
         """
-        # Try parse as JSON (control message)
-        if isinstance(raw_message, str):
-            try:
-                msg = json.loads(raw_message)
-                return self._decode_json_message(msg, connection_id)
-            except json.JSONDecodeError:
-                self.logger.warning(f"Invalid JSON from {connection_id[:8]}: {raw_message[:100]}")
-                return None
+        msg_type = message.get("type")
         
-        # Also try parsing bytes as JSON
-        if isinstance(raw_message, bytes):
-            try:
-                msg = json.loads(raw_message.decode('utf-8'))
-                return self._decode_json_message(msg, connection_id)
-            except (json.JSONDecodeError, UnicodeDecodeError):
-                # Not JSON, treat as audio
-                pass
-        
-        # Treat as binary audio data (PCM, 16kHz, mono, 16-bit)
-        if isinstance(raw_message, bytes) and len(raw_message) > 0:
+        # Audio message
+        if msg_type == XiaozhiMessageType.AUDIO:
             return AudioChunk(
                 type=ChunkType.AUDIO_RAW,
-                data=raw_message,
-                sample_rate=16000,
-                channels=1,
-                session_id=connection_id
+                data=message.get("audio_data", b""),
+                sample_rate=self.protocol.sample_rate,
+                channels=self.protocol.channels,
+                session_id=session_id
             )
         
-        return None
-    
-    def _decode_json_message(self, msg: dict, connection_id: str) -> Optional[Chunk]:
-        """Decode JSON message to control chunk"""
-        msg_type = msg.get("type", "")
+        # Control message
+        elif msg_type == XiaozhiMessageType.CONTROL:
+            action = message.get("action", "")
+            
+            if action == XiaozhiControlAction.INTERRUPT:
+                return ControlChunk(
+                    type=ChunkType.CONTROL_INTERRUPT,
+                    command="interrupt",
+                    params={},
+                    session_id=session_id
+                )
+            elif action == XiaozhiControlAction.STOP:
+                return ControlChunk(
+                    type=ChunkType.CONTROL_STOP,
+                    command="stop",
+                    params={},
+                    session_id=session_id
+                )
         
-        if msg_type == "interrupt":
-            return ControlChunk(
-                type=ChunkType.CONTROL_INTERRUPT,
-                command="interrupt",
-                params=msg.get("data", {}),
-                session_id=connection_id
-            )
-        elif msg_type == "hello":
+        # HELLO message
+        elif msg_type == XiaozhiMessageType.HELLO:
             return ControlChunk(
                 type=ChunkType.CONTROL_HELLO,
                 command="hello",
-                params=msg.get("data", {}),
-                session_id=connection_id
+                params=message,
+                session_id=session_id
             )
-        elif msg_type == "stop":
-            return ControlChunk(
-                type=ChunkType.CONTROL_STOP,
-                command="stop",
-                params=msg.get("data", {}),
-                session_id=connection_id
-            )
-        elif msg_type == "start":
-            return ControlChunk(
-                type=ChunkType.CONTROL_START,
-                command="start",
-                params=msg.get("data", {}),
-                session_id=connection_id
-            )
-        else:
-            self.logger.warning(f"Unknown message type: {msg_type}")
-            return None
+        
+        # Text message (not commonly used in voice chat)
+        elif msg_type == XiaozhiMessageType.TEXT:
+            content = message.get("content", message.get("text", ""))
+            if content:
+                return TextChunk(
+                    type=ChunkType.TEXT,
+                    content=content,
+                    session_id=session_id
+                )
+        
+        return None
     
-    def _encode_xiaozhi_message(self, chunk: Chunk) -> Optional[bytes]:
+    async def _encode_chunk(self, chunk: Chunk) -> Optional[Dict[str, Any]]:
         """
         Encode Chunk to Xiaozhi message.
-        
-        Xiaozhi protocol:
-        - AUDIO_ENCODED -> binary data
-        - Events -> JSON: {"type": "event.xxx", "data": ..., "timestamp": ...}
-        - Control -> JSON: {"type": "control.xxx", ...}
         
         Args:
             chunk: Chunk to encode
             
         Returns:
-            Encoded message as bytes, or None if not sendable
+            Message dictionary or None
         """
-        # Audio: send as binary
-        if chunk.type == ChunkType.AUDIO_ENCODED:
-            return chunk.data if isinstance(chunk.data, bytes) else None
-        
-        # Signals: send as JSON
-        elif chunk.is_signal():
-            message_dict = {
-                "type": chunk.type.value,
-                "timestamp": chunk.timestamp,
+        # Audio chunk
+        if chunk.type == ChunkType.AUDIO_ENCODED or chunk.type == ChunkType.AUDIO_RAW:
+            return {
+                "type": XiaozhiMessageType.AUDIO,
+                "audio_data": chunk.data if chunk.data else b"",
             }
-            
-            # Add type-specific data
-            if is_event_chunk(chunk):
-                if hasattr(chunk, 'event_data') and chunk.event_data:
-                    message_dict["data"] = chunk.event_data
-                if hasattr(chunk, 'source_station') and chunk.source_station:
-                    message_dict["source"] = chunk.source_station
-            elif hasattr(chunk, 'params'):
-                message_dict["data"] = chunk.params
-            
-            # Add generic data if present
-            if chunk.data and not message_dict.get("data"):
-                message_dict["data"] = chunk.data
-            
-            return json.dumps(message_dict).encode('utf-8')
         
-        # Text chunks: send as JSON
-        elif chunk.type in (ChunkType.TEXT, ChunkType.TEXT_DELTA):
-            content = getattr(chunk, 'content', None) or getattr(chunk, 'delta', '')
-            message_dict = {
-                "type": chunk.type.value,
-                "text": content,
-                "timestamp": chunk.timestamp,
+        # TTS events
+        elif chunk.type == ChunkType.EVENT_TTS_START:
+            return self.protocol.create_tts_message(
+                session_id=chunk.session_id,
+                state="start",
+                text=chunk.event_data.get("text") if hasattr(chunk, 'event_data') else None
+            )
+        
+        elif chunk.type == ChunkType.EVENT_TTS_STOP:
+            return self.protocol.create_tts_message(
+                session_id=chunk.session_id,
+                state="stop"
+            )
+        
+        # State events
+        elif chunk.type == ChunkType.EVENT_STATE_IDLE:
+            return self.protocol.create_state_message("idle", chunk.session_id)
+        
+        elif chunk.type == ChunkType.EVENT_STATE_LISTENING:
+            return self.protocol.create_state_message("listening", chunk.session_id)
+        
+        elif chunk.type == ChunkType.EVENT_STATE_PROCESSING:
+            return self.protocol.create_state_message("processing", chunk.session_id)
+        
+        elif chunk.type == ChunkType.EVENT_STATE_SPEAKING:
+            return self.protocol.create_state_message("speaking", chunk.session_id)
+        
+        # Error events
+        elif chunk.type == ChunkType.EVENT_ERROR:
+            error_msg = chunk.event_data.get("error") if hasattr(chunk, 'event_data') else "Unknown error"
+            return self.protocol.create_error_message(error_msg, chunk.session_id)
+        
+        # Text chunk (for debugging/logging)
+        elif chunk.type == ChunkType.TEXT:
+            return {
+                "type": XiaozhiMessageType.TEXT,
+                "content": chunk.content if hasattr(chunk, 'content') else str(chunk.data),
+                "session_id": chunk.session_id,
             }
-            return json.dumps(message_dict).encode('utf-8')
         
         return None
+    
+    async def _send_message(self, session_id: str, message: Dict[str, Any]) -> None:
+        """
+        Send message to client.
+        
+        Args:
+            session_id: Session identifier
+            message: Message dictionary
+        """
+        websocket = self._connections.get(session_id)
+        if not websocket:
+            return
+        
+        try:
+            encoded = self.protocol.encode_message(message)
+            
+            if isinstance(encoded, bytes):
+                await websocket.send_bytes(encoded)
+            else:
+                await websocket.send_text(encoded)
+        
+        except Exception as e:
+            self.logger.error(f"Error sending message to {session_id}: {e}")

@@ -8,11 +8,11 @@ Demonstrates full integration of all components.
 import asyncio
 import logging
 import os
-from vixio.core.pipeline import Pipeline
-from vixio.core.session import SessionManager
-from vixio.transports.xiaozhi import XiaozhiTransport
-from vixio.stations import VADStation, TurnDetectorStation, ASRStation, TTSStation
-from vixio.providers import SileroVADProvider, SherpaOnnxLocalProvider, EdgeTTSProvider
+from core.pipeline import Pipeline
+from core.session import SessionManager
+from transports.xiaozhi import XiaozhiTransport
+from stations import VADStation, TurnDetectorStation, ASRStation, TTSStation
+from providers import SileroVADProvider, SherpaOnnxLocalProvider, EdgeTTSProvider
 
 # Configure logging
 logging.basicConfig(
@@ -72,9 +72,11 @@ async def main():
     logger.info("✓ TTS Provider initialized")
     
     # Step 2: Create transport
+    # WebSocket endpoint: ws://0.0.0.0:8080/xiaozhi/v1/
     transport = XiaozhiTransport(
         host="0.0.0.0",
-        port=8080
+        port=8080,
+        websocket_path="/xiaozhi/v1/"
     )
     
     # Step 3: Create pipeline factory
@@ -109,12 +111,17 @@ async def main():
     )
     
     # Step 5: Start server
-    logger.info("=" * 60)
-    logger.info("Starting Voice Chat server on ws://0.0.0.0:8080")
-    logger.info("=" * 60)
+    logger.info("=" * 70)
+    logger.info("Starting Voice Chat Server")
+    logger.info("=" * 70)
+    logger.info(f"WebSocket endpoint: ws://0.0.0.0:8080/xiaozhi/v1/")
+    logger.info(f"HTTP endpoints:")
+    logger.info(f"  - Health check: http://0.0.0.0:8080/health")
+    logger.info(f"  - Server info:  http://0.0.0.0:8080/")
+    logger.info(f"  - Connections:  http://0.0.0.0:8080/connections")
+    logger.info("")
     logger.info("Pipeline: VAD -> TurnDetector -> ASR -> TTS")
-    logger.info("Ready to accept connections...")
-    logger.info("=" * 60)
+    logger.info("=" * 70)
     
     await manager.start()
     

@@ -8,7 +8,7 @@ Processing rules:
 
 from abc import ABC, abstractmethod
 from typing import AsyncIterator, Optional
-from vixio.core.chunk import Chunk
+from core.chunk import Chunk
 import logging
 
 logger = logging.getLogger(__name__)
@@ -33,7 +33,7 @@ class Station(ABC):
             name: Station name for logging (defaults to class name)
         """
         self.name = name or self.__class__.__name__
-        self.logger = logging.getLogger(f"vixio.station.{self.name}")
+        self.logger = logging.getLogger(f"station.{self.name}")
     
     async def process(self, input_stream: AsyncIterator[Chunk]) -> AsyncIterator[Chunk]:
         """

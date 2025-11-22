@@ -10,8 +10,8 @@ Responsibilities:
 
 import asyncio
 from typing import Callable, Dict
-from vixio.core.transport import TransportBase
-from vixio.core.pipeline import Pipeline
+from core.transport import TransportBase
+from core.pipeline import Pipeline
 import logging
 
 logger = logging.getLogger(__name__)
@@ -48,7 +48,7 @@ class SessionManager:
         self.transport = transport
         self.pipeline_factory = pipeline_factory
         self._sessions: Dict[str, asyncio.Task] = {}  # connection_id -> pipeline task
-        self.logger = logging.getLogger("vixio.SessionManager")
+        self.logger = logging.getLogger("SessionManager")
     
     async def start(self) -> None:
         """

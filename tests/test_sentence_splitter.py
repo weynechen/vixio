@@ -3,8 +3,8 @@ Unit tests for SentenceSplitterStation
 """
 
 import pytest
-from vixio.core.chunk import Chunk, ChunkType, TextChunk, TextDeltaChunk, EventChunk, ControlChunk
-from vixio.stations.sentence_splitter import SentenceSplitterStation, SentenceSplitter
+from core.chunk import Chunk, ChunkType, TextChunk, TextDeltaChunk, EventChunk, ControlChunk
+from stations.sentence_splitter import SentenceSplitterStation, SentenceSplitter
 
 
 class TestSentenceSplitter:

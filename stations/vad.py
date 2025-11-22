@@ -6,9 +6,9 @@ Output: AUDIO_RAW (passthrough) + EVENT_VAD_START/END
 """
 
 from typing import AsyncIterator
-from vixio.core.station import Station
-from vixio.core.chunk import Chunk, ChunkType, AudioChunk, EventChunk, is_audio_chunk
-from vixio.providers.vad import VADProvider
+from core.station import Station
+from core.chunk import Chunk, ChunkType, AudioChunk, EventChunk, is_audio_chunk
+from providers.vad import VADProvider
 
 
 class VADStation(Station):

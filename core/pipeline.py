@@ -9,8 +9,8 @@ Design:
 """
 
 from typing import List, Optional, AsyncIterator
-from vixio.core.station import Station
-from vixio.core.chunk import Chunk
+from core.station import Station
+from core.chunk import Chunk
 import logging
 
 logger = logging.getLogger(__name__)
@@ -37,7 +37,7 @@ class Pipeline:
         """
         self.stations = stations
         self.name = name or "Pipeline"
-        self.logger = logging.getLogger(f"vixio.pipeline.{self.name}")
+        self.logger = logging.getLogger(f"pipeline.{self.name}")
         
         if not stations:
             self.logger.warning(f"[{self.name}] Created empty pipeline")

@@ -3,7 +3,7 @@ OpenAI Agent provider implementation
 """
 
 from typing import Any, AsyncIterator, Dict, List, Optional
-from vixio.providers.agent import AgentProvider, Tool
+from providers.agent import AgentProvider, Tool
 
 
 try:
