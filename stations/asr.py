@@ -42,6 +42,10 @@ class ASRStation(Station):
         """
         # Handle signals
         if chunk.is_signal():
+            # Passthrough signal first (important for downstream)
+            yield chunk
+            
+            # Then process side effects
             # Transcribe when turn ends
             if chunk.type == ChunkType.EVENT_TURN_END:
                 if self._audio_buffer:
@@ -76,8 +80,6 @@ class ASRStation(Station):
                     self._audio_buffer.clear()
                 self.asr.reset()
             
-            # Passthrough signals
-            yield chunk
             return
         
         # Collect audio for later transcription

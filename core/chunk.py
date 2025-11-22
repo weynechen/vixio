@@ -59,6 +59,10 @@ class ChunkType(str, Enum):
     EVENT_STATE_PROCESSING = "event.state.processing"
     EVENT_STATE_SPEAKING = "event.state.speaking"
     
+    # Agent events (from Agent station)
+    EVENT_AGENT_START = "event.agent.start"
+    EVENT_AGENT_STOP = "event.agent.stop"
+    
     # TTS events (for client sync)
     EVENT_TTS_START = "event.tts.start"
     EVENT_TTS_SENTENCE_START = "event.tts.sentence.start"
