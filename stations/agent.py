@@ -86,6 +86,10 @@ class AgentStation(Station):
             
             self.logger.info(f"Agent processing: '{text[:50]}...'")
             
+            # Passthrough input TEXT first for immediate client feedback
+            # This allows ASR results to be sent immediately before Agent processing
+            yield chunk
+            
             # Emit AGENT_START event
             yield EventChunk(
                 type=ChunkType.EVENT_AGENT_START,
@@ -131,9 +135,6 @@ class AgentStation(Station):
                 )
                 
                 self._is_thinking = False
-            
-            # Passthrough original text chunk
-            yield chunk
         else:
             # Passthrough non-text data
             yield chunk

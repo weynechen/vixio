@@ -791,12 +791,13 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
             error_msg = chunk.event_data.get("error") if hasattr(chunk, 'event_data') else "Unknown error"
             return self.protocol.create_error_message(error_msg, chunk.session_id)
         
-        # Text chunk - send as STT (ASR result) or LLM (agent output)
+        # Text chunk - send as STT (ASR result) or skip (Agent output sent via TTS event)
         elif chunk.type == ChunkType.TEXT:
             text_content = chunk.content if hasattr(chunk, 'content') else str(chunk.data)
             
-            # If source is "asr", send as STT message
-            if chunk.source == "asr":
+            # If source is "asr" (from TextAggregator, which preserves ASR source), send as STT message
+            if "asr" in chunk.source.lower():
+                self.logger.debug(f"Sending ASR result as STT: {text_content[:50]}...")
                 return self.protocol.create_stt_message(
                     text=text_content,
                     session_id=chunk.session_id
@@ -804,24 +805,17 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
             # If source is "agent", it will be sent via TTS sentence_start event
             # So we don't send it here separately
             # (TTS station will emit EVENT_TTS_SENTENCE_START with the text)
+            elif "agent" in chunk.source.lower():
+                # Skip sending - will be sent as TTS sentence_start
+                self.logger.debug(f"Skipping TEXT from agent (will be sent via TTS event): {text_content[:50]}...")
+                return None
             
-            # For other sources or debugging, send as generic text
-            return {
-                "type": XiaozhiMessageType.TEXT,
-                "content": text_content,
-                "session_id": chunk.session_id,
-            }
+            # For other sources, log warning and skip
+            # (Client doesn't support generic "text" type)
+            else:
+                self.logger.warning(f"TEXT chunk from unknown source '{chunk.source}', skipping: {text_content[:50]}...")
+                return None
         
-        # Text delta chunk - for LLM streaming output
-        elif chunk.type == ChunkType.TEXT_DELTA:
-            delta_content = chunk.delta if hasattr(chunk, 'delta') else str(chunk.data)
-            
-            # Send as LLM message for real-time display
-            if chunk.source == "agent":
-                return self.protocol.create_llm_message(
-                    text=delta_content,
-                    session_id=chunk.session_id
-                )
         
         return None
     
