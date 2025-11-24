@@ -25,6 +25,11 @@ from providers import (
     EdgeTTSProvider,
     OpenAIAgentProvider
 )
+from utils import get_local_ip
+
+import dotenv
+
+dotenv.load_dotenv()
 
 # Configure logging
 logging.basicConfig(
@@ -77,7 +82,7 @@ async def main():
         logger.info("✓ ASR Provider initialized")
     
     # Agent Provider (OpenAI)
-    api_key = os.getenv("OPENAI_API_KEY")
+    api_key = os.getenv("DEEPSEEK_API_KEY")
     base_url = os.getenv("OPENAI_BASE_URL")  # Optional, for custom endpoints
     
     if not api_key:
@@ -87,7 +92,7 @@ async def main():
     
     agent_provider = OpenAIAgentProvider(
         api_key=api_key,
-        model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+        model=os.getenv("LITELLM_MODEL", "deepseek/deepseek-chat"),
         base_url=base_url,
         temperature=0.7,
         max_tokens=2000,
@@ -112,11 +117,11 @@ async def main():
     logger.info("✓ TTS Provider initialized")
     
     # Step 2: Create transport
-    # WebSocket endpoint: ws://0.0.0.0:8080/xiaozhi/v1/
+    # WebSocket endpoint: ws://0.0.0.0:8000/xiaozhi/v1/
     # HTTP endpoints for monitoring
     transport = XiaozhiTransport(
         host="0.0.0.0",
-        port=8080,
+        port=8000,
         websocket_path="/xiaozhi/v1/"
     )
     
@@ -158,14 +163,21 @@ async def main():
     )
     
     # Step 5: Start server
+    # Get real IP address
+    local_ip = get_local_ip()
+    
     logger.info("=" * 70)
     logger.info("Vixio AI Agent Voice Chat Server")
     logger.info("=" * 70)
-    logger.info(f"WebSocket endpoint: ws://0.0.0.0:8080/xiaozhi/v1/")
+    logger.info(f"WebSocket endpoint:")
+    logger.info(f"  ws://{local_ip}:{transport.port}{transport.websocket_path}")
+    logger.info(f"")
     logger.info(f"HTTP endpoints:")
-    logger.info(f"  - Health check: http://0.0.0.0:8080/health")
-    logger.info(f"  - Server info:  http://0.0.0.0:8080/")
-    logger.info(f"  - Connections:  http://0.0.0.0:8080/connections")
+    logger.info(f"  - Server info:     http://{local_ip}:{transport.port}/")
+    logger.info(f"  - Health check:    http://{local_ip}:{transport.port}/health")
+    logger.info(f"  - Connections:     http://{local_ip}:{transport.port}/connections")
+    logger.info(f"  - OTA interface:   http://{local_ip}:{transport.port}/xiaozhi/ota/")
+    logger.info(f"  - Vision analysis: http://{local_ip}:{transport.port}/mcp/vision/explain")
     logger.info("")
     logger.info("Pipeline: VAD -> TurnDetector -> ASR -> Agent -> SentenceSplitter -> TTS")
     logger.info("=" * 70)

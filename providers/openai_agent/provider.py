@@ -1,5 +1,5 @@
 """
-OpenAI Agent provider implementation
+OpenAI Agent provider implementation using OpenAI Agents framework and LiteLLM
 """
 
 from typing import Any, AsyncIterator, Dict, List, Optional
@@ -7,43 +7,52 @@ from providers.agent import AgentProvider, Tool
 
 
 try:
-    from openai import AsyncOpenAI
-    OPENAI_AVAILABLE = True
+    from agents import Agent, Runner, FunctionTool
+    from agents.extensions.models.litellm_model import LitellmModel
+    from agents.tool_context import ToolContext
+    AGENTS_AVAILABLE = True
 except ImportError:
-    OPENAI_AVAILABLE = False
+    AGENTS_AVAILABLE = False
 
 
 class OpenAIAgentProvider(AgentProvider):
     """
     OpenAI Agent provider implementation.
     
-    Uses OpenAI's Chat Completion API with streaming support.
+    Uses OpenAI Agents framework with LiteLLM for flexible model support.
+    Delegates conversation management, memory, and tool execution to the framework.
     """
     
     def __init__(
         self,
         api_key: str,
-        model: str = "gpt-4o-mini",
+        model: str = "deepseek/deepseek-chat",
         base_url: Optional[str] = None,
         temperature: float = 0.7,
         max_tokens: int = 2000,
-        name: str = "OpenAIAgent"
+        name: str = "OpenAIAgent",
+        timeout: int = 300,
+        top_p: Optional[float] = None,
+        frequency_penalty: Optional[float] = None,
     ):
         """
         Initialize OpenAI Agent provider.
         
         Args:
-            api_key: OpenAI API key
+            api_key: OpenAI API key (or compatible API key)
             model: Model name (e.g., "gpt-4o-mini", "gpt-4")
-            base_url: Optional custom base URL (for Azure, etc.)
+            base_url: Optional custom base URL (for Azure, OpenAI-compatible APIs, etc.)
             temperature: Response randomness (0.0-2.0)
             max_tokens: Maximum tokens in response
             name: Provider name
+            timeout: Request timeout in seconds
+            top_p: Nucleus sampling parameter (optional)
+            frequency_penalty: Frequency penalty parameter (optional)
         """
-        if not OPENAI_AVAILABLE:
+        if not AGENTS_AVAILABLE:
             raise RuntimeError(
-                "OpenAI SDK not available. "
-                "Please install: pip install openai"
+                "OpenAI Agents framework not available. "
+                "Please install: pip install agents litellm"
             )
         
         config = {
@@ -52,29 +61,28 @@ class OpenAIAgentProvider(AgentProvider):
             "base_url": base_url,
             "temperature": temperature,
             "max_tokens": max_tokens,
+            "timeout": timeout,
+            "top_p": top_p,
+            "frequency_penalty": frequency_penalty,
         }
         super().__init__(name=name, config=config)
         
         self.api_key = api_key
-        self.model = model
+        self.model_name = model
         self.base_url = base_url
         self.temperature = temperature
         self.max_tokens = max_tokens
+        self.timeout = timeout
+        self.top_p = top_p
+        self.frequency_penalty = frequency_penalty
         
-        # Create OpenAI client
-        client_params = {"api_key": api_key}
-        if base_url:
-            client_params["base_url"] = base_url
-        
-        self.client = AsyncOpenAI(**client_params)
-        
-        # System prompt and tools
+        # Agent framework objects (created in initialize)
+        self.model = None
+        self.agent = None
         self.system_prompt = None
-        self.tools = []
-        self.messages = []  # Conversation history
         
         self.logger.info(
-            f"OpenAI Agent initialized: model={model}, "
+            f"OpenAI Agent provider created: model={model}, "
             f"temperature={temperature}, max_tokens={max_tokens}"
         )
     
@@ -88,28 +96,51 @@ class OpenAIAgentProvider(AgentProvider):
         Initialize Agent with tools and system prompt.
         
         Args:
-            tools: List of tools (OpenAI function calling)
-            system_prompt: System prompt
-            **kwargs: Additional parameters
+            tools: List of tools (converted to FunctionTool)
+            system_prompt: System prompt (instructions for the agent)
+            **kwargs: Additional Agent framework parameters
         """
-        self.logger.info("Initializing OpenAI Agent...")
+        self.logger.info("Initializing OpenAI Agent framework...")
         
         self.system_prompt = system_prompt or "You are a helpful AI assistant."
-        self.tools = tools or []
         
-        # Initialize conversation with system message
-        self.messages = [
-            {"role": "system", "content": self.system_prompt}
-        ]
+        # Create LiteLLM model
+        model_params = {
+            "model": self.model_name,
+            "api_key": self.api_key,
+        }
         
-        # Convert tools to OpenAI function format if provided
-        if self.tools:
-            self.logger.info(f"Registered {len(self.tools)} tools")
-            # Note: Tool execution not implemented in this basic version
-            # Can be added later with function calling support
+        if self.base_url:
+            model_params["base_url"] = self.base_url
+        
+        self.model = LitellmModel(**model_params)
+        
+        # Convert tools to FunctionTool format
+        function_tools = []
+        if tools:
+            for tool in tools:
+                try:
+                    func_tool = self._convert_to_function_tool(tool)
+                    function_tools.append(func_tool)
+                except Exception as e:
+                    self.logger.error(f"Failed to convert tool {tool.name}: {e}")
+        
+        self.logger.info(f"Registered {len(function_tools)} tools")
+        
+        # Create Agent (framework manages conversation and memory)
+        self.agent = Agent(
+            name=self.name,
+            model=self.model,
+            instructions=self.system_prompt,
+            tools=function_tools,
+            **kwargs,
+        )
         
         self._initialized = True
-        self.logger.info("OpenAI Agent initialized successfully")
+        self.logger.info(
+            f"OpenAI Agent initialized successfully: "
+            f"agent={self.name}, model={self.model_name}"
+        )
     
     async def chat(
         self,
@@ -124,75 +155,98 @@ class OpenAIAgentProvider(AgentProvider):
             context: Optional context
             
         Yields:
-            Response chunks (text deltas)
+            Response chunks (pure text deltas)
         """
         if not self._initialized:
             raise RuntimeError("Agent not initialized. Call initialize() first.")
         
         self.logger.debug(f"User message: {message[:100]}...")
         
-        # Add user message to history
-        self.messages.append({"role": "user", "content": message})
-        
         try:
-            # Create streaming completion
-            stream = await self.client.chat.completions.create(
-                model=self.model,
-                messages=self.messages,
-                temperature=self.temperature,
-                max_tokens=self.max_tokens,
-                stream=True,
-            )
+            # Import required types for event filtering
+            from openai.types.responses import ResponseTextDeltaEvent
             
-            # Collect full response for history
-            full_response = ""
+            # Use Runner.run_streamed for streaming responses
+            result = Runner.run_streamed(self.agent, input=message)
             
-            # Stream response chunks
-            async for chunk in stream:
-                if chunk.choices and len(chunk.choices) > 0:
-                    delta = chunk.choices[0].delta
-                    if delta.content:
-                        full_response += delta.content
-                        yield delta.content
-            
-            # Add assistant response to history
-            if full_response:
-                self.messages.append({"role": "assistant", "content": full_response})
-                self.logger.debug(f"Assistant response: {full_response[:100]}...")
+            # Stream text deltas
+            async for event in result.stream_events():
+                if event.type == "raw_response_event":
+                    if isinstance(event.data, ResponseTextDeltaEvent):
+                        if event.data.delta:
+                            yield event.data.delta
         
         except Exception as e:
             self.logger.error(f"Error during chat: {e}", exc_info=True)
-            error_msg = f"[Error: {str(e)}]"
-            yield error_msg
-            # Add error to history
-            self.messages.append({"role": "assistant", "content": error_msg})
+            yield f"[Error: {str(e)}]"
     
     async def reset_conversation(self) -> None:
         """
-        Reset conversation history.
-        """
-        self.logger.info("Resetting conversation history")
+        Reset conversation.
         
-        # Reset to just system message
-        self.messages = [
-            {"role": "system", "content": self.system_prompt}
-        ]
+        Note: OpenAI Agents SDK manages conversation state via previous_response_id.
+        Each new run without previous_response_id starts a fresh conversation.
+        """
+        # No explicit reset needed - each Runner.run() call without
+        # previous_response_id starts a fresh conversation
+        self.logger.info("Conversation reset (next run will start fresh)")
     
     async def shutdown(self) -> None:
         """
         Shutdown Agent and cleanup resources.
         """
         self.logger.info("Shutting down OpenAI Agent")
-        await self.client.close()
+        # Agent framework doesn't require explicit cleanup
+        # But we can clear references
+        self.agent = None
+        self.model = None
+    
+    def _convert_to_function_tool(self, tool: Tool) -> FunctionTool:
+        """
+        Convert our Tool to OpenAI Agent's FunctionTool.
+        
+        This bridges our tool interface with the Agent framework.
+        
+        Args:
+            tool: Our tool definition
+            
+        Returns:
+            FunctionTool instance
+        """
+        # Create a wrapper function that calls our executor
+        async def tool_function(**kwargs) -> str:
+            """Tool execution wrapper."""
+            try:
+                # Call our tool executor
+                if hasattr(tool.executor, '__call__'):
+                    result = await tool.executor(**kwargs)
+                else:
+                    result = await tool.executor.execute(**kwargs)
+                
+                # Return result as string
+                return str(result) if result else "Success"
+            
+            except Exception as e:
+                self.logger.error(f"Tool {tool.name} execution error: {e}")
+                return f"Error: {str(e)}"
+        
+        # Create FunctionTool with our tool's metadata
+        return FunctionTool(
+            name=tool.name,
+            description=tool.description,
+            parameters=tool.parameters,
+            function=tool_function,
+        )
     
     def get_config(self) -> Dict[str, Any]:
         """Get provider configuration"""
         config = super().get_config()
         config.update({
-            "model": self.model,
+            "model": self.model_name,
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
-            "message_count": len(self.messages),
+            "base_url": self.base_url,
+            "timeout": self.timeout,
         })
         return config
 

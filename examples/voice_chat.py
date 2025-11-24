@@ -72,10 +72,10 @@ async def main():
     logger.info("✓ TTS Provider initialized")
     
     # Step 2: Create transport
-    # WebSocket endpoint: ws://0.0.0.0:8080/xiaozhi/v1/
+    # WebSocket endpoint: ws://0.0.0.0:8000/xiaozhi/v1/
     transport = XiaozhiTransport(
         host="0.0.0.0",
-        port=8080,
+        port=8000,
         websocket_path="/xiaozhi/v1/"
     )
     
@@ -114,11 +114,11 @@ async def main():
     logger.info("=" * 70)
     logger.info("Starting Voice Chat Server")
     logger.info("=" * 70)
-    logger.info(f"WebSocket endpoint: ws://0.0.0.0:8080/xiaozhi/v1/")
+    logger.info(f"WebSocket endpoint: ws://0.0.0.0:8000/xiaozhi/v1/")
     logger.info(f"HTTP endpoints:")
-    logger.info(f"  - Health check: http://0.0.0.0:8080/health")
-    logger.info(f"  - Server info:  http://0.0.0.0:8080/")
-    logger.info(f"  - Connections:  http://0.0.0.0:8080/connections")
+    logger.info(f"  - Health check: http://0.0.0.0:8000/health")
+    logger.info(f"  - Server info:  http://0.0.0.0:8000/")
+    logger.info(f"  - Connections:  http://0.0.0.0:8000/connections")
     logger.info("")
     logger.info("Pipeline: VAD -> TurnDetector -> ASR -> TTS")
     logger.info("=" * 70)

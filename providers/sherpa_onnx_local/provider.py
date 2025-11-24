@@ -44,29 +44,26 @@ class SherpaOnnxLocalProvider(ASRProvider):
         # Load Sherpa-ONNX model
         try:
             import sherpa_onnx
+            import os
             
-            # Create recognizer config
-            config = sherpa_onnx.OnlineRecognizerConfig(
-                model_config=sherpa_onnx.OnlineModelConfig(
-                    sense_voice=sherpa_onnx.OnlineSenseVoiceModelConfig(
-                        model=f"{model_path}/model.int8.onnx",
-                        use_itn=True,
-                    ),
-                    tokens=tokens_path,
-                    num_threads=2,
-                ),
-                decoding_method="greedy_search",
+            # Build model file path
+            model_file = os.path.join(model_path, "model.int8.onnx")
+            
+            # Create offline recognizer for SenseVoice
+            self.recognizer = sherpa_onnx.OfflineRecognizer.from_sense_voice(
+                model=model_file,
+                tokens=tokens_path,
+                num_threads=2,
+                sample_rate=self.sample_rate,
+                feature_dim=80,
+                use_itn=True,
+                debug=False,
             )
-            
-            self.recognizer = sherpa_onnx.OnlineRecognizer(config)
-            self.logger.info(f"Loaded Sherpa-ONNX model from {model_path}")
+            self.logger.info(f"Loaded Sherpa-ONNX SenseVoice model from {model_path}")
         
         except Exception as e:
             self.logger.error(f"Failed to load Sherpa-ONNX model: {e}")
             raise
-        
-        # Create stream for recognition
-        self._stream = None
     
     async def transcribe(self, audio_chunks: List[bytes]) -> str:
         """
@@ -82,9 +79,6 @@ class SherpaOnnxLocalProvider(ASRProvider):
             return ""
         
         try:
-            # Create new stream for this transcription
-            stream = self.recognizer.create_stream()
-            
             # Concatenate all audio chunks
             audio_data = b''.join(audio_chunks)
             
@@ -94,23 +88,19 @@ class SherpaOnnxLocalProvider(ASRProvider):
             # Convert to float32 normalized to [-1, 1]
             audio_float = audio_array.astype(np.float32) / 32768.0
             
-            # Accept audio samples
+            # Create offline stream
+            stream = self.recognizer.create_stream()
             stream.accept_waveform(self.sample_rate, audio_float)
             
-            # Signal input finished
-            stream.input_finished()
-            
-            # Decode
-            while self.recognizer.is_ready(stream):
-                self.recognizer.decode_stream(stream)
+            # Decode offline
+            self.recognizer.decode_stream(stream)
             
             # Get result
-            result = self.recognizer.get_result(stream)
-            text = result.text.strip()
+            result = stream.result.text.strip()
             
-            self.logger.info(f"ASR transcribed: '{text}'")
+            self.logger.info(f"ASR transcribed: '{result}'")
             
-            return text
+            return result
         
         except Exception as e:
             self.logger.error(f"Error in ASR transcription: {e}", exc_info=True)
@@ -118,7 +108,6 @@ class SherpaOnnxLocalProvider(ASRProvider):
     
     def reset(self) -> None:
         """Reset internal state"""
-        self._stream = None
         self.logger.debug("ASR state reset")
     
     def get_config(self) -> Dict[str, Any]:

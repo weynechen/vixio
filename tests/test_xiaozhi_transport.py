@@ -4,6 +4,8 @@ Unit tests for XiaozhiTransport (FastAPI version)
 
 import pytest
 import asyncio
+import json
+from httpx import AsyncClient, ASGITransport
 from transports.xiaozhi import XiaozhiTransport, XiaozhiProtocol, XiaozhiMessageType
 from core.chunk import ChunkType, AudioChunk, TextChunk, ControlChunk
 
@@ -150,4 +152,257 @@ class TestXiaozhiTransport:
             await start_task
         except asyncio.CancelledError:
             pass
+    
+    def test_auth_initialization(self):
+        """Test authentication initialization"""
+        config = {
+            "server": {
+                "auth": {
+                    "enabled": True,
+                    "allowed_devices": ["device-1", "device-2"],
+                    "expire_seconds": 3600,
+                },
+                "auth_key": "test_secret_key"
+            }
+        }
+        
+        transport = XiaozhiTransport(config=config)
+        
+        assert transport.auth_enable == True
+        assert len(transport.allowed_devices) == 2
+        assert "device-1" in transport.allowed_devices
+        assert transport.auth_manager.secret_key == "test_secret_key"
+        assert transport.auth_manager.expire_seconds == 3600
+    
+    def test_websocket_url_generation(self):
+        """Test WebSocket URL generation"""
+        config = {
+            "server": {
+                "websocket": "ws://custom-host:9999/custom/path/"
+            }
+        }
+        
+        transport = XiaozhiTransport(port=8080, config=config)
+        url = transport._get_websocket_url()
+        
+        assert url == "ws://custom-host:9999/custom/path/"
+    
+    def test_websocket_url_auto_generation(self):
+        """Test automatic WebSocket URL generation"""
+        transport = XiaozhiTransport(port=8080)
+        url = transport._get_websocket_url()
+        
+        # Should contain port and path
+        assert ":8080" in url
+        assert "/xiaozhi/v1/" in url
+        assert url.startswith("ws://")
+
+
+class TestXiaozhiTransportHTTP:
+    """Test Xiaozhi transport HTTP endpoints"""
+    
+    @pytest.fixture
+    async def transport_with_app(self):
+        """Create transport with running app for HTTP testing"""
+        config = {
+            "server": {
+                "auth": {
+                    "enabled": True,
+                    "allowed_devices": [],
+                    "expire_seconds": 3600,
+                },
+                "auth_key": "test_secret_key",
+                "timezone_offset": 8,
+            }
+        }
+        
+        transport = XiaozhiTransport(
+            host="127.0.0.1",
+            port=18081,
+            config=config
+        )
+        
+        yield transport
+    
+    @pytest.mark.asyncio
+    async def test_root_endpoint(self, transport_with_app):
+        """Test root endpoint"""
+        async with AsyncClient(transport=ASGITransport(app=transport_with_app.app), base_url="http://test") as client:
+            response = await client.get("/")
+            
+            assert response.status_code == 200
+            data = response.json()
+            assert data["name"] == "Vixio Xiaozhi Server"
+            assert data["version"] == "0.1.0"
+            assert data["status"] == "running"
+            assert "connections" in data
+    
+    @pytest.mark.asyncio
+    async def test_health_endpoint(self, transport_with_app):
+        """Test health check endpoint"""
+        async with AsyncClient(transport=ASGITransport(app=transport_with_app.app), base_url="http://test") as client:
+            response = await client.get("/health")
+            
+            assert response.status_code == 200
+            data = response.json()
+            assert data["status"] == "healthy"
+            assert "connections" in data
+    
+    @pytest.mark.asyncio
+    async def test_connections_endpoint(self, transport_with_app):
+        """Test connections endpoint"""
+        async with AsyncClient(transport=ASGITransport(app=transport_with_app.app), base_url="http://test") as client:
+            response = await client.get("/connections")
+            
+            assert response.status_code == 200
+            data = response.json()
+            assert "count" in data
+            assert "sessions" in data
+            assert data["count"] == 0  # No active connections
+    
+    @pytest.mark.asyncio
+    async def test_ota_get_endpoint(self, transport_with_app):
+        """Test OTA GET endpoint"""
+        async with AsyncClient(transport=ASGITransport(app=transport_with_app.app), base_url="http://test") as client:
+            response = await client.get("/xiaozhi/ota/")
+            
+            assert response.status_code == 200
+            data = response.json()
+            assert "websocket_url" in data
+            assert "status" in data
+            assert data["status"] == "available"
+    
+    @pytest.mark.asyncio
+    async def test_ota_post_endpoint_websocket_mode(self, transport_with_app):
+        """Test OTA POST endpoint (WebSocket mode)"""
+        async with AsyncClient(transport=ASGITransport(app=transport_with_app.app), base_url="http://test") as client:
+            request_body = {
+                "application": {
+                    "version": "1.0.0"
+                },
+                "device": {
+                    "model": "XiaoZhi-ESP32"
+                }
+            }
+            
+            response = await client.post(
+                "/xiaozhi/ota/",
+                json=request_body,
+                headers={
+                    "device-id": "AA:BB:CC:DD:EE:FF",
+                    "client-id": "client-123"
+                }
+            )
+            
+            assert response.status_code == 200
+            data = response.json()
+            
+            # Should have server time
+            assert "server_time" in data
+            assert "timestamp" in data["server_time"]
+            assert "timezone_offset" in data["server_time"]
+            
+            # Should have firmware info
+            assert "firmware" in data
+            assert data["firmware"]["version"] == "1.0.0"
+            
+            # Should have websocket config (no MQTT gateway configured)
+            assert "websocket" in data
+            assert "url" in data["websocket"]
+            assert "token" in data["websocket"]
+            
+            # CORS headers
+            assert "Access-Control-Allow-Origin" in response.headers
+    
+    @pytest.mark.asyncio
+    async def test_ota_post_endpoint_mqtt_mode(self):
+        """Test OTA POST endpoint (MQTT mode)"""
+        config = {
+            "server": {
+                "mqtt_gateway": "mqtt://localhost:1883",
+                "mqtt_signature_key": "mqtt_secret",
+                "timezone_offset": 8,
+            }
+        }
+        
+        transport = XiaozhiTransport(config=config)
+        
+        async with AsyncClient(transport=ASGITransport(app=transport.app), base_url="http://test") as client:
+            request_body = {
+                "application": {
+                    "version": "1.0.0"
+                },
+                "device": {
+                    "model": "XiaoZhi-ESP32"
+                }
+            }
+            
+            response = await client.post(
+                "/xiaozhi/ota/",
+                json=request_body,
+                headers={
+                    "device-id": "AA:BB:CC:DD:EE:FF",
+                    "client-id": "client-123"
+                }
+            )
+            
+            assert response.status_code == 200
+            data = response.json()
+            
+            # Should have MQTT config
+            assert "mqtt" in data
+            assert "endpoint" in data["mqtt"]
+            assert data["mqtt"]["endpoint"] == "mqtt://localhost:1883"
+            assert "client_id" in data["mqtt"]
+            assert "username" in data["mqtt"]
+            assert "password" in data["mqtt"]
+            assert "publish_topic" in data["mqtt"]
+            assert "subscribe_topic" in data["mqtt"]
+    
+    @pytest.mark.asyncio
+    async def test_ota_post_endpoint_missing_headers(self, transport_with_app):
+        """Test OTA POST endpoint with missing headers"""
+        async with AsyncClient(transport=ASGITransport(app=transport_with_app.app), base_url="http://test") as client:
+            request_body = {
+                "application": {"version": "1.0.0"}
+            }
+            
+            # Missing device-id header
+            response = await client.post(
+                "/xiaozhi/ota/",
+                json=request_body,
+                headers={"client-id": "client-123"}
+            )
+            
+            assert response.status_code == 200  # Still returns 200 with error message
+            data = response.json()
+            assert "success" in data or "message" in data
+    
+    @pytest.mark.asyncio
+    async def test_ota_options_endpoint(self, transport_with_app):
+        """Test OTA OPTIONS endpoint for CORS"""
+        async with AsyncClient(transport=ASGITransport(app=transport_with_app.app), base_url="http://test") as client:
+            response = await client.options("/xiaozhi/ota/")
+            
+            assert response.status_code == 200
+            
+            # Check CORS headers
+            headers = response.headers
+            assert "Access-Control-Allow-Origin" in headers
+            assert "Access-Control-Allow-Methods" in headers
+            assert "Access-Control-Allow-Headers" in headers
+            
+            # Should allow required methods
+            assert "POST" in headers["Access-Control-Allow-Methods"]
+            assert "GET" in headers["Access-Control-Allow-Methods"]
+    
+    @pytest.mark.asyncio
+    async def test_vision_endpoint(self, transport_with_app):
+        """Test vision analysis endpoint"""
+        async with AsyncClient(transport=ASGITransport(app=transport_with_app.app), base_url="http://test") as client:
+            response = await client.post("/mcp/vision/explain", json={})
+            
+            assert response.status_code == 200
+            data = response.json()
+            assert "status" in data or "message" in data
 

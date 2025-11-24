@@ -2,9 +2,12 @@
 Utility functions for audio and text processing
 """
 
-# Import will be added as utilities are implemented
-# from utils.audio import *
-# from utils.text import *
+from utils.auth import AuthManager, generate_password_signature
+from utils.network import get_local_ip
 
-__all__ = []
+__all__ = [
+    "AuthManager",
+    "generate_password_signature",
+    "get_local_ip",
+]
 
