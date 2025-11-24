@@ -17,8 +17,7 @@ class ChunkType(str, Enum):
     
     # ============ Data Chunks (Products - to be processed/transformed) ============
     # Audio data - raw material for ASR
-    AUDIO_RAW = "audio.raw"           # Raw PCM audio
-    AUDIO_ENCODED = "audio.encoded"   # Encoded audio (Opus/MP3)
+    AUDIO_RAW = "audio.raw"           # PCM audio (16-bit signed, little-endian)
     
     # Text data - raw material for Agent, output from ASR
     TEXT = "text"                      # Complete text (ASR result, Agent input)
@@ -48,6 +47,9 @@ class ChunkType(str, Enum):
     EVENT_USER_STARTED_SPEAKING = "event.user.speaking.start"
     EVENT_USER_STOPPED_SPEAKING = "event.user.speaking.stop"
     EVENT_TURN_END = "event.turn.end"      # User turn complete, ready for ASR
+    
+    # Text events (from ASR/input sources)
+    EVENT_TEXT_COMPLETE = "event.text.complete"  # Text input complete, ready for aggregation
     
     # Bot events (from TTS station)
     EVENT_BOT_STARTED_SPEAKING = "event.bot.speaking.start"
@@ -85,9 +87,18 @@ class Chunk:
     Design principle:
     - Data chunks (AUDIO/TEXT/VIDEO): Products to be transformed by stations
     - Signal chunks (CONTROL/EVENT): Messages to passthrough + trigger station state changes
+    
+    Attributes:
+        type: Chunk type
+        data: Data payload
+        source: Source station name (e.g., "asr", "agent", "user")
+        metadata: Additional metadata
+        timestamp: Creation timestamp
+        session_id: Session identifier
     """
     type: ChunkType
     data: Any = None
+    source: str = ""  # Source station name (asr, agent, user, etc.)
     metadata: Dict[str, Any] = field(default_factory=dict)
     timestamp: float = field(default_factory=time.time)
     session_id: Optional[str] = None
@@ -126,8 +137,11 @@ class AudioChunk(Chunk):
     """
     Audio data chunk - raw material for ASR processing
     
+    Important: AudioChunk ALWAYS contains PCM audio data.
+    Transport layers are responsible for format conversion (e.g., Opus -> PCM).
+    
     Attributes:
-        data: bytes - PCM audio bytes
+        data: bytes - PCM audio bytes (16-bit signed integer, little-endian)
         sample_rate: int - Sample rate in Hz (default: 16000)
         channels: int - Number of audio channels (default: 1)
     """

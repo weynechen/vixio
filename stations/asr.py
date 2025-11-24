@@ -2,12 +2,15 @@
 ASRStation - Speech to Text
 
 Input: AUDIO_RAW (collect), EVENT_TURN_END (trigger)
-Output: TEXT (transcription result)
+Output: TEXT_DELTA (transcription result, source="asr")
+
+Note: Outputs TEXT_DELTA for consistency with streaming scenarios.
+Use TextAggregatorStation after this to aggregate for Agent.
 """
 
 from typing import AsyncIterator, List
 from core.station import Station
-from core.chunk import Chunk, ChunkType, TextChunk, is_audio_chunk
+from core.chunk import Chunk, ChunkType, TextDeltaChunk, EventChunk, is_audio_chunk
 from providers.asr import ASRProvider
 
 
@@ -16,7 +19,10 @@ class ASRStation(Station):
     ASR workstation: Transcribes audio to text.
     
     Input: AUDIO_RAW (collect), EVENT_TURN_END (trigger)
-    Output: TEXT (transcription result)
+    Output: TEXT_DELTA (transcription result, source="asr")
+    
+    Note: Outputs TEXT_DELTA to maintain consistency with streaming ASR.
+    Use TextAggregatorStation to aggregate before Agent.
     """
     
     def __init__(self, asr_provider: ASRProvider, name: str = "ASR"):
@@ -37,7 +43,7 @@ class ASRStation(Station):
         
         Logic:
         - Collect AUDIO_RAW chunks into buffer
-        - On EVENT_TURN_END: Transcribe buffered audio, yield TEXT, clear buffer
+        - On EVENT_TURN_END: Transcribe buffered audio, yield TEXT_DELTA (source="asr"), clear buffer
         - On CONTROL_INTERRUPT: Clear buffer
         """
         # Handle signals
@@ -56,13 +62,30 @@ class ASRStation(Station):
                         
                         if text:
                             self.logger.info(f"ASR result: '{text}'")
-                            yield TextChunk(
-                                type=ChunkType.TEXT,
-                                content=text,
+                            # Output as TEXT_DELTA with source="asr"
+                            yield TextDeltaChunk(
+                                type=ChunkType.TEXT_DELTA,
+                                delta=text,
+                                source="asr",  # Mark as ASR output
+                                session_id=chunk.session_id
+                            )
+                            
+                            # Emit TEXT_COMPLETE event to signal aggregator
+                            yield EventChunk(
+                                type=ChunkType.EVENT_TEXT_COMPLETE,
+                                event_data={"source": "asr", "text_length": len(text)},
+                                source_station=self.name,
                                 session_id=chunk.session_id
                             )
                         else:
                             self.logger.warning("ASR returned empty text")
+                            # Still emit complete event even if text is empty
+                            yield EventChunk(
+                                type=ChunkType.EVENT_TEXT_COMPLETE,
+                                event_data={"source": "asr", "text_length": 0},
+                                source_station=self.name,
+                                session_id=chunk.session_id
+                            )
                     
                     except Exception as e:
                         self.logger.error(f"ASR transcription failed: {e}", exc_info=True)

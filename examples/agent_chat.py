@@ -15,6 +15,7 @@ from stations import (
     VADStation,
     TurnDetectorStation,
     ASRStation,
+    TextAggregatorStation,
     AgentStation,
     SentenceSplitterStation,
     TTSStation
@@ -141,8 +142,10 @@ async def main():
         # Stage 2: Speech recognition (if available)
         if asr_provider:
             stations.append(ASRStation(asr_provider))
+            # Text aggregator: Aggregate TEXT_DELTA from ASR into complete TEXT for Agent
+            stations.append(TextAggregatorStation())
         
-        # Stage 3: AI Agent processing
+        # Stage 3: AI Agent processing (requires TEXT input)
         stations.append(AgentStation(agent_provider))
         
         # Stage 4: Sentence splitting for streaming TTS
@@ -179,7 +182,7 @@ async def main():
     logger.info(f"  - OTA interface:   http://{local_ip}:{transport.port}/xiaozhi/ota/")
     logger.info(f"  - Vision analysis: http://{local_ip}:{transport.port}/mcp/vision/explain")
     logger.info("")
-    logger.info("Pipeline: VAD -> TurnDetector -> ASR -> Agent -> SentenceSplitter -> TTS")
+    logger.info("Pipeline: VAD -> TurnDetector -> ASR -> TextAggregator -> Agent -> SentenceSplitter -> TTS")
     logger.info("=" * 70)
     
     await manager.start()

@@ -1,8 +1,11 @@
 """
 TTSStation - Text to Speech
 
-Input: TEXT, TEXT_DELTA
-Output: AUDIO_ENCODED (streaming) + EVENT_TTS_START/STOP
+Input: TEXT (complete sentences, source="agent")
+Output: AUDIO_RAW (streaming) + EVENT_TTS_START/STOP
+
+Note: This station only processes TEXT chunks with source="agent".
+Use SentenceSplitterStation before this to convert TEXT_DELTA to TEXT.
 """
 
 from typing import AsyncIterator
@@ -15,8 +18,11 @@ class TTSStation(Station):
     """
     TTS workstation: Synthesizes text to audio.
     
-    Input: TEXT, TEXT_DELTA
-    Output: AUDIO_ENCODED (streaming) + EVENT_TTS_START/STOP
+    Input: TEXT (complete sentences, source="agent")
+    Output: AUDIO_RAW (streaming) + EVENT_TTS_START/STOP
+    
+    Note: Only processes TEXT chunks with source="agent".
+    Use SentenceSplitterStation to convert TEXT_DELTA to TEXT.
     """
     
     def __init__(self, tts_provider: TTSProvider, name: str = "TTS"):
@@ -36,7 +42,8 @@ class TTSStation(Station):
         Process chunk through TTS.
         
         Logic:
-        - On TEXT/TEXT_DELTA: Synthesize to audio, yield AUDIO_ENCODED chunks
+        - On TEXT: Synthesize to audio, yield AUDIO_RAW chunks
+        - On TEXT_DELTA: Passthrough (let SentenceSplitter handle it)
         - Emit EVENT_TTS_START before first audio
         - Emit EVENT_TTS_STOP after last audio
         - On CONTROL_INTERRUPT: Cancel synthesis
@@ -62,13 +69,18 @@ class TTSStation(Station):
             yield chunk
             return
         
-        # Process text chunks
-        if is_text_chunk(chunk):
+        # Only process TEXT chunks from Agent (complete sentences)
+        # Check both type and source
+        if chunk.type == ChunkType.TEXT:
+            # Check if source is "agent"
+            if chunk.source != "agent":
+                self.logger.debug(f"Skipping TEXT from source='{chunk.source}' (not agent)")
+                yield chunk  # Passthrough
+                return
+            
             # Extract text content
             if hasattr(chunk, 'content'):
                 text = chunk.content
-            elif hasattr(chunk, 'delta'):
-                text = chunk.delta
             else:
                 text = str(chunk.data) if chunk.data else ""
             
@@ -95,10 +107,11 @@ class TTSStation(Station):
                 async for audio_data in self.tts.synthesize(text):
                     if audio_data:
                         audio_count += 1
+                        # TTS provider returns PCM audio
                         yield AudioChunk(
-                            type=ChunkType.AUDIO_ENCODED,
+                            type=ChunkType.AUDIO_RAW,
                             data=audio_data,
-                            sample_rate=16000,  # Note: Edge TTS returns MP3, may need conversion
+                            sample_rate=16000,
                             channels=1,
                             session_id=chunk.session_id
                         )

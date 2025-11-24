@@ -1,8 +1,11 @@
 """
 VADStation - Voice Activity Detection
 
-Input: AUDIO_RAW
+Input: AUDIO_RAW (PCM audio)
 Output: AUDIO_RAW (passthrough) + EVENT_VAD_START/END
+
+Note: This station expects PCM audio data. Transport layers are responsible
+for format conversion (e.g., Opus -> PCM) before chunks enter the pipeline.
 """
 
 from typing import AsyncIterator
@@ -13,10 +16,12 @@ from providers.vad import VADProvider
 
 class VADStation(Station):
     """
-    VAD workstation: Detects voice activity in audio stream.
+    VAD workstation: Detects voice activity in PCM audio stream.
     
-    Input: AUDIO_RAW
+    Input: AUDIO_RAW (PCM format)
     Output: AUDIO_RAW (passthrough) + EVENT_VAD_START/END
+    
+    Note: Expects PCM audio data. Transport layers handle format conversion.
     """
     
     def __init__(self, vad_provider: VADProvider, name: str = "VAD"):
@@ -55,12 +60,12 @@ class VADStation(Station):
             yield chunk
             return
         
-        # Only process audio data
+        # Only process audio data (PCM)
         if not is_audio_chunk(chunk) or chunk.type != ChunkType.AUDIO_RAW:
             yield chunk
             return
         
-        # Detect voice in audio
+        # Detect voice in PCM audio
         audio_data = chunk.data if isinstance(chunk.data, bytes) else b''
         has_voice = self.vad.detect(audio_data)
         

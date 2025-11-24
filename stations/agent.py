@@ -1,8 +1,11 @@
 """
 AgentStation - LLM Agent Integration
 
-Input: TEXT
-Output: TEXT_DELTA (streaming) + EVENT_AGENT_START/STOP
+Input: TEXT (complete user input from TextAggregator)
+Output: TEXT_DELTA (streaming, source="agent") + EVENT_AGENT_START/STOP
+
+Note: Agent is the central processing node. All text must go through Agent,
+even if it's just a passthrough (echo agent) or translation agent.
 """
 
 from typing import AsyncIterator
@@ -15,8 +18,10 @@ class AgentStation(Station):
     """
     Agent workstation: Processes text through LLM agent.
     
-    Input: TEXT
-    Output: TEXT_DELTA (streaming) + EVENT_AGENT_START/STOP
+    Input: TEXT (complete user input)
+    Output: TEXT_DELTA (streaming, source="agent") + EVENT_AGENT_START/STOP
+    
+    Note: All TEXT_DELTA output has source="agent" to distinguish from ASR output.
     """
     
     def __init__(self, agent_provider: AgentProvider, name: str = "Agent"):
@@ -99,6 +104,7 @@ class AgentStation(Station):
                         yield TextDeltaChunk(
                             type=ChunkType.TEXT_DELTA,
                             delta=delta,
+                            source="agent",  # Mark as agent output
                             session_id=chunk.session_id
                         )
                 

@@ -141,6 +141,7 @@ class SentenceSplitterStation(Station):
                     yield TextChunk(
                         type=ChunkType.TEXT,
                         content=remaining,
+                        source="agent",  # Final sentence from agent
                         session_id=chunk.session_id
                     )
             
@@ -157,7 +158,7 @@ class SentenceSplitterStation(Station):
         if chunk.type == ChunkType.TEXT_DELTA:
             delta = chunk.delta if hasattr(chunk, 'delta') else str(chunk.data)
             
-            if delta:
+            if delta and chunk.source == "agent":
                 # Add delta to splitter and get complete sentences
                 sentences = self._splitter.add_chunk(delta)
                 
@@ -167,6 +168,7 @@ class SentenceSplitterStation(Station):
                     yield TextChunk(
                         type=ChunkType.TEXT,
                         content=sentence,
+                        source=chunk.source,  # Preserve source (e.g., "agent")
                         session_id=chunk.session_id
                     )
             

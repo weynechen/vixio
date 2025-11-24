@@ -26,6 +26,7 @@ from transports.xiaozhi.protocol import (
     XiaozhiControlAction,
 )
 from utils import get_local_ip, AuthManager, generate_password_signature
+from utils.audio import get_opus_codec, OPUS_AVAILABLE
 
 
 # Type alias for connection handler
@@ -81,6 +82,7 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
         
         # Connection management
         self._connections: Dict[str, WebSocket] = {}
+        self._connection_events: Dict[str, asyncio.Event] = {}  # Signal when connection should close
         self._connection_handler: Optional[ConnectionHandler] = None
         self._server_task: Optional[asyncio.Task] = None
         
@@ -88,6 +90,21 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
         self.logger = logging.getLogger("XiaozhiTransport")
         
         self.logger.setLevel(logging.DEBUG)
+
+        # Initialize Opus codec for audio format conversion
+        self.opus_codec = None
+        if OPUS_AVAILABLE:
+            try:
+                self.opus_codec = get_opus_codec(
+                    sample_rate=16000,
+                    channels=1,
+                    frame_duration_ms=60
+                )
+                self.logger.info("Opus codec initialized for audio conversion")
+            except Exception as e:
+                self.logger.warning(f"Failed to initialize Opus codec: {e}")
+        else:
+            self.logger.warning("Opus codec not available, audio conversion disabled")
 
         # Initialize auth manager
         self._init_auth()
@@ -352,6 +369,15 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
         """
         self._connection_handler = handler
     
+    async def on_new_connection(self, handler: ConnectionHandler) -> None:
+        """
+        Register callback for new connections (TransportBase interface).
+        
+        Args:
+            handler: Async function called with connection_id when client connects
+        """
+        self.set_connection_handler(handler)
+    
     async def start(self) -> None:
         """Start the FastAPI server"""
         config = uvicorn.Config(
@@ -373,6 +399,10 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
     
     async def stop(self) -> None:
         """Stop the FastAPI server"""
+        # Signal all connections to close
+        for session_id in list(self._connection_events.keys()):
+            self._connection_events[session_id].set()
+        
         # Close all connections
         for session_id in list(self._connections.keys()):
             try:
@@ -382,6 +412,7 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
                 self.logger.error(f"Error closing connection {session_id}: {e}")
         
         self._connections.clear()
+        self._connection_events.clear()
         # Cleanup all buffers (from TransportBufferMixin)
         for session_id in list(self._input_buffers.keys()):
             self._cleanup_buffers(session_id)
@@ -410,8 +441,8 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
         if not websocket:
             raise ConnectionError(f"Session {session_id} not found")
         
-        # Initialize buffer for this session
-        self._init_buffer(session_id)
+        # Initialize buffers for this session
+        self._init_buffers(session_id)
         
         try:
             while True:
@@ -433,12 +464,16 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
                         yield chunk
         
         except WebSocketDisconnect:
-            self.logger.info(f"WebSocket disconnected: {session_id}")
+            self.logger.info(f"WebSocket disconnected in input_stream: {session_id}")
         except Exception as e:
             self.logger.error(f"Error in input stream for {session_id}: {e}")
             raise
         finally:
-            self._cleanup_buffer(session_id)
+            self._cleanup_buffers(session_id)
+            # Signal to _handle_websocket that connection should close
+            if session_id in self._connection_events:
+                self._connection_events[session_id].set()
+                self.logger.debug(f"Set close event for session {session_id}")
     
     async def output_chunk(self, session_id: str, chunk: Chunk) -> None:
         """
@@ -470,9 +505,9 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
         except Exception as e:
             self.logger.error(f"Error sending to {session_id}: {e}")
     
-    async def on_new_connection(self, session_id: str) -> None:
+    async def _on_connection_established(self, session_id: str) -> None:
         """
-        Handle new connection.
+        Handle connection establishment (send HELLO message, etc.).
         
         Args:
             session_id: Session identifier
@@ -514,14 +549,26 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
                 self.logger.info(f"Authentication successful for session {session_id}")
             
             self._connections[session_id] = websocket
+            # Create event to signal when connection should close
+            close_event = asyncio.Event()
+            self._connection_events[session_id] = close_event
             self.logger.info(f"WebSocket accepted: {session_id}")
             
-            # Notify new connection
-            await self.on_new_connection(session_id)
+            # Notify new connection (send HELLO message)
+            await self._on_connection_established(session_id)
             
             # Call connection handler if set
             if self._connection_handler:
+                # Handler will create background tasks (e.g., pipeline)
+                # We just wait here until the connection should be closed
                 await self._connection_handler(session_id)
+                
+                # Wait for input_stream to signal completion
+                # input_stream will read from WebSocket, we just wait here
+                try:
+                    await close_event.wait()
+                except (WebSocketDisconnect, RuntimeError):
+                    pass
             else:
                 # Default: just keep connection alive
                 self.logger.info(f"No connection handler set, keeping connection alive for session {session_id}")
@@ -541,6 +588,7 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
         finally:
             # Cleanup
             self._connections.pop(session_id, None)
+            self._connection_events.pop(session_id, None)
             self._cleanup_buffers(session_id)
             self.logger.info(f"WebSocket closed: {session_id}")
     
@@ -561,11 +609,26 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
         """
         msg_type = message.get("type")
         
-        # Audio message
+        # Audio message (Opus encoded from client)
+        # Transport responsibility: Decode Opus -> PCM
         if msg_type == XiaozhiMessageType.AUDIO:
+            opus_data = message.get("audio_data", b"")
+            
+            # Decode Opus to PCM
+            pcm_data = opus_data
+            if self.opus_codec and opus_data:
+                try:
+                    pcm_data = self.opus_codec.decode(opus_data)
+                except Exception as e:
+                    self.logger.error(f"Failed to decode Opus audio: {e}")
+                    return None
+            elif not self.opus_codec:
+                self.logger.warning("Opus codec not available, cannot decode audio")
+                return None
+            
             return AudioChunk(
-                type=ChunkType.AUDIO_RAW,
-                data=message.get("audio_data", b""),
+                type=ChunkType.AUDIO_RAW,  # Always PCM in chunks
+                data=pcm_data,
                 sample_rate=self.protocol.sample_rate,
                 channels=self.protocol.channels,
                 session_id=session_id
@@ -621,11 +684,25 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
         Returns:
             Message dictionary or None
         """
-        # Audio chunk
-        if chunk.type == ChunkType.AUDIO_ENCODED or chunk.type == ChunkType.AUDIO_RAW:
+        # Audio chunk (PCM from pipeline)
+        # Transport responsibility: Encode PCM -> Opus for client
+        if chunk.type == ChunkType.AUDIO_RAW:
+            pcm_data = chunk.data if chunk.data else b""
+            
+            # Encode PCM to Opus
+            opus_data = pcm_data
+            if self.opus_codec and pcm_data:
+                try:
+                    opus_data = self.opus_codec.encode(pcm_data)
+                except Exception as e:
+                    self.logger.error(f"Failed to encode PCM to Opus: {e}")
+                    return None
+            elif not self.opus_codec and pcm_data:
+                self.logger.warning("Opus codec not available, sending raw PCM")
+            
             return {
                 "type": XiaozhiMessageType.AUDIO,
-                "audio_data": chunk.data if chunk.data else b"",
+                "audio_data": opus_data,
             }
         
         # TTS events
