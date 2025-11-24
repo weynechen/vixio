@@ -518,7 +518,7 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
         
         # For TTS events (especially SENTENCE_START), also use queue to maintain order
         if chunk.type in (ChunkType.EVENT_TTS_START, ChunkType.EVENT_TTS_SENTENCE_START, 
-                          ChunkType.EVENT_TTS_SENTENCE_END, ChunkType.EVENT_TTS_STOP):
+                          ChunkType.EVENT_TTS_SENTENCE_END, ChunkType.EVENT_TTS_STOP, ChunkType.TEXT):
             await self._ensure_sender_task(session_id)
             await self._send_queues[session_id].put(chunk)
             return
@@ -772,24 +772,6 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
                 session_id=chunk.session_id,
                 state="stop"
             )
-        
-        # State events
-        elif chunk.type == ChunkType.EVENT_STATE_IDLE:
-            return self.protocol.create_state_message("idle", chunk.session_id)
-        
-        elif chunk.type == ChunkType.EVENT_STATE_LISTENING:
-            return self.protocol.create_state_message("listening", chunk.session_id)
-        
-        elif chunk.type == ChunkType.EVENT_STATE_PROCESSING:
-            return self.protocol.create_state_message("processing", chunk.session_id)
-        
-        elif chunk.type == ChunkType.EVENT_STATE_SPEAKING:
-            return self.protocol.create_state_message("speaking", chunk.session_id)
-        
-        # Error events
-        elif chunk.type == ChunkType.EVENT_ERROR:
-            error_msg = chunk.event_data.get("error") if hasattr(chunk, 'event_data') else "Unknown error"
-            return self.protocol.create_error_message(error_msg, chunk.session_id)
         
         # Text chunk - send as STT (ASR result) or skip (Agent output sent via TTS event)
         elif chunk.type == ChunkType.TEXT:

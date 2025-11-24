@@ -65,6 +65,18 @@ class TTSStation(Station):
                     self._is_speaking = False
                     self.logger.info("TTS cancelled by interrupt")
             
+            # Stop speaking when Agent completes (last sentence done)
+            elif chunk.type == ChunkType.EVENT_AGENT_STOP:
+                if self._is_speaking:
+                    self.logger.info("TTS session complete (agent stopped)")
+                    yield EventChunk(
+                        type=ChunkType.EVENT_TTS_STOP,
+                        event_data={"reason": "agent_complete"},
+                        source_station=self.name,
+                        session_id=chunk.session_id
+                    )
+                    self._is_speaking = False
+            
             # Passthrough signals
             yield chunk
             return
@@ -127,15 +139,8 @@ class TTSStation(Station):
                 
                 self.logger.debug(f"TTS generated {audio_count} audio chunks (sentences)")
                 
-                # Emit TTS stop event
-                if self._is_speaking:
-                    yield EventChunk(
-                        type=ChunkType.EVENT_TTS_STOP,
-                        event_data={"audio_chunks": audio_count},
-                        source_station=self.name,
-                        session_id=chunk.session_id
-                    )
-                    self._is_speaking = False
+                # Note: TTS STOP event will be sent when receiving EVENT_AGENT_STOP
+                # This ensures STOP is only sent after the last sentence
             
             except Exception as e:
                 self.logger.error(f"TTS synthesis failed: {e}", exc_info=True)
@@ -148,7 +153,15 @@ class TTSStation(Station):
                     session_id=chunk.session_id
                 )
                 
-                self._is_speaking = False
+                # Send TTS stop on error
+                if self._is_speaking:
+                    yield EventChunk(
+                        type=ChunkType.EVENT_TTS_STOP,
+                        event_data={"reason": "error"},
+                        source_station=self.name,
+                        session_id=chunk.session_id
+                    )
+                    self._is_speaking = False
             
             # Passthrough original text chunk
             yield chunk
