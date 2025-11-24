@@ -56,14 +56,17 @@ class EdgeTTSProvider(TTSProvider):
         """
         Synthesize text to audio.
         
-        Important: Returns PCM audio data (16-bit signed, little-endian, 16kHz, mono).
+        Important: Returns complete PCM audio data for entire sentence (16-bit signed, little-endian, 16kHz, mono).
         EdgeTTS returns MP3, which is converted to PCM internally.
+        
+        Unlike xiaozhi-server which returns chunked data, this returns the entire sentence audio at once.
+        Transport layer is responsible for flow control when sending to client.
         
         Args:
             text: Text to synthesize
             
         Yields:
-            PCM audio bytes
+            Complete PCM audio bytes for the sentence
         """
         if not text or not text.strip():
             self.logger.warning("Empty text provided for TTS")
@@ -99,7 +102,7 @@ class EdgeTTSProvider(TTSProvider):
                     if audio_data:
                         mp3_chunks.append(audio_data)
             
-            # Convert accumulated MP3 to PCM
+            # Convert accumulated MP3 to PCM and return complete sentence audio
             if mp3_chunks and not self._cancelled:
                 mp3_data = b''.join(mp3_chunks)
                 self.logger.debug(f"Converting {len(mp3_data)} bytes of MP3 to PCM")
@@ -107,14 +110,11 @@ class EdgeTTSProvider(TTSProvider):
                 # Convert MP3 to PCM
                 pcm_data = mp3_to_pcm(mp3_data, sample_rate=16000, channels=1)
                 
-                # Split PCM into chunks for streaming (60ms frames = 960 samples = 1920 bytes)
-                chunk_size = 1920  # 60ms at 16kHz mono
-                for i in range(0, len(pcm_data), chunk_size):
-                    if self._cancelled:
-                        break
-                    yield pcm_data[i:i + chunk_size]
-                
-                self.logger.debug(f"Converted to {len(pcm_data)} bytes of PCM")
+                # Yield complete sentence audio (not chunked)
+                # Transport layer will handle flow control and chunking for transmission
+                if pcm_data:
+                    self.logger.debug(f"Yielding complete sentence audio: {len(pcm_data)} bytes of PCM")
+                    yield pcm_data
         
         except Exception as e:
             self.logger.error(f"Error in TTS synthesis: {e}", exc_info=True)

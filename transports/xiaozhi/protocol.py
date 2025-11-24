@@ -14,6 +14,8 @@ class XiaozhiMessageType:
     AUDIO = "audio"
     TEXT = "text"
     TTS = "tts"
+    STT = "stt"  # Speech-to-text recognition result
+    LLM = "llm"  # LLM response text
     CONTROL = "control"
     STATE = "state"
     ERROR = "error"
@@ -233,6 +235,62 @@ class XiaozhiProtocol:
         message = {
             "type": XiaozhiMessageType.ERROR,
             "error": error,
+        }
+        
+        if session_id:
+            message["session_id"] = session_id
+        
+        message.update(kwargs)
+        return message
+    
+    def create_stt_message(
+        self,
+        text: str,
+        session_id: str = None,
+        **kwargs
+    ) -> Dict[str, Any]:
+        """
+        Create STT (speech-to-text) message.
+        
+        Args:
+            text: Recognized text from ASR
+            session_id: Optional session ID
+            **kwargs: Additional parameters
+            
+        Returns:
+            STT message dictionary
+        """
+        message = {
+            "type": XiaozhiMessageType.STT,
+            "text": text,
+        }
+        
+        if session_id:
+            message["session_id"] = session_id
+        
+        message.update(kwargs)
+        return message
+    
+    def create_llm_message(
+        self,
+        text: str,
+        session_id: str = None,
+        **kwargs
+    ) -> Dict[str, Any]:
+        """
+        Create LLM message.
+        
+        Args:
+            text: LLM response text
+            session_id: Optional session ID
+            **kwargs: Additional parameters
+            
+        Returns:
+            LLM message dictionary
+        """
+        message = {
+            "type": XiaozhiMessageType.LLM,
+            "text": text,
         }
         
         if session_id:

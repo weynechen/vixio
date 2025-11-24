@@ -86,6 +86,15 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
         self._connection_handler: Optional[ConnectionHandler] = None
         self._server_task: Optional[asyncio.Task] = None
         
+        # Audio flow control state per session
+        # Format: {session_id: {"last_send_time": float, "packet_count": int, "start_time": float, "sequence": int}}
+        self._audio_flow_control: Dict[str, Dict[str, Any]] = {}
+        
+        # Async send queues per session (for non-blocking audio transmission)
+        # This allows TTS to continue generating next sentence while current audio is being sent
+        self._send_queues: Dict[str, asyncio.Queue] = {}
+        self._send_tasks: Dict[str, asyncio.Task] = {}
+        
         # Override logger from mixin with more specific name
         self.logger = logging.getLogger("XiaozhiTransport")
         
@@ -416,6 +425,11 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
         # Cleanup all buffers (from TransportBufferMixin)
         for session_id in list(self._input_buffers.keys()):
             self._cleanup_buffers(session_id)
+        # Cleanup flow control state
+        self._audio_flow_control.clear()
+        # Stop all send tasks
+        for session_id in list(self._send_tasks.keys()):
+            await self._stop_sender_task(session_id)
         
         # Stop server
         if self._server_task:
@@ -479,6 +493,11 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
         """
         Send output chunk to client.
         
+        Uses async queue for TTS audio to enable parallel processing:
+        - TTS can generate next sentence while current audio is being sent
+        - Text events (EVENT_TTS_SENTENCE_START) and audio are sent in order
+        - Flow control applied to audio frames (60ms intervals)
+        
         Args:
             session_id: Session identifier
             chunk: Chunk to send
@@ -488,12 +507,28 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
             self.logger.warning(f"Cannot send to {session_id}: connection not found")
             return
         
-        # Encode chunk to message
+        # Special handling for AUDIO_RAW with async queue and flow control
+        # Only apply to TTS audio output (source contains "TTS")
+        if chunk.type == ChunkType.AUDIO_RAW and chunk.data and "TTS" in chunk.source:
+            # Ensure sender task is running
+            await self._ensure_sender_task(session_id)
+            # Put chunk in queue (non-blocking, allows TTS to continue)
+            await self._send_queues[session_id].put(chunk)
+            return
+        
+        # For TTS events (especially SENTENCE_START), also use queue to maintain order
+        if chunk.type in (ChunkType.EVENT_TTS_START, ChunkType.EVENT_TTS_SENTENCE_START, 
+                          ChunkType.EVENT_TTS_SENTENCE_END, ChunkType.EVENT_TTS_STOP):
+            await self._ensure_sender_task(session_id)
+            await self._send_queues[session_id].put(chunk)
+            return
+        
+        # Regular message encoding and sending (bypass queue for immediate delivery)
         message = await self._encode_chunk(chunk)
         if not message:
             return
         
-        # Send message
+        # Send message immediately
         try:
             encoded = self.protocol.encode_message(message)
             
@@ -590,6 +625,10 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
             self._connections.pop(session_id, None)
             self._connection_events.pop(session_id, None)
             self._cleanup_buffers(session_id)
+            # Cleanup flow control state
+            self._audio_flow_control.pop(session_id, None)
+            # Stop sender task
+            await self._stop_sender_task(session_id)
             self.logger.info(f"WebSocket closed: {session_id}")
     
     async def _decode_message(
@@ -713,6 +752,21 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
                 text=chunk.event_data.get("text") if hasattr(chunk, 'event_data') else None
             )
         
+        elif chunk.type == ChunkType.EVENT_TTS_SENTENCE_START:
+            # Send sentence_start event with text (for LLM output display)
+            text = chunk.event_data.get("text") if hasattr(chunk, 'event_data') else None
+            return self.protocol.create_tts_message(
+                session_id=chunk.session_id,
+                state="sentence_start",
+                text=text
+            )
+        
+        elif chunk.type == ChunkType.EVENT_TTS_SENTENCE_END:
+            return self.protocol.create_tts_message(
+                session_id=chunk.session_id,
+                state="sentence_end"
+            )
+        
         elif chunk.type == ChunkType.EVENT_TTS_STOP:
             return self.protocol.create_tts_message(
                 session_id=chunk.session_id,
@@ -737,13 +791,37 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
             error_msg = chunk.event_data.get("error") if hasattr(chunk, 'event_data') else "Unknown error"
             return self.protocol.create_error_message(error_msg, chunk.session_id)
         
-        # Text chunk (for debugging/logging)
+        # Text chunk - send as STT (ASR result) or LLM (agent output)
         elif chunk.type == ChunkType.TEXT:
+            text_content = chunk.content if hasattr(chunk, 'content') else str(chunk.data)
+            
+            # If source is "asr", send as STT message
+            if chunk.source == "asr":
+                return self.protocol.create_stt_message(
+                    text=text_content,
+                    session_id=chunk.session_id
+                )
+            # If source is "agent", it will be sent via TTS sentence_start event
+            # So we don't send it here separately
+            # (TTS station will emit EVENT_TTS_SENTENCE_START with the text)
+            
+            # For other sources or debugging, send as generic text
             return {
                 "type": XiaozhiMessageType.TEXT,
-                "content": chunk.content if hasattr(chunk, 'content') else str(chunk.data),
+                "content": text_content,
                 "session_id": chunk.session_id,
             }
+        
+        # Text delta chunk - for LLM streaming output
+        elif chunk.type == ChunkType.TEXT_DELTA:
+            delta_content = chunk.delta if hasattr(chunk, 'delta') else str(chunk.data)
+            
+            # Send as LLM message for real-time display
+            if chunk.source == "agent":
+                return self.protocol.create_llm_message(
+                    text=delta_content,
+                    session_id=chunk.session_id
+                )
         
         return None
     
@@ -769,3 +847,203 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
         
         except Exception as e:
             self.logger.error(f"Error sending message to {session_id}: {e}")
+    
+    async def _ensure_sender_task(self, session_id: str) -> None:
+        """
+        Ensure async sender task is running for this session.
+        
+        The sender task processes chunks from queue serially, ensuring:
+        - Text events and audio frames are sent in correct order
+        - Audio frames have flow control applied
+        - TTS can continue generating while audio is being sent
+        
+        Args:
+            session_id: Session identifier
+        """
+        if session_id not in self._send_tasks or self._send_tasks[session_id].done():
+            # Create queue for this session
+            queue = asyncio.Queue()
+            self._send_queues[session_id] = queue
+            
+            # Start sender worker task
+            self._send_tasks[session_id] = asyncio.create_task(
+                self._sender_worker(session_id, queue)
+            )
+            self.logger.debug(f"Started async sender task for session {session_id}")
+    
+    async def _stop_sender_task(self, session_id: str) -> None:
+        """
+        Stop sender task for session.
+        
+        Args:
+            session_id: Session identifier
+        """
+        if session_id in self._send_queues:
+            # Send stop signal
+            await self._send_queues[session_id].put(None)
+            self._send_queues.pop(session_id, None)
+        
+        if session_id in self._send_tasks:
+            task = self._send_tasks.pop(session_id)
+            try:
+                await asyncio.wait_for(task, timeout=5.0)
+            except asyncio.TimeoutError:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+            self.logger.debug(f"Stopped async sender task for session {session_id}")
+    
+    async def _sender_worker(self, session_id: str, queue: asyncio.Queue) -> None:
+        """
+        Background worker that sends chunks from queue.
+        
+        Processes chunks serially to maintain order:
+        1. TTS events (text) - sent immediately
+        2. Audio chunks - split into frames with flow control
+        
+        This design allows:
+        - TTS to generate next sentence while current audio is being sent
+        - Text and audio stay synchronized (text event sent just before audio)
+        
+        Args:
+            session_id: Session identifier
+            queue: Queue of chunks to send
+        """
+        websocket = self._connections.get(session_id)
+        if not websocket:
+            self.logger.error(f"Sender worker: no websocket for {session_id}")
+            return
+        
+        self.logger.debug(f"Sender worker started for session {session_id}")
+        
+        try:
+            while True:
+                # Get next chunk from queue
+                chunk = await queue.get()
+                
+                # Stop signal
+                if chunk is None:
+                    self.logger.debug(f"Sender worker stopping for session {session_id}")
+                    break
+                
+                # Process chunk based on type
+                if chunk.type == ChunkType.AUDIO_RAW:
+                    # Audio chunk: apply flow control
+                    await self._send_audio_with_flow_control(session_id, websocket, chunk)
+                
+                else:
+                    # Event chunk: send immediately (no delay)
+                    message = await self._encode_chunk(chunk)
+                    if message:
+                        try:
+                            encoded = self.protocol.encode_message(message)
+                            
+                            if isinstance(encoded, bytes):
+                                await websocket.send_bytes(encoded)
+                            else:
+                                await websocket.send_text(encoded)
+                        
+                        except Exception as e:
+                            self.logger.error(f"Error sending event to {session_id}: {e}")
+        
+        except Exception as e:
+            self.logger.error(f"Sender worker error for {session_id}: {e}", exc_info=True)
+        
+        finally:
+            self.logger.debug(f"Sender worker stopped for session {session_id}")
+    
+    async def _send_audio_with_flow_control(
+        self,
+        session_id: str,
+        websocket: WebSocket,
+        chunk: Chunk
+    ) -> None:
+        """
+        Send audio chunk with flow control.
+        
+        Implements the flow control logic from xiaozhi-server:
+        - First 5 packets: fast (pre-buffering)
+        - Subsequent packets: timed at 60ms intervals
+        
+        Args:
+            session_id: Session identifier
+            websocket: WebSocket connection
+            chunk: Audio chunk to send
+        """
+        pcm_data = chunk.data
+        if not pcm_data:
+            return
+        
+        # Initialize flow control for this session if needed
+        if session_id not in self._audio_flow_control:
+            self._audio_flow_control[session_id] = {
+                "last_send_time": 0.0,
+                "packet_count": 0,
+                "start_time": time.time(),
+                "sequence": 0,
+            }
+        
+        flow_control = self._audio_flow_control[session_id]
+        
+        # Split PCM into 60ms frames (16kHz, mono, 16-bit = 1920 bytes per 60ms)
+        frame_size = 1920  # 60ms at 16kHz mono
+        frame_duration_s = 0.06  # 60ms in seconds
+        pre_buffer_count = 5  # First 5 packets sent quickly
+        
+        # Split audio into frames
+        frames = []
+        for i in range(0, len(pcm_data), frame_size):
+            frames.append(pcm_data[i:i + frame_size])
+        
+        self.logger.debug(f"Sending {len(frames)} audio frames with flow control , chunk source: {chunk.source}")
+        
+        # Send frames with flow control
+        for frame in frames:
+            # Encode PCM to Opus
+            opus_data = frame
+            if self.opus_codec and frame:
+                try:
+                    opus_data = self.opus_codec.encode(frame)
+                except Exception as e:
+                    self.logger.error(f"Failed to encode PCM to Opus: {e}")
+                    continue
+            elif not self.opus_codec:
+                self.logger.warning("Opus codec not available, sending raw PCM")
+            
+            # Apply flow control timing
+            current_time = time.time()
+            
+            if flow_control["packet_count"] < pre_buffer_count:
+                # Pre-buffer: send immediately
+                pass
+            else:
+                # Calculate expected time based on frame duration
+                effective_packet = flow_control["packet_count"] - pre_buffer_count
+                expected_time = flow_control["start_time"] + (effective_packet * frame_duration_s)
+                delay = expected_time - current_time
+                
+                if delay > 0:
+                    await asyncio.sleep(delay)
+                else:
+                    # Correct timing drift
+                    flow_control["start_time"] += abs(delay)
+            
+            # Send the audio frame
+            try:
+                message = {
+                    "type": XiaozhiMessageType.AUDIO,
+                    "audio_data": opus_data,
+                }
+                encoded = self.protocol.encode_message(message)
+                await websocket.send_bytes(encoded)
+                
+                # Update flow control state
+                flow_control["packet_count"] += 1
+                flow_control["sequence"] += 1
+                flow_control["last_send_time"] = time.time()
+            
+            except Exception as e:
+                self.logger.error(f"Error sending audio frame to {session_id}: {e}")
+                break

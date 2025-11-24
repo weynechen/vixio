@@ -91,7 +91,7 @@ class TTSStation(Station):
             
             self.logger.info(f"TTS synthesizing: '{text[:50]}...'")
             
-            # Emit TTS start event (first time)
+            # Emit TTS start event (first time only)
             if not self._is_speaking:
                 yield EventChunk(
                     type=ChunkType.EVENT_TTS_START,
@@ -101,22 +101,31 @@ class TTSStation(Station):
                 )
                 self._is_speaking = True
             
+            # Emit sentence start event with text (for LLM output display on client)
+            yield EventChunk(
+                type=ChunkType.EVENT_TTS_SENTENCE_START,
+                event_data={"text": text},
+                source_station=self.name,
+                session_id=chunk.session_id
+            )
+            
             # Synthesize text to audio (streaming)
             try:
                 audio_count = 0
                 async for audio_data in self.tts.synthesize(text):
                     if audio_data:
                         audio_count += 1
-                        # TTS provider returns PCM audio
+                        # TTS provider returns PCM audio (complete sentence now)
                         yield AudioChunk(
                             type=ChunkType.AUDIO_RAW,
                             data=audio_data,
                             sample_rate=16000,
                             channels=1,
+                            source=self.name,  # Mark as from TTS station for flow control
                             session_id=chunk.session_id
                         )
                 
-                self.logger.debug(f"TTS generated {audio_count} audio chunks")
+                self.logger.debug(f"TTS generated {audio_count} audio chunks (sentences)")
                 
                 # Emit TTS stop event
                 if self._is_speaking:
