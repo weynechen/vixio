@@ -10,12 +10,10 @@ Processing rules:
 from abc import ABC, abstractmethod
 from typing import AsyncIterator, Optional, TYPE_CHECKING
 from core.chunk import Chunk
-import logging
+from loguru import logger
 
 if TYPE_CHECKING:
     from core.control_bus import ControlBus
-
-logger = logging.getLogger(__name__)
 
 
 class Station(ABC):
@@ -38,7 +36,7 @@ class Station(ABC):
             name: Station name for logging (defaults to class name)
         """
         self.name = name or self.__class__.__name__
-        self.logger = logging.getLogger(f"station.{self.name}")
+        self.logger = logger.bind(station=self.name)
         
         # Turn tracking
         self.current_turn_id = 0

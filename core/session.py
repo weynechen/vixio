@@ -15,9 +15,7 @@ from core.transport import TransportBase
 from core.pipeline import Pipeline
 from core.control_bus import ControlBus
 from core.chunk import Chunk, ChunkType
-import logging
-
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 
 class SessionManager:
@@ -56,7 +54,7 @@ class SessionManager:
         self._control_buses: Dict[str, ControlBus] = {}  # connection_id -> control bus
         self._pipelines: Dict[str, Pipeline] = {}  # connection_id -> pipeline
         self._interrupt_tasks: Dict[str, asyncio.Task] = {}  # connection_id -> interrupt handler task
-        self.logger = logging.getLogger("SessionManager")
+        self.logger = logger.bind(component="SessionManager")
     
     async def start(self) -> None:
         """

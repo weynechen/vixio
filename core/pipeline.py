@@ -13,9 +13,7 @@ from typing import List, Optional, AsyncIterator, Set
 from core.station import Station
 from core.chunk import Chunk
 from core.control_bus import ControlBus
-import logging
-
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 
 class Pipeline:
@@ -49,7 +47,7 @@ class Pipeline:
         self.control_bus = control_bus
         self.name = name or "Pipeline"
         self.queue_size = queue_size
-        self.logger = logging.getLogger(f"pipeline.{self.name}")
+        self.logger = logger.bind(pipeline=self.name)
         
         # Runtime state
         self.queues: List[asyncio.Queue] = []

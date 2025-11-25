@@ -47,7 +47,7 @@ class LatencyMonitor:
         os.makedirs(log_dir, exist_ok=True)
         
         # Configure loguru for latency logging (JSON format)
-        log_file = os.path.join(log_dir, "latency_{time:YYYY-MM-DD}.log")
+        log_file = os.path.join(log_dir, "latency_{time:YYYY-MM-DD}.json")
         logger.add(
             log_file,
             rotation="00:00",  # Rotate daily

@@ -3,11 +3,18 @@ Example 3: Complete voice conversation with AI Agent
 
 A full voice chat pipeline with VAD, ASR, Agent, sentence splitting, and TTS.
 Demonstrates the complete integration of all components including LLM.
+
+Logger Configuration:
+    Logger is auto-configured on import with INFO level, logging to logs/ directory.
+    To customize, call configure_logger() before other imports:
+    
+    from utils import configure_logger
+    configure_logger(level="DEBUG", log_dir="my_logs")
 """
 
 import asyncio
-import logging
 import os
+from loguru import logger
 from core.pipeline import Pipeline
 from core.session import SessionManager
 from transports.xiaozhi import XiaozhiTransport
@@ -31,13 +38,6 @@ from utils import get_local_ip
 import dotenv
 
 dotenv.load_dotenv()
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
 
 
 async def main():

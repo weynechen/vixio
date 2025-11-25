@@ -9,12 +9,10 @@ Design:
 """
 
 import asyncio
-import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 import time
-
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 
 @dataclass
@@ -69,7 +67,7 @@ class ControlBus:
         self._interrupt_event = asyncio.Event()
         self._latest_interrupt: Optional[InterruptSignal] = None
         self._lock = asyncio.Lock()
-        self.logger = logging.getLogger("ControlBus")
+        self.logger = logger.bind(component="ControlBus")
     
     def get_current_turn_id(self) -> int:
         """

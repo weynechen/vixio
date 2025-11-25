@@ -8,12 +8,10 @@ Monitors:
 """
 
 import asyncio
-import logging
 from typing import Optional
 from dataclasses import dataclass, field
 import time
-
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 
 @dataclass
@@ -66,7 +64,7 @@ class TimeoutMonitor:
         """
         self.control_bus = control_bus
         self.config = config or TimeoutConfig()
-        self.logger = logging.getLogger("TimeoutMonitor")
+        self.logger = logger.bind(component="TimeoutMonitor")
         
         # Track active timeouts
         self._turn_tasks = {}  # session_id -> turn timeout task

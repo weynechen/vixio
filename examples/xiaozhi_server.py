@@ -5,8 +5,8 @@ Complete example for Xiaozhi device integration.
 """
 
 import asyncio
-import logging
 from typing import AsyncIterator
+from loguru import logger
 
 from core.pipeline import Pipeline
 from core.session import Session
@@ -25,13 +25,6 @@ from providers.edge_tts.provider import EdgeTTSProvider
 from transports.xiaozhi.transport import XiaozhiTransport
 
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-
-
 async def session_handler(transport: XiaozhiTransport, session_id: str):
     """
     Handle a client session.
@@ -40,8 +33,8 @@ async def session_handler(transport: XiaozhiTransport, session_id: str):
         transport: Xiaozhi transport instance
         session_id: Session identifier
     """
-    logger = logging.getLogger(f"Session-{session_id[:8]}")
-    logger.info(f"Starting session handler for {session_id}")
+    session_logger = logger.bind(session=session_id[:8])
+    session_logger.info(f"Starting session handler for {session_id}")
     
     try:
         # Create providers
@@ -100,15 +93,15 @@ async def session_handler(transport: XiaozhiTransport, session_id: str):
             # Send output to client
             await transport.output_chunk(session_id, output_chunk)
         
-        logger.info(f"Session {session_id} completed normally")
+        session_logger.info(f"Session {session_id} completed normally")
         
     except Exception as e:
-        logger.error(f"Error in session handler: {e}", exc_info=True)
+        session_logger.error(f"Error in session handler: {e}", exc_info=True)
     
     finally:
         # Cleanup
         await pipeline.stop()
-        logger.info(f"Session {session_id} cleaned up")
+        session_logger.info(f"Session {session_id} cleaned up")
 
 
 async def main():
@@ -159,7 +152,6 @@ async def main():
     # Start server
     await transport.start()
     
-    logger = logging.getLogger("Main")
     logger.info("Xiaozhi server is running...")
     logger.info(f"WebSocket URL: ws://{config['server']['host']}:{config['server']['port']}{config['server']['websocket_path']}")
     logger.info("OTA endpoint: http://{}:{}/xiaozhi/ota/".format(

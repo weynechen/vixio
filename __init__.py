@@ -15,6 +15,10 @@ Supported Providers:
 
 __version__ = "0.1.0"
 
+# Configure logger on import (auto-configuration in utils.logger_config)
+# This import triggers auto-configuration with default settings
+import utils.logger_config  # noqa: F401
+
 # Core abstractions
 from core.chunk import (
     Chunk,

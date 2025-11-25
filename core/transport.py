@@ -14,9 +14,7 @@ from typing import AsyncIterator, Callable, Awaitable, Optional
 from core.chunk import Chunk, ChunkType
 import asyncio
 from collections import deque
-import logging
-
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 
 class TransportBase(ABC):
@@ -112,7 +110,7 @@ class TransportBufferMixin:
         self._output_buffers = {}  # connection_id -> deque[AudioChunk]
         self._output_playing = {}  # connection_id -> bool
         
-        self.logger = logging.getLogger(f"{self.__class__.__name__}.BufferMixin")
+        self.logger = logger.bind(transport_mixin=self.__class__.__name__)
     
     def _init_buffers(self, connection_id: str):
         """

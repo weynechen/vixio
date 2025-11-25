@@ -3,7 +3,7 @@ Base provider class
 """
 
 from abc import ABC
-import logging
+from loguru import logger
 
 
 class BaseProvider(ABC):
@@ -21,7 +21,7 @@ class BaseProvider(ABC):
             name: Provider name for logging
         """
         self.name = name or self.__class__.__name__
-        self.logger = logging.getLogger(f"provider.{self.name}")
+        self.logger = logger.bind(provider=self.name)
     
     def __str__(self) -> str:
         return f"{self.__class__.__name__}({self.name})"

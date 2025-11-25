@@ -6,21 +6,13 @@ Demonstrates full integration of all components.
 """
 
 import asyncio
-import logging
 import os
+from loguru import logger
 from core.pipeline import Pipeline
 from core.session import SessionManager
 from transports.xiaozhi import XiaozhiTransport
 from stations import VADStation, TurnDetectorStation, ASRStation, TTSStation
 from providers import SileroVADProvider, SherpaOnnxLocalProvider, EdgeTTSProvider
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
-
 
 async def main():
     """

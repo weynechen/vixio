@@ -4,10 +4,8 @@ Audio format conversion utilities
 Provides common audio format conversions for Transport and Provider layers.
 """
 
-import logging
 from typing import Optional
-
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 # Opus codec support
 try:

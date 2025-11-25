@@ -14,7 +14,7 @@ from typing import AsyncIterator, Dict, Optional, Callable, Coroutine, Any
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request, Header, Query
 from fastapi.responses import JSONResponse
 import uvicorn
-import logging
+from loguru import logger
 
 from core.transport import TransportBase, TransportBufferMixin
 from core.chunk import (
@@ -96,9 +96,7 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
         self._send_tasks: Dict[str, asyncio.Task] = {}
         
         # Override logger from mixin with more specific name
-        self.logger = logging.getLogger("XiaozhiTransport")
-        
-        self.logger.setLevel(logging.DEBUG)
+        self.logger = logger.bind(transport="XiaozhiTransport")
 
         # Initialize Opus codec for audio format conversion
         self.opus_codec = None

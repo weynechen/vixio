@@ -6,19 +6,11 @@ Demonstrates basic Transport and Pipeline integration.
 """
 
 import asyncio
-import logging
+from loguru import logger
 from core.pipeline import Pipeline
 from core.station import PassthroughStation
 from core.session import SessionManager
 from transports.xiaozhi import XiaozhiTransport
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
-
 
 async def main():
     """
