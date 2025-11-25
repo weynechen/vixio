@@ -1,17 +1,41 @@
+## 文档说明
+**本文档版本：v3.0** - 已与实际代码实现完全同步（2025-11-25）
+
+本设计方案文档描述了 Vixio 语音对话框架的完整架构设计，所有示例代码均基于实际实现。如果您发现文档与代码不一致，请优先参考实际代码实现。
+
 ## 设计理念
 参考 Pipecat 的优秀设计，采用工业流水线的比喻：
-- **Pipeline**：流水线，串联多个工站形成完整的处理流程
+- **Pipeline**：流水线，串联多个工站形成完整的处理流程（**异步并行实现**）
 - **Station**：工站，负责特定的处理任务（VAD/ASR/Agent/TTS）
 - **Chunk**：流水线上传递的载体，分为两类：
   - **Data Chunk（产品）**：Audio/Vision/Text，经过工站加工转换
   - **Signal Chunk（消息）**：Control/Event，立即透传并触发工站状态变化
 - **Transport**：流水线的输入输出接口，完全解耦传输细节
+- **ControlBus**：中心化控制总线，管理中断和 turn 转换
+- **Turn-aware**：基于 turn_id 的流程控制，自动丢弃旧数据
 
 ## 核心设计原则
 1. **数据流（产品）**：Audio/Vision/Text 是待加工的产品，工站处理后 yield 新产品
 2. **信号流（消息）**：Control/Event 是控制消息，工站收到后立即透传，同时触发自身状态变化
 3. **流式处理**：所有工站都是 async generator，实时处理不阻塞
 4. **职责单一**：每个工站只负责一件事，通过组合实现复杂功能
+5. **Turn-aware**：基于 turn_id 的流程控制，中断时自动丢弃旧数据
+6. **中心化控制**：ControlBus 管理中断和 turn 转换，解耦组件间的控制流
+
+## 音频格式处理原则
+**重要约定**：Pipeline 内所有 AudioChunk 都是 **PCM 格式**（16-bit signed, little-endian, 16kHz, mono）
+
+- **Transport 层职责**：负责音频格式转换（Opus ↔ PCM）
+- **Station 层职责**：只处理 PCM 格式，无需关心编解码
+- **优势**：
+  - Station 实现简化，只需处理统一格式
+  - 格式转换集中在 Transport 层，易于优化
+  - 支持不同客户端使用不同编码格式
+
+```
+客户端 (Opus) ──> Transport (Opus→PCM) ──> Pipeline (PCM only) ──> Transport (PCM→Opus) ──> 客户端 (Opus)
+              格式转换                     统一处理                  格式转换
+```
 
 ## 核心架构
 ### 1. Chunk 数据结构
@@ -29,8 +53,7 @@ class ChunkType(str, Enum):
     
     # ============ Data Chunks (Products - to be processed/transformed) ============
     # Audio data - raw material for ASR
-    AUDIO_RAW = "audio.raw"           # Raw PCM audio
-    AUDIO_ENCODED = "audio.encoded"   # Encoded audio (Opus/MP3)
+    AUDIO_RAW = "audio.raw"           # PCM audio (16-bit signed, little-endian)
     
     # Text data - raw material for Agent, output from ASR
     TEXT = "text"                      # Complete text (ASR result, Agent input)
@@ -61,6 +84,9 @@ class ChunkType(str, Enum):
     EVENT_USER_STOPPED_SPEAKING = "event.user.speaking.stop"
     EVENT_TURN_END = "event.turn.end"      # User turn complete, ready for ASR
     
+    # Text events (from ASR/input sources)
+    EVENT_TEXT_COMPLETE = "event.text.complete"  # Text input complete, ready for aggregation
+    
     # Bot events (from TTS station)
     EVENT_BOT_STARTED_SPEAKING = "event.bot.speaking.start"
     EVENT_BOT_STOPPED_SPEAKING = "event.bot.speaking.stop"
@@ -70,6 +96,10 @@ class ChunkType(str, Enum):
     EVENT_STATE_LISTENING = "event.state.listening"
     EVENT_STATE_PROCESSING = "event.state.processing"
     EVENT_STATE_SPEAKING = "event.state.speaking"
+    
+    # Agent events (from Agent station)
+    EVENT_AGENT_START = "event.agent.start"
+    EVENT_AGENT_STOP = "event.agent.stop"
     
     # TTS events (for client sync)
     EVENT_TTS_START = "event.tts.start"
@@ -92,12 +122,25 @@ class Chunk:
     Design principle:
     - Data chunks (AUDIO/TEXT/VIDEO): Products to be transformed by stations
     - Signal chunks (CONTROL/EVENT): Messages to passthrough + trigger station state changes
+    
+    Attributes:
+        type: Chunk type
+        data: Data payload
+        source: Source station name (e.g., "asr", "agent", "user")
+        metadata: Additional metadata
+        timestamp: Creation timestamp
+        session_id: Session identifier
+        turn_id: Conversation turn ID (incremented on interrupt)
+        sequence: Sequence number within the turn
     """
     type: ChunkType
     data: Any = None
+    source: str = ""  # Source station name (asr, agent, user, etc.)
     metadata: Dict[str, Any] = field(default_factory=dict)
     timestamp: float = field(default_factory=time.time)
     session_id: Optional[str] = None
+    turn_id: int = 0  # Conversation turn ID, incremented on interrupt
+    sequence: int = 0  # Sequence number within the turn
     
     def is_data(self) -> bool:
         """Check if this is a data chunk (product)"""
@@ -113,11 +156,29 @@ class Chunk:
 # Specialized data chunks
 @dataclass
 class AudioChunk(Chunk):
-    """Audio data chunk - raw material for ASR processing"""
+    """
+    Audio data chunk - raw material for ASR processing
+    
+    Important: AudioChunk ALWAYS contains PCM audio data.
+    Transport layers are responsible for format conversion (e.g., Opus -> PCM).
+    
+    Attributes:
+        data: bytes - PCM audio bytes (16-bit signed integer, little-endian)
+        sample_rate: int - Sample rate in Hz (default: 16000)
+        channels: int - Number of audio channels (default: 1)
+    """
     type: ChunkType = ChunkType.AUDIO_RAW
     sample_rate: int = 16000
     channels: int = 1
-    # data: bytes (PCM audio bytes)
+    
+    def duration_ms(self) -> float:
+        """Calculate audio duration in milliseconds"""
+        if not self.data or not isinstance(self.data, bytes):
+            return 0.0
+        # Assuming 16-bit PCM
+        bytes_per_sample = 2
+        num_samples = len(self.data) / (bytes_per_sample * self.channels)
+        return (num_samples / self.sample_rate) * 1000
 
 @dataclass
 class TextChunk(Chunk):
@@ -445,7 +506,7 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
     User only needs to instantiate this class - protocol is built-in.
     """
     
-    def __init__(self, host: str = "0.0.0.0", port: int = 8080):
+    def __init__(self, host: str = "0.0.0.0", port: int = 8000):
         TransportBufferMixin.__init__(self)
         self._host = host
         self._port = port
@@ -562,9 +623,12 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
             if not raw_message:
                 return
             
-            # Audio chunks: buffer and control playback
-            if chunk.type == ChunkType.AUDIO_ENCODED:
-                self._add_to_output_buffer(connection_id, chunk)
+            # Audio chunks: convert PCM to Opus and send
+            if chunk.type == ChunkType.AUDIO_RAW:
+                # Convert PCM to Opus
+                opus_data = self._encode_audio(chunk.data)
+                # Buffer for smooth playback
+                self._add_to_output_buffer(connection_id, opus_data)
                 
                 # Start playback if not already playing
                 if not self._output_playing.get(connection_id):
@@ -638,14 +702,16 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
         Encode Chunk to Xiaozhi message.
         
         Xiaozhi protocol:
-        - AUDIO_ENCODED -> binary data
+        - AUDIO_RAW (PCM) -> convert to Opus -> binary data
         - Events -> JSON: {"type": "event.xxx", "data": ..., "timestamp": ...}
         """
         import json
         
-        # Audio: send as binary
-        if chunk.type == ChunkType.AUDIO_ENCODED:
-            return chunk.data
+        # Audio: convert PCM to Opus and send as binary
+        if chunk.type == ChunkType.AUDIO_RAW:
+            # Convert PCM to Opus (done by transport layer)
+            opus_data = self.opus_codec.encode(chunk.data) if self.opus_codec else chunk.data
+            return opus_data
         
         # Signals: send as JSON
         elif chunk.is_signal():
@@ -671,7 +737,7 @@ class StandardWebSocketTransport(TransportBase, TransportBufferMixin):
     - Output: {"type": "audio", "data": "base64..."} or {"type": "event", "name": "tts.start"}
     """
     
-    def __init__(self, host: str = "0.0.0.0", port: int = 8080):
+    def __init__(self, host: str = "0.0.0.0", port: int = 8000):
         TransportBufferMixin.__init__(self)
         self._host = host
         self._port = port
@@ -683,17 +749,127 @@ class StandardWebSocketTransport(TransportBase, TransportBufferMixin):
     # ... (省略具体实现，与 XiaozhiTransport 类似)
 ```
 
-### 3. Station 处理抽象（工站）
-Station 是流水线上的工站，处理逻辑遵循两大原则：
+### 3. ControlBus 中断管理（控制总线）
+ControlBus 是中心化的中断管理系统，负责：
+1. **中断信号传递**：任何组件都可以发送中断信号
+2. **Turn ID 管理**：每次中断时递增 turn_id，标记新的对话回合
+3. **解耦控制流**：组件间无需直接通信，通过 ControlBus 协调
+
+```python
+# vixio/core/control_bus.py
+
+import asyncio
+import logging
+from dataclasses import dataclass, field
+from typing import Any, Dict, Optional
+import time
+
+@dataclass
+class InterruptSignal:
+    """
+    Interrupt signal sent through ControlBus.
+    
+    Attributes:
+        source: Component that sent the interrupt (e.g., "vad", "turn_detector", "transport")
+        reason: Human-readable reason for interrupt
+        turn_id: Turn ID when interrupt was sent
+        timestamp: When the interrupt was sent
+        metadata: Additional context (optional)
+    """
+    source: str
+    reason: str
+    turn_id: int
+    timestamp: float = field(default_factory=time.time)
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+class ControlBus:
+    """
+    Centralized control bus for managing interrupts and turn transitions.
+    
+    Features:
+    - Any component can send interrupt signals
+    - Monitor task coordinates turn transitions
+    - Provides current turn_id for all components
+    - Thread-safe and async-friendly
+    
+    Usage:
+        bus = ControlBus()
+        
+        # Send interrupt
+        await bus.send_interrupt(source="vad", reason="user_speaking")
+        
+        # Wait for interrupt (used by Session)
+        signal = await bus.wait_for_interrupt()
+        
+        # Get current turn ID (used by Stations)
+        turn_id = bus.get_current_turn_id()
+    """
+    
+    def __init__(self):
+        """Initialize control bus."""
+        self._current_turn_id = 0
+        self._interrupt_queue = asyncio.Queue()
+        self._interrupt_event = asyncio.Event()
+        self._latest_interrupt: Optional[InterruptSignal] = None
+        self._lock = asyncio.Lock()
+    
+    def get_current_turn_id(self) -> int:
+        """Get current turn ID."""
+        return self._current_turn_id
+    
+    async def send_interrupt(
+        self,
+        source: str,
+        reason: str,
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> None:
+        """Send an interrupt signal."""
+        signal = InterruptSignal(
+            source=source,
+            reason=reason,
+            turn_id=self._current_turn_id,
+            metadata=metadata or {}
+        )
+        
+        # Queue the interrupt for processing
+        await self._interrupt_queue.put(signal)
+        
+        # Set event flag for immediate notification
+        self._interrupt_event.set()
+    
+    async def wait_for_interrupt(self) -> InterruptSignal:
+        """
+        Wait for the next interrupt signal.
+        
+        This should be called by Session to handle interrupts.
+        """
+        signal = await self._interrupt_queue.get()
+        
+        # Increment turn ID for new turn
+        async with self._lock:
+            self._current_turn_id += 1
+            signal.turn_id = self._current_turn_id
+            self._latest_interrupt = signal
+        
+        return signal
+```
+
+### 4. Station 处理抽象（工站）
+Station 是流水线上的工站，处理逻辑遵循三大原则：
 1. **Data Chunk（产品）**：加工转换，输出新产品
 2. **Signal Chunk（消息）**：立即透传 + 触发自身状态变化
+3. **Turn-aware**：自动丢弃旧 turn 的数据，新 turn 时重置状态
 
 ```python
 # vixio/core/station.py
 
 from abc import ABC, abstractmethod
-from typing import AsyncIterator, Optional, Set
+from typing import AsyncIterator, Optional, TYPE_CHECKING
 from .chunk import Chunk, ChunkType
+import logging
+
+if TYPE_CHECKING:
+    from core.control_bus import ControlBus
 
 class Station(ABC):
     """
@@ -702,34 +878,68 @@ class Station(ABC):
     Processing rules:
     1. Data chunks: Transform and yield processed results
     2. Signal chunks: Immediately passthrough + optionally yield response chunks
+    3. Turn-aware: Discard chunks from old turns, reset state on new turns
     
     Subclasses override process_chunk() to implement custom logic.
     """
     
     def __init__(self, name: Optional[str] = None):
+        """
+        Initialize station.
+        
+        Args:
+            name: Station name for logging (defaults to class name)
+        """
         self.name = name or self.__class__.__name__
+        self.logger = logging.getLogger(f"station.{self.name}")
+        
+        # Turn tracking
+        self.current_turn_id = 0
+        self.control_bus: Optional['ControlBus'] = None
     
     async def process(self, input_stream: AsyncIterator[Chunk]) -> AsyncIterator[Chunk]:
         """
-        Main processing loop.
+        Main processing loop with turn-awareness.
         
-        Routing logic:
-        - Signal chunks: Yield immediately (passthrough) + process for side effects
-        - Data chunks: Process and yield results
+        Turn handling:
+        - Discard chunks from old turns (turn_id < current_turn_id)
+        - Reset state when new turn starts (turn_id > current_turn_id)
+        - Process chunks from current turn normally
         
         This method should NOT be overridden by subclasses.
         """
         async for chunk in input_stream:
-            if chunk.is_signal():
-                # Signals: Always passthrough first (critical for downstream)
-                yield chunk
-                # Then process (may yield additional chunks)
+            # Check turn ID
+            if chunk.turn_id < self.current_turn_id:
+                # Old turn, discard
+                self.logger.debug(f"Discarding old chunk: turn {chunk.turn_id} < {self.current_turn_id}")
+                continue
+            
+            if chunk.turn_id > self.current_turn_id:
+                # New turn started, reset state
+                self.logger.info(f"New turn detected: {chunk.turn_id} (was {self.current_turn_id})")
+                self.current_turn_id = chunk.turn_id
+                await self.reset_state()
+            
+            # Process chunk
+            try:
                 async for output_chunk in self.process_chunk(chunk):
+                    # Propagate turn ID
+                    output_chunk.turn_id = self.current_turn_id
                     yield output_chunk
-            else:
-                # Data: Process and yield results
-                async for output_chunk in self.process_chunk(chunk):
-                    yield output_chunk
+            except Exception as e:
+                self.logger.error(f"Error processing {chunk}: {e}", exc_info=True)
+    
+    async def reset_state(self) -> None:
+        """
+        Reset station state for new turn.
+        
+        Called automatically when a new turn starts.
+        Subclasses can override to clear accumulated state.
+        
+        Example: ASR station clears audio buffer, Agent clears conversation history.
+        """
+        self.logger.debug(f"State reset for turn {self.current_turn_id}")
     
     @abstractmethod
     async def process_chunk(self, chunk: Chunk) -> AsyncIterator[Chunk]:
@@ -738,18 +948,18 @@ class Station(ABC):
         
         For data chunks:
         - Transform the data and yield new chunks
-        - Or passthrough unchanged
+        - Or passthrough unchanged (yield chunk)
         
         For signal chunks:
-        - Update internal state
-        - Optionally yield new chunks (e.g., ASR yields TEXT on EVENT_TURN_END)
-        - Note: The signal itself is already passed through by process()
+        - Must yield the signal to pass it through (yield chunk)
+        - Can update internal state
+        - Can optionally yield additional chunks (e.g., ASR yields TEXT on EVENT_TURN_END)
         
         Args:
             chunk: Input chunk (data or signal)
             
         Yields:
-            Output chunks
+            Output chunks (for signals, at minimum yield the signal itself to pass it through)
         """
         pass
 
@@ -758,14 +968,16 @@ class Station(ABC):
 # Example 1: VAD Station - monitors audio, emits events
 class VADStation(Station):
     """
-    VAD workstation: Detects voice activity in audio stream.
+    VAD workstation: Detects voice activity in PCM audio stream.
     
-    Input: AUDIO_RAW
+    Input: AUDIO_RAW (PCM format)
     Output: AUDIO_RAW (passthrough) + EVENT_VAD_START/END
+    
+    Note: Expects PCM audio data. Transport layers handle format conversion.
     """
     
-    def __init__(self, vad_provider):
-        super().__init__("VAD")
+    def __init__(self, vad_provider, name: str = "VAD"):
+        super().__init__(name=name)
         self.vad = vad_provider
         self._is_speaking = False
     
@@ -773,35 +985,45 @@ class VADStation(Station):
         # Handle signals
         if chunk.is_signal():
             if chunk.type == ChunkType.CONTROL_INTERRUPT:
-                self._is_speaking = False  # Reset state
-            return  # No output for signals
-        
-        # Only process audio data
-        if chunk.type != ChunkType.AUDIO_RAW:
-            yield chunk  # Passthrough other data
+                # Reset VAD state on interrupt
+                self._is_speaking = False
+                self.vad.reset()
+            # Always passthrough signals
+            yield chunk
             return
         
-        # Detect voice
-        has_voice = self.vad.detect(chunk.data)
+        # Only process audio data (PCM)
+        if not is_audio_chunk(chunk) or chunk.type != ChunkType.AUDIO_RAW:
+            yield chunk
+            return
+        
+        # Detect voice in PCM audio
+        audio_data = chunk.data if isinstance(chunk.data, bytes) else b''
+        has_voice = self.vad.detect(audio_data)
+        
+        # Emit VAD events on state change
+        if has_voice and not self._is_speaking:
+            # Voice activity started
+            yield EventChunk(
+                type=ChunkType.EVENT_VAD_START,
+                event_data={"has_voice": True},
+                source_station=self.name,
+                session_id=chunk.session_id
+            )
+            self._is_speaking = True
+        
+        elif not has_voice and self._is_speaking:
+            # Voice activity ended
+            yield EventChunk(
+                type=ChunkType.EVENT_VAD_END,
+                event_data={"has_voice": False},
+                source_station=self.name,
+                session_id=chunk.session_id
+            )
+            self._is_speaking = False
         
         # Always passthrough audio
         yield chunk
-        
-            # Emit VAD events on state change
-            if has_voice and not self._is_speaking:
-                yield EventChunk(
-                    type=ChunkType.EVENT_VAD_START,
-                    source_station=self.name,
-                    session_id=chunk.session_id
-                )
-                self._is_speaking = True
-            elif not has_voice and self._is_speaking:
-                yield EventChunk(
-                    type=ChunkType.EVENT_VAD_END,
-                    source_station=self.name,
-                    session_id=chunk.session_id
-                )
-                self._is_speaking = False
 
 # Example 2: ASR Station - converts audio to text
 class ASRStation(Station):
@@ -887,7 +1109,7 @@ class TTSStation(Station):
     TTS workstation: Synthesizes text to audio.
     
     Input: TEXT_DELTA
-    Output: AUDIO_ENCODED (streaming) + EVENT_TTS_START/STOP
+    Output: AUDIO_RAW (PCM, streaming) + EVENT_TTS_START/STOP
     """
     
     def __init__(self, tts_provider):
@@ -925,47 +1147,81 @@ class TTSStation(Station):
             )
             self._is_speaking = True
         
-        # Generate streaming audio
+        # Generate streaming audio (PCM format)
         async for audio_data in self.tts.synthesize(chunk.delta):
             yield AudioChunk(
-                type=ChunkType.AUDIO_ENCODED,
+                type=ChunkType.AUDIO_RAW,
                 data=audio_data,
+                sample_rate=16000,
+                channels=1,
                 session_id=chunk.session_id
             )
 ```
-### 4. Pipeline 组装（流水线）
-Pipeline 是流水线，串联多个工站（Stations），chunk 顺序流经每个工站：
+### 5. Pipeline 组装（流水线）
+Pipeline 是流水线，串联多个工站（Stations）。**实际实现采用异步并行模型**，每个 Station 运行在独立的 asyncio 任务中，通过 Queue 连接：
 
 ```python
 # vixio/core/pipeline.py
 
-from typing import List
+import asyncio
+from typing import List, Optional, AsyncIterator, Set
 from .station import Station
 from .chunk import Chunk
+from .control_bus import ControlBus
+import logging
 
 class Pipeline:
     """
     Pipeline - assembly line that connects workstations (stations).
     
-    Design:
-    - Each station's output becomes the next station's input
-    - Chunks flow sequentially through all stations
-    - Data chunks get transformed at each station
-    - Signal chunks passthrough all stations, triggering state changes
+    Async Design:
+    - Each station runs in an independent asyncio task
+    - Stations connected via asyncio.Queue for non-blocking parallel processing
+    - ControlBus integration for interrupt handling
+    - Can clear queues and cancel tasks on interrupt
     """
     
-    def __init__(self, stations: List[Station], name: Optional[str] = None):
+    def __init__(
+        self,
+        stations: List[Station],
+        control_bus: Optional[ControlBus] = None,
+        name: Optional[str] = None,
+        queue_size: int = 100
+    ):
+        """
+        Initialize pipeline.
+        
+        Args:
+            stations: List of stations to chain together
+            control_bus: ControlBus for interrupt handling (optional)
+            name: Pipeline name for logging
+            queue_size: Maximum size for inter-station queues
+        """
         self.stations = stations
+        self.control_bus = control_bus
         self.name = name or "Pipeline"
+        self.queue_size = queue_size
+        
+        # Runtime state
+        self.queues: List[asyncio.Queue] = []
+        self.tasks: List[asyncio.Task] = []
+        self.cancellable_task_indices: Set[int] = set()  # Indices of slow tasks (Agent, TTS)
+        self._running = False
+        
+        # Pass ControlBus to all stations
+        if self.control_bus:
+            for station in self.stations:
+                station.control_bus = self.control_bus
     
     async def run(self, input_stream: AsyncIterator[Chunk]) -> AsyncIterator[Chunk]:
         """
-        Run the pipeline - chain all stations together.
+        Run the pipeline - all stations in parallel with queues.
         
-        Flow:
-        1. Input stream feeds into first station
-        2. Each station's output feeds into next station
-        3. Final station's output is pipeline output
+        Async Flow:
+        1. Create queues between stations
+        2. Start each station as independent task
+        3. Feed input_stream into first queue
+        4. Yield from final queue
         
         Args:
             input_stream: Source of chunks (usually from Transport)
@@ -973,15 +1229,115 @@ class Pipeline:
         Yields:
             Processed chunks from final station
         """
-        stream = input_stream
+        self._running = True
         
-        # Chain stations: station1.process(input) -> station2.process(station1_output) -> ...
-        for station in self.stations:
-            stream = station.process(stream)
+        try:
+            # Create queues: n stations need n+1 queues
+            # Queue[0] gets input, Queue[n] provides output
+            self.queues = [asyncio.Queue(maxsize=self.queue_size) for _ in range(len(self.stations) + 1)]
+            
+            # Start all station tasks
+            self.tasks = []
+            for i, station in enumerate(self.stations):
+                task = asyncio.create_task(
+                    self._run_station(station, i, self.queues[i], self.queues[i + 1]),
+                    name=f"{self.name}-{station.name}"
+                )
+                self.tasks.append(task)
+                
+                # Mark slow tasks as cancellable
+                if self._is_slow_station(station):
+                    self.cancellable_task_indices.add(i)
+            
+            # Start input feeder task
+            input_task = asyncio.create_task(
+                self._feed_input(input_stream, self.queues[0])
+            )
+            
+            # Yield from output queue
+            while self._running:
+                try:
+                    chunk = await asyncio.wait_for(self.queues[-1].get(), timeout=0.1)
+                    
+                    # None is used as end-of-stream marker
+                    if chunk is None:
+                        break
+                    
+                    yield chunk
+                except asyncio.TimeoutError:
+                    # Check if all tasks are done
+                    if input_task.done() and self.queues[-1].empty():
+                        all_done = all(task.done() for task in self.tasks)
+                        if all_done:
+                            break
+                    continue
         
-        # Yield final output
-        async for chunk in stream:
+        finally:
+            # Cleanup
+            self._running = False
+            await self._cleanup_tasks()
+    
+    async def _feed_input(self, input_stream: AsyncIterator[Chunk], input_queue: asyncio.Queue) -> None:
+        """Feed input stream into first queue."""
+        try:
+            async for chunk in input_stream:
+                await input_queue.put(chunk)
+        except Exception as e:
+            logger.error(f"Error feeding input: {e}")
+        finally:
+            # Signal end of input
+            await input_queue.put(None)
+    
+    async def _run_station(
+        self,
+        station: Station,
+        index: int,
+        input_queue: asyncio.Queue,
+        output_queue: asyncio.Queue
+    ) -> None:
+        """Run a single station task."""
+        try:
+            async for chunk in self._queue_iterator(input_queue):
+                # Process chunk through station
+                async for output_chunk in station.process_chunk(chunk):
+                    await output_queue.put(output_chunk)
+            
+            # Signal downstream that this station is done
+            await output_queue.put(None)
+            
+        except asyncio.CancelledError:
+            logger.info(f"Station {station.name} cancelled")
+            raise
+        except Exception as e:
+            logger.error(f"Error in station {station.name}: {e}")
+            await output_queue.put(None)
+    
+    async def _queue_iterator(self, queue: asyncio.Queue) -> AsyncIterator[Chunk]:
+        """Iterate over queue until None is received."""
+        while True:
+            chunk = await queue.get()
+            if chunk is None:
+                break
             yield chunk
+    
+    def clear_queues(self, from_stage: int = 1) -> None:
+        """
+        Clear queues from specified stage onwards.
+        
+        This is used during interrupt handling to discard pending chunks.
+        Stage 0 (input queue) is typically preserved.
+        """
+        cleared_count = 0
+        for i in range(from_stage, len(self.queues)):
+            queue = self.queues[i]
+            while not queue.empty():
+                try:
+                    queue.get_nowait()
+                    cleared_count += 1
+                except asyncio.QueueEmpty:
+                    break
+        
+        logger.info(f"Cleared {cleared_count} chunks from queues")
 
 # ============ Usage Example ============
 
@@ -1034,16 +1390,109 @@ def create_multimodal_pipeline():
         TTSStation(),
     ])
 ```
-### 5. Session 管理（连接 Transport 和 Pipeline）
-SessionManager 为每个客户端连接创建独立的 Pipeline 实例：
+### 6. TimeoutMonitor 超时监控（可选）
+TimeoutMonitor 监控对话流程的各个阶段，在超时时发送中断信号：
+
+```python
+# vixio/core/timeout_monitor.py
+
+import asyncio
+import logging
+from typing import Optional
+from dataclasses import dataclass
+import time
+
+@dataclass
+class TimeoutConfig:
+    """
+    Configuration for timeout monitoring.
+    
+    Attributes:
+        agent_timeout: Agent processing timeout in seconds
+        tts_timeout: TTS generation timeout in seconds
+        turn_timeout: Overall turn timeout in seconds
+    """
+    agent_timeout: float = 30.0
+    tts_timeout: float = 60.0
+    turn_timeout: float = 120.0
+
+class TimeoutMonitor:
+    """
+    Monitor conversation flow timeouts and send interrupt signals.
+    
+    This monitor tracks various stages of conversation processing and sends
+    interrupt signals via ControlBus when timeouts occur.
+    
+    Usage:
+        monitor = TimeoutMonitor(control_bus, config)
+        
+        # Start monitoring a turn
+        await monitor.start_turn(session_id)
+        
+        # Mark stage starts
+        await monitor.mark_agent_start(session_id)
+        await monitor.mark_tts_start(session_id)
+        
+        # Mark stage ends
+        await monitor.mark_agent_end(session_id)
+        await monitor.mark_tts_end(session_id)
+        
+        # End turn
+        await monitor.end_turn(session_id)
+    """
+    
+    def __init__(self, control_bus, config: Optional[TimeoutConfig] = None):
+        """
+        Initialize timeout monitor.
+        
+        Args:
+            control_bus: ControlBus instance for sending interrupt signals
+            config: Timeout configuration
+        """
+        self.control_bus = control_bus
+        self.config = config or TimeoutConfig()
+        
+        # Track active timeouts
+        self._turn_tasks = {}  # session_id -> turn timeout task
+        self._agent_tasks = {}  # session_id -> agent timeout task
+        self._tts_tasks = {}  # session_id -> tts timeout task
+    
+    async def start_turn(self, session_id: str) -> None:
+        """Start monitoring a turn."""
+        # Start turn timeout task
+        task = asyncio.create_task(
+            self._monitor_turn_timeout(session_id),
+            name=f"turn-timeout-{session_id[:8]}"
+        )
+        self._turn_tasks[session_id] = task
+    
+    async def _monitor_turn_timeout(self, session_id: str) -> None:
+        """Monitor overall turn timeout."""
+        try:
+            await asyncio.sleep(self.config.turn_timeout)
+            # Timeout reached, send interrupt
+            await self.control_bus.send_interrupt(
+                source="TimeoutMonitor",
+                reason=f"turn_timeout ({self.config.turn_timeout}s)",
+                metadata={"session_id": session_id}
+            )
+        except asyncio.CancelledError:
+            pass
+```
+
+### 7. Session 管理（连接 Transport 和 Pipeline）
+SessionManager 为每个客户端连接创建独立的 Pipeline 和 ControlBus 实例，处理中断机制：
 
 ```python
 # vixio/core/session.py
 
 import asyncio
-from typing import Callable, Dict
+from typing import Callable, Dict, Optional, AsyncIterator
 from .transport import TransportBase
 from .pipeline import Pipeline
+from .control_bus import ControlBus
+from .chunk import Chunk, ChunkType
+import logging
 
 class SessionManager:
     """
@@ -1054,10 +1503,12 @@ class SessionManager:
     2. Create a Pipeline instance for each connection
     3. Route chunks: Transport input -> Pipeline -> Transport output
     4. Manage pipeline lifecycle
+    5. Handle interrupts via ControlBus
     
     Design:
-    - Each connection gets its own Pipeline instance (isolated state)
+    - Each connection gets its own Pipeline and ControlBus instance
     - Pipeline runs as long as connection is alive
+    - ControlBus handles interrupts and turn transitions
     - Automatically cleanup on disconnect
     """
     
@@ -1069,6 +1520,9 @@ class SessionManager:
         self.transport = transport
         self.pipeline_factory = pipeline_factory
         self._sessions: Dict[str, asyncio.Task] = {}  # connection_id -> pipeline task
+        self._control_buses: Dict[str, ControlBus] = {}  # connection_id -> control bus
+        self._pipelines: Dict[str, Pipeline] = {}  # connection_id -> pipeline
+        self._interrupt_tasks: Dict[str, asyncio.Task] = {}  # connection_id -> interrupt handler task
     
     async def start(self) -> None:
         """
@@ -1103,14 +1557,30 @@ class SessionManager:
         """
         Handle new client connection.
         
-        Creates and runs a pipeline for this connection.
+        Creates pipeline, control bus, and interrupt handler for this connection.
         """
-        # Create fresh pipeline for this session
+        logger.info(f"New connection: {connection_id[:8]}")
+        
+        # Create ControlBus for this session
+        control_bus = ControlBus()
+        self._control_buses[connection_id] = control_bus
+        
+        # Create fresh pipeline with ControlBus
         pipeline = self.pipeline_factory()
+        pipeline.control_bus = control_bus
+        self._pipelines[connection_id] = pipeline
+        
+        # Start interrupt handler task
+        interrupt_task = asyncio.create_task(
+            self._handle_interrupts(connection_id, pipeline, control_bus),
+            name=f"interrupt-handler-{connection_id[:8]}"
+        )
+        self._interrupt_tasks[connection_id] = interrupt_task
         
         # Run pipeline in background task
         task = asyncio.create_task(
-            self._run_pipeline(connection_id, pipeline)
+            self._run_pipeline(connection_id, pipeline),
+            name=f"pipeline-{connection_id[:8]}"
         )
         
         self._sessions[connection_id] = task
@@ -1118,18 +1588,97 @@ class SessionManager:
         # Cleanup when done
         task.add_done_callback(lambda _: self._cleanup_session(connection_id))
     
+    async def _handle_interrupts(
+        self,
+        connection_id: str,
+        pipeline: Pipeline,
+        control_bus: ControlBus
+    ) -> None:
+        """
+        Handle interrupt signals for a connection.
+        
+        Listens for interrupts on ControlBus and:
+        1. Clears pipeline queues (except input queue)
+        2. Cancels slow tasks (Agent, TTS) [已移除，改为基于 turn_id 丢弃]
+        3. Logs the interrupt
+        4. Sends control events to client
+        """
+        try:
+            while True:
+                # Wait for interrupt signal
+                interrupt = await control_bus.wait_for_interrupt()
+                
+                logger.warning(f"[{connection_id[:8]}] Interrupt: {interrupt.source} - {interrupt.reason}")
+                
+                # Clear pipeline queues (keep input queue)
+                pipeline.clear_queues(from_stage=1)
+                
+                # Note: We do NOT cancel tasks anymore!
+                # Tasks continue running and will automatically discard old chunks
+                # based on turn_id. This ensures they can process new chunks.
+                
+                # Clear transport send queue to stop pending audio
+                if hasattr(self.transport, 'clear_send_queue'):
+                    self.transport.clear_send_queue(connection_id)
+                
+                # Send control events immediately to client
+                try:
+                    from .chunk import EventChunk, ChunkType
+                    
+                    # Send TTS stop event - IMMEDIATE delivery to stop client playback
+                    stop_event = EventChunk(
+                        type=ChunkType.EVENT_TTS_STOP,
+                        event_data={"reason": "interrupted"},
+                        source_station="SessionManager",
+                        session_id=connection_id
+                    )
+                    
+                    # Send state transition to LISTENING
+                    state_event = EventChunk(
+                        type=ChunkType.EVENT_STATE_LISTENING,
+                        event_data={"reason": "interrupted"},
+                        source_station="SessionManager",
+                        session_id=connection_id
+                    )
+                    
+                    # Use send_immediate if available, otherwise fallback
+                    if hasattr(self.transport, 'send_immediate'):
+                        await self.transport.send_immediate(connection_id, stop_event)
+                        await self.transport.send_immediate(connection_id, state_event)
+                    else:
+                        await self.transport.output_chunk(connection_id, stop_event)
+                        await self.transport.output_chunk(connection_id, state_event)
+                        
+                except Exception as e:
+                    logger.warning(f"Failed to send interrupt events: {e}")
+                
+                # Clear interrupt event flag
+                control_bus.clear_interrupt_event()
+                
+                logger.info(f"[{connection_id[:8]}] Interrupt handled, new turn_id={control_bus.get_current_turn_id()}")
+        
+        except asyncio.CancelledError:
+            logger.info(f"Interrupt handler cancelled for {connection_id[:8]}")
+    
     async def _run_pipeline(self, connection_id: str, pipeline: Pipeline) -> None:
         """
         Run pipeline for a connection.
         
         Flow:
         1. Get input stream from transport
-        2. Run pipeline (yields output chunks)
-        3. Send output chunks back to transport
+        2. Wrap input stream to detect CONTROL_INTERRUPT chunks
+        3. Run pipeline (yields output chunks)
+        4. Send output chunks back to transport
         """
         try:
             # Get input stream from transport
-            input_stream = self.transport.input_stream(connection_id)
+            raw_input_stream = self.transport.input_stream(connection_id)
+            
+            # Get ControlBus for this connection
+            control_bus = self._control_buses.get(connection_id)
+            
+            # Wrap input stream to detect CONTROL_INTERRUPT
+            input_stream = self._wrap_input_stream(raw_input_stream, control_bus, connection_id)
             
             # Run pipeline and send outputs
             async for output_chunk in pipeline.run(input_stream):
@@ -1147,6 +1696,35 @@ class SessionManager:
             # Ensure cleanup
             self._cleanup_session(connection_id)
     
+    async def _wrap_input_stream(
+        self,
+        input_stream: AsyncIterator[Chunk],
+        control_bus: Optional[ControlBus],
+        connection_id: str
+    ) -> AsyncIterator[Chunk]:
+        """
+        Wrap input stream to detect CONTROL_INTERRUPT chunks and send to ControlBus.
+        
+        This allows client-initiated interrupts to trigger the interrupt mechanism.
+        """
+        async for chunk in input_stream:
+            # Detect CONTROL_INTERRUPT chunk and send to ControlBus
+            if chunk.type == ChunkType.CONTROL_INTERRUPT and control_bus:
+                logger.info(f"[{connection_id[:8]}] Client interrupt detected")
+                
+                # Send interrupt signal to ControlBus
+                await control_bus.send_interrupt(
+                    source="Transport",
+                    reason=chunk.params.get("reason", "client_interrupt"),
+                    metadata={
+                        "connection_id": connection_id,
+                        "command": chunk.command
+                    }
+                )
+            
+            # Always yield the chunk
+            yield chunk
+    
     def _cleanup_session(self, connection_id: str) -> None:
         """Cleanup session resources"""
         if connection_id in self._sessions:
@@ -1160,7 +1738,7 @@ async def main():
     # 1. Setup transport (protocol is built-in)
     transport = XiaozhiTransport(
         host="0.0.0.0",
-        port=8080
+        port=8000
     )
     
     # 3. Setup pipeline factory
@@ -1239,7 +1817,7 @@ async def test_pipeline():
 同一套 Pipeline 可以轻松支持多种 Transport（协议内置）：
 ```python
 # Xiaozhi WebSocket (for Xiaozhi devices)
-xiaozhi_transport = XiaozhiTransport(host="0.0.0.0", port=8080)
+xiaozhi_transport = XiaozhiTransport(host="0.0.0.0", port=8000)
 xiaozhi_manager = SessionManager(xiaozhi_transport, create_pipeline)
 
 # Standard WebSocket (for web clients)
@@ -1253,11 +1831,30 @@ http_manager = SessionManager(http_transport, create_pipeline)
 # 用户只需要选择 Transport，不需要关心协议细节
 ```
 
-### 7. 性能优化空间
+### 7. Turn-aware 机制的优雅设计
+- **自动丢弃旧数据**：基于 turn_id，Station 无需手动处理中断
+- **无需任务取消**：任务持续运行，只丢弃旧 turn 的数据
+- **避免竞态条件**：turn_id 自增，保证顺序性
+- **简化 Station 实现**：Station 只需检查 turn_id，无需复杂的中断逻辑
+
+### 8. ControlBus 的中心化控制
+- **解耦组件**：组件间无需直接通信，通过 ControlBus 协调
+- **统一中断管理**：所有中断信号都经过 ControlBus
+- **灵活的中断源**：VAD、Turn Detector、Timeout Monitor、客户端都可发送中断
+- **便于调试**：所有中断信号集中记录和追踪
+
+### 9. 异步并行 Pipeline
+- **真正并行**：每个 Station 在独立任务中运行，无阻塞
+- **队列缓冲**：asyncio.Queue 提供天然的背压控制
+- **弹性清理**：中断时可清理队列，快速响应
+- **性能优化**：标记慢任务（Agent、TTS），可选择性处理
+
+### 10. 性能优化空间
 - **并行处理**：不同 Session 的 Pipeline 天然并行
-- **批处理**：使用 `BundleChunk` 批量处理 Audio 降低开销
+- **Station 并行**：同一 Pipeline 内的 Station 也并行运行
 - **零拷贝**：Chunk 只传递引用，不复制数据
-- **背压控制**：AsyncIterator 天然支持背压
+- **背压控制**：AsyncIterator 和 Queue 天然支持背压
+- **音频格式转换**：Transport 层统一处理，Station 只处理 PCM
 ## 辅助 Station 示例
 
 ### TurnDetectorStation - 检测用户说话结束
@@ -1306,6 +1903,74 @@ class TurnDetectorStation(Station):
         
         # Passthrough all data
         yield chunk
+```
+### TextAggregatorStation - 文本聚合
+
+```python
+class TextAggregatorStation(Station):
+    """
+    Text aggregator: Aggregates TEXT_DELTA into complete TEXT.
+    
+    Input: TEXT_DELTA (streaming)
+    Output: TEXT (complete aggregated text)
+    
+    Use case: Aggregate ASR streaming output before sending to Agent.
+    
+    Workflow:
+    1. Accumulate TEXT_DELTA chunks
+    2. On EVENT_TEXT_COMPLETE: Emit complete text as TEXT
+    3. Pass through all other chunks
+    """
+    
+    def __init__(self, name: str = "TextAggregator"):
+        super().__init__(name=name)
+        self._text_buffer = ""
+        self._source = ""  # Remember the source of accumulated text
+    
+    async def process_chunk(self, chunk: Chunk) -> AsyncIterator[Chunk]:
+        # Handle signals
+        if chunk.is_signal():
+            # Emit complete text when text input is complete
+            if chunk.type == ChunkType.EVENT_TEXT_COMPLETE:
+                if self._text_buffer.strip():
+                    # Emit complete text as TEXT for Agent
+                    yield TextChunk(
+                        type=ChunkType.TEXT,
+                        content=self._text_buffer,
+                        source=self._source or "aggregator",
+                        session_id=chunk.session_id
+                    )
+                    
+                    # Clear buffer
+                    self._text_buffer = ""
+                    self._source = ""
+            
+            # Clear buffer on interrupt
+            elif chunk.type == ChunkType.CONTROL_INTERRUPT:
+                self._text_buffer = ""
+                self._source = ""
+            
+            # Passthrough signals
+            yield chunk
+            return
+        
+        # Accumulate TEXT_DELTA chunks
+        if chunk.type == ChunkType.TEXT_DELTA:
+            delta = chunk.delta if hasattr(chunk, 'delta') else str(chunk.data or "")
+            
+            if delta:
+                self._text_buffer += delta
+                
+                # Remember the source of the first chunk
+                if not self._source and chunk.source:
+                    self._source = chunk.source
+            
+            # Passthrough TEXT_DELTA
+            yield chunk
+        else:
+            # Passthrough all other chunks
+            yield chunk
+```
 
 ### SentenceSplitterStation - 分句处理
 ```python
@@ -1356,7 +2021,7 @@ class SentenceSplitterStation(Station):
                             session_id=chunk.session_id
                         )
                     break
-
+```
 ### VisionProvider 接口定义
 ```python
 # vixio/providers/vision.py
@@ -1415,7 +2080,7 @@ class VisionProvider(ABC):
             Answer text
         """
         pass
-
+```
 ### VisionProcessorStation - 视觉处理节点
 ```python
 class VisionProcessorStation(Station):
@@ -1484,7 +2149,7 @@ class VisionProcessorStation(Station):
         else:
             # Passthrough all non-vision data
             yield chunk
-
+```
 ### PassthroughStation - 透传节点
 ```python
 class PassthroughStation(Station):
@@ -1500,7 +2165,7 @@ class PassthroughStation(Station):
     async def process_chunk(self, chunk: Chunk) -> AsyncIterator[Chunk]:
         # Simply passthrough
         yield chunk
-
+```
 ### FilterStation - 过滤特定 Chunk
 ```python
 class FilterStation(Station):
@@ -1522,7 +2187,7 @@ class FilterStation(Station):
         # Filter data chunks
         if chunk.type in self.allowed_types:
             yield chunk
-
+```
 ### LoggerStation - 日志记录
 ```python
 class LoggerStation(Station):
@@ -1807,10 +2472,12 @@ vixio/
   core/                          # 架构核心（最底层抽象）
     __init__.py
     chunk.py                    # Chunk 数据结构（Data/Signal 分类）
-    station.py                     # Station 基类（工站抽象）
-    pipeline.py                 # Pipeline 实现（流水线）
+    station.py                  # Station 基类（工站抽象）
+    pipeline.py                 # Pipeline 实现（异步并行流水线）
     transport.py                # Transport 基类（传输层抽象）
     session.py                  # SessionManager（连接管理）
+    control_bus.py              # ControlBus（中心化中断管理）
+    timeout_monitor.py          # TimeoutMonitor（超时监控）
   
   # ============ Station 实现层 ============
   stations/                        # 各种 Station 实现
@@ -1824,10 +2491,12 @@ vixio/
     asr.py                     # ASRStation - Speech to Text
     agent.py                   # AgentStation - Agent conversation
     tts.py                     # TTSStation - Text to Speech
-    splitter.py                # SentenceSplitterStation - Split sentences
+    text_aggregator.py         # TextAggregatorStation - Aggregate TEXT_DELTA to TEXT
+    sentence_splitter.py       # SentenceSplitterStation - Split sentences (alias: splitter.py)
+    splitter.py                # Alias for sentence_splitter.py
     
     # Vision processing stations
-    vision.py                   # VisionProcessorStation - Vision frame processing
+    vision.py                  # VisionProcessorStation - Vision frame processing
     
     # Utility stations
     filter.py                  # FilterStation - Filter chunks by type
@@ -1855,6 +2524,10 @@ vixio/
       __init__.py
       provider.py
     
+    openai_agent/              # OpenAI Agent implementation
+      __init__.py
+      provider.py
+    
     edge_tts/                  # Edge TTS implementation
       __init__.py
       provider.py
@@ -1864,17 +2537,15 @@ vixio/
   transports/                   # Transport 实现
     __init__.py
     
-    xiaozhi/                   # Xiaozhi WebSocket transport
+    xiaozhi/                   # Xiaozhi WebSocket transport (FastAPI-based)
       __init__.py
-      transport.py             # XiaozhiTransport (includes Xiaozhi protocol)
+      transport.py             # XiaozhiTransport (WebSocket + HTTP endpoints)
+      protocol.py              # XiaozhiProtocol (message encoding/decoding)
       
-    websocket/                 # Standard WebSocket transport
-      __init__.py
-      transport.py             # StandardWebSocketTransport (JSON protocol)
-      
-    http/                      # HTTP REST API transport
-      __init__.py
-      transport.py             # HTTPTransport (REST protocol)
+    # 注意：实际实现中只有 xiaozhi transport
+    # 未来可以添加其他 transport 实现：
+    # websocket/               # Standard WebSocket transport
+    # http/                    # HTTP REST API transport
   
   # ============ 工具和配置 ============
   utils/                        # 工具函数
@@ -1922,20 +2593,20 @@ vixio/
 
 import asyncio
 import logging
-from vixio.core.chunk import Chunk, ChunkType
-from vixio.core.pipeline import Pipeline
-from vixio.core.session import SessionManager
-from vixio.transports.xiaozhi import XiaozhiTransport  # Includes protocol
-from vixio.stations.vad import VADStation
-from vixio.stations.turn_detector import TurnDetectorStation
-from vixio.stations.asr import ASRStation
-from vixio.stations.agent import AgentStation
-from vixio.stations.splitter import SentenceSplitterStation
-from vixio.stations.tts import TTSStation
-from vixio.stations.logger import LoggerStation
-from vixio.providers.silero_vad.provider import SileroVADProvider
-from vixio.providers.sherpa_onnx_local.provider import SherpaOnnxLocalProvider
-from vixio.providers.edge_tts.provider import EdgeTTSProvider
+from core.chunk import Chunk, ChunkType
+from core.pipeline import Pipeline
+from core.session import SessionManager
+from transports.xiaozhi import XiaozhiTransport  # Includes protocol
+from stations.vad import VADStation
+from stations.turn_detector import TurnDetectorStation
+from stations.asr import ASRStation
+from stations.agent import AgentStation
+from stations.splitter import SentenceSplitterStation
+from stations.tts import TTSStation
+from stations.logger import LoggerStation
+from providers.silero_vad.provider import SileroVADProvider
+from providers.sherpa_onnx_local.provider import SherpaOnnxLocalProvider
+from providers.edge_tts.provider import EdgeTTSProvider
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -2006,7 +2677,7 @@ async def main():
     
     transport = XiaozhiTransport(
         host="0.0.0.0",
-        port=8080,
+        port=8000,
     )
     
     # ============ Step 4: Setup Session Manager ============
@@ -2018,7 +2689,7 @@ async def main():
     )
     
     # ============ Step 5: Start Server ============
-    logger.info("Starting Xiaozhi server on ws://0.0.0.0:8080")
+    logger.info("Starting Xiaozhi server on ws://0.0.0.0:8000")
     await manager.start()
     
     # ============ Step 6: Run Forever ============
@@ -2041,17 +2712,17 @@ if __name__ == "__main__":
 # examples/multimodal_chat.py
 
 import asyncio
-from vixio.core.pipeline import Pipeline
-from vixio.core.session import SessionManager
-from vixio.transports.xiaozhi import XiaozhiTransport
-from vixio.stations.vad import VADStation
-from vixio.stations.asr import ASRStation
-from vixio.stations.vision import VisionProcessorStation
-from vixio.stations.agent import AgentStation
-from vixio.stations.tts import TTSStation
-from vixio.providers.silero_vad.provider import SileroVADProvider
-from vixio.providers.sherpa_onnx_local.provider import SherpaOnnxLocalProvider
-from vixio.providers.edge_tts.provider import EdgeTTSProvider
+from core.pipeline import Pipeline
+from core.session import SessionManager
+from transports.xiaozhi import XiaozhiTransport
+from stations.vad import VADStation
+from stations.asr import ASRStation
+from stations.vision import VisionProcessorStation
+from stations.agent import AgentStation
+from stations.tts import TTSStation
+from providers.silero_vad.provider import SileroVADProvider
+from providers.sherpa_onnx_local.provider import SherpaOnnxLocalProvider
+from providers.edge_tts.provider import EdgeTTSProvider
 
 async def main():
     """
@@ -2096,13 +2767,13 @@ async def main():
         ], name="MultimodalChat")
     
     # Setup transport
-    transport = XiaozhiTransport(host="0.0.0.0", port=8080)
+    transport = XiaozhiTransport(host="0.0.0.0", port=8000)
     
     # Setup session manager
     manager = SessionManager(transport, create_pipeline)
     
     # Start server
-    print("🎥 Multimodal chat server started on ws://0.0.0.0:8080")
+    print("🎥 Multimodal chat server started on ws://0.0.0.0:8000")
     print("📹 Supports: Audio input + Vision input")
     print("🔊 Output: Audio response via TTS")
     
@@ -2164,7 +2835,7 @@ Pipeline 处理：
 
 server:
   host: "0.0.0.0"
-  port: 8080
+  port: 8000
   transport: "xiaozhi"  # Transport type (includes protocol)
 
 pipeline:
@@ -2205,9 +2876,9 @@ logging:
 
 import asyncio
 import yaml
-from vixio.config.loader import load_config
-from vixio.core.pipeline import Pipeline
-from vixio.core.session import SessionManager
+from config.loader import load_config
+from core.pipeline import Pipeline
+from core.session import SessionManager
 
 async def main():
     # Load configuration
@@ -2488,35 +3159,54 @@ Output Buffer (输出缓存):
 
 ---
 
-**设计文档版本**: v2.4  
-**最后更新**: 2025-11-22  
-**状态**: ✅ 设计完成，文件结构已创建
+**设计文档版本**: v3.0  
+**最后更新**: 2025-11-25  
+**状态**: ✅ 设计完成，代码已实现，文档已同步实际实现
 
-**关键改进 (v2.4)**:
-1. ✅ Transport 层负责音频缓存（输入VAD控制、输出播放控制）
-2. ✅ Protocol 与 Transport 强耦合，用户使用更简单
-3. ✅ 移除 AudioBundlerStation，Pipeline 更简洁
-4. ✅ **专用的 Chunk 类型**：ControlChunk、EventChunk、VideoChunk，类型更安全
-5. ✅ **简化的 Provider 结构**：providers 目录同时包含接口和实现
-6. ✅ **聚焦核心功能**：VAD (Silero) + ASR (Sherpa-ONNX) + TTS (Edge TTS)
+**重大更新 (v3.0 - 与实际实现同步)**:
+1. ✅ **ControlBus 中心化中断管理**：发布-订阅模式，解耦组件间控制流
+2. ✅ **Turn-aware System**：基于 turn_id 的流程控制，自动丢弃旧数据
+3. ✅ **异步并行 Pipeline**：每个 Station 在独立任务中运行，通过 Queue 连接
+4. ✅ **TimeoutMonitor**：监控 Agent、TTS、整体会话的超时
+5. ✅ **Chunk 增强字段**：source, turn_id, sequence
+6. ✅ **Station reset_state()**：新 turn 时自动重置状态
+7. ✅ **TextAggregatorStation**：聚合 TEXT_DELTA 为完整 TEXT
+8. ✅ **XiaozhiTransport 完整实现**：FastAPI + WebSocket + HTTP + 认证 + 音频编解码
+9. ✅ **SessionManager 中断处理**：集成 ControlBus，处理客户端和内部中断
 
-**Provider 简化 (v2.4)**:
-- 🔄 将 plugins/ 合并到 providers/，统一管理
-- 🎯 只保留必要的实现：
-  - VAD: Silero VAD（本地模型）
-  - ASR: Sherpa-ONNX（本地推理）
-  - TTS: Edge TTS（微软服务）
-- ❌ 移除：Fish Audio、Qwen、Coze、SenseVoice、Vision 相关功能
-- 📦 providers/ 现在包含：
+**架构核心改进 (v3.0)**:
+- 🎯 **中心化控制**：ControlBus 管理所有中断和 turn 转换
+- 🔄 **Turn-aware 处理**：Station 自动丢弃旧 turn 数据，无需任务取消
+- ⚡ **真正并行**：Pipeline 内所有 Station 并行运行，性能显著提升
+- 🛡️ **优雅中断**：清理队列 + turn_id 丢弃，避免任务取消导致的问题
+- 📊 **超时保护**：TimeoutMonitor 防止无限等待
+
+**Provider 实现 (v3.0)**:
+- ✅ VAD: Silero VAD（本地模型）
+- ✅ ASR: Sherpa-ONNX（本地推理）
+- ✅ Agent: OpenAI Agent（API 调用）
+- ✅ TTS: Edge TTS（微软服务）
+- 📦 providers/ 包含：
   - 接口定义：base.py, vad.py, asr.py, tts.py, agent.py, vision.py
-  - 具体实现：silero_vad/, sherpa_onnx_local/, edge_tts/
+  - 具体实现：silero_vad/, sherpa_onnx_local/, openai_agent/, edge_tts/
 
-**新增内容 (v2.3)**:
-- 📦 **专用 Chunk 类**：
-  - `ControlChunk`：控制信号，带 command 和 params 字段
-  - `EventChunk`：事件通知，带event_data、source_station 字段
-  - `VideoChunk`：视频数据，带 width、height、format 字段
-- 💡 完整的 Chunk 创建和使用示例
-- 🔍 类型安全的 Chunk 检查（isinstance）
-- 🎯 所有示例代码更新为使用专用 Chunk 类
+**Transport 实现 (v3.0)**:
+- ✅ XiaozhiTransport：FastAPI-based WebSocket + HTTP 服务器
+- ✅ XiaozhiProtocol：消息编解码（独立模块）
+- ✅ 音频格式转换：Opus ↔ PCM（Transport 层统一处理）
+- ✅ 认证系统：设备白名单 + token 验证
+- ✅ OTA 接口：设备配置和更新
+
+**新增事件类型 (v3.0)**:
+- 📢 EVENT_TEXT_COMPLETE：文本输入完成（触发聚合）
+- 📢 EVENT_AGENT_START/STOP：Agent 处理开始/结束
+
+**文档修正说明**:
+本次更新将设计方案文档与实际代码实现完全同步，所有示例代码均基于真实实现。主要修正内容：
+1. 补充了 ControlBus 和 Turn-aware 机制的详细说明
+2. 更新了 Pipeline 为异步并行模型
+3. 添加了 TimeoutMonitor 和 TextAggregatorStation
+4. 完善了 SessionManager 的中断处理逻辑
+5. 更新了 Chunk 字段和事件类型
+6. 修正了文件结构，反映实际目录布局
 
