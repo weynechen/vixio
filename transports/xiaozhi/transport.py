@@ -25,7 +25,7 @@ from transports.xiaozhi.protocol import (
     XiaozhiMessageType,
     XiaozhiControlAction,
 )
-from utils import get_local_ip, AuthManager, generate_password_signature
+from utils import get_local_ip, AuthManager, generate_password_signature, get_latency_monitor
 from utils.audio import get_opus_codec, OPUS_AVAILABLE
 
 
@@ -117,6 +117,10 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
 
         # Initialize auth manager
         self._init_auth()
+        
+        # Latency monitoring
+        self._latency_monitor = get_latency_monitor()
+        self._first_audio_sent_recorded = {}
         
         # Setup routes
         self._setup_routes()
@@ -1052,7 +1056,7 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
         self.logger.debug(f"Sending {len(frames)} audio frames with flow control , chunk source: {chunk.source}")
         
         # Send frames with flow control
-        for frame in frames:
+        for frame_idx, frame in enumerate(frames):
             # Encode PCM to Opus
             opus_data = frame
             if self.opus_codec and frame:
@@ -1090,6 +1094,27 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
                 }
                 encoded = self.protocol.encode_message(message)
                 await websocket.send_bytes(encoded)
+                
+                # Record T6: first_audio_sent (only for very first frame per turn)
+                session_turn_key = f"{chunk.session_id}_{chunk.turn_id}"
+                if frame_idx == 0 and session_turn_key not in self._first_audio_sent_recorded:
+                    self._latency_monitor.record(
+                        chunk.session_id,
+                        chunk.turn_id,
+                        "first_audio_sent"
+                    )
+                    self._first_audio_sent_recorded[session_turn_key] = True
+                    self.logger.debug("Recorded first audio sent to client")
+                    
+                    # Generate and log latency report for this turn
+                    self._latency_monitor.log_report(
+                        chunk.session_id,
+                        chunk.turn_id
+                    )
+                    self._latency_monitor.print_summary(
+                        chunk.session_id,
+                        chunk.turn_id
+                    )
                 
                 # Update flow control state
                 flow_control["packet_count"] += 1

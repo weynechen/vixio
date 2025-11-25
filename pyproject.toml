@@ -26,11 +26,9 @@ dependencies = [
     "httpx>=0.28.0",
     "aiohttp>=3.13.0",
     "aiohttp-cors>=0.8.0",
-    
     # Agent frameworks
     "openai-agents[litellm]>=0.4.2",
     "openai>=2.7.0",
-    
     # Audio processing
     "torch>=2.2.0,<2.3.0",
     "torchaudio>=2.2.0,<2.3.0",
@@ -38,22 +36,18 @@ dependencies = [
     "opuslib_next>=1.1.5",
     "pydub>=0.25.1",
     "silero-vad>=6.1.0",
-    
     # ASR/TTS providers
     "edge-tts>=7.2.3",
     "sherpa-onnx>=1.12.15",
     "dashscope>=1.24.6",
-    
     # MCP
     "mcp>=1.20.0",
     "mcp-proxy>=0.10.0",
-    
     # Configuration and logging
     "pydantic>=2.5.0",
     "pydantic-settings>=2.1.0",
     "ruamel.yaml>=0.18.16",
     "loguru>=0.7.3",
-    
     # Utilities
     "PyJWT>=2.10.0",
     "psutil>=7.0.0",

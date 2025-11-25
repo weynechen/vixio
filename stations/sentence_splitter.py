@@ -9,6 +9,7 @@ import re
 from typing import AsyncIterator, List
 from core.station import Station
 from core.chunk import Chunk, ChunkType, TextChunk, TextDeltaChunk
+from utils import get_latency_monitor
 
 
 class SentenceSplitter:
@@ -120,6 +121,10 @@ class SentenceSplitterStation(Station):
         super().__init__(name=name)
         self.min_sentence_length = min_sentence_length
         self._splitter = SentenceSplitter(min_sentence_length)
+        
+        # Latency monitoring
+        self._latency_monitor = get_latency_monitor()
+        self._first_sentence_recorded = {}
     
     async def process_chunk(self, chunk: Chunk) -> AsyncIterator[Chunk]:
         """
@@ -148,6 +153,8 @@ class SentenceSplitterStation(Station):
             # Reset on interrupt
             elif chunk.type == ChunkType.CONTROL_INTERRUPT:
                 self._splitter.reset()
+                # Clear first sentence tracking for this session
+                self._first_sentence_recorded.clear()
                 self.logger.debug("Sentence splitter reset")
             
             # Passthrough signals
@@ -163,13 +170,26 @@ class SentenceSplitterStation(Station):
                 sentences = self._splitter.add_chunk(delta)
                 
                 # Yield each complete sentence as TEXT chunk
-                for sentence in sentences:
+                for i, sentence in enumerate(sentences):
                     self.logger.info(f"Complete sentence: '{sentence[:50]}...'")
+                    
+                    # Record T4: first_sentence_complete (only for first sentence per turn)
+                    session_turn_key = f"{chunk.session_id}_{chunk.turn_id}"
+                    if session_turn_key not in self._first_sentence_recorded:
+                        self._latency_monitor.record(
+                            chunk.session_id,
+                            chunk.turn_id,
+                            "first_sentence_complete"
+                        )
+                        self._first_sentence_recorded[session_turn_key] = True
+                        self.logger.debug("Recorded first sentence complete")
+                    
                     yield TextChunk(
                         type=ChunkType.TEXT,
                         content=sentence,
                         source=chunk.source,  # Preserve source (e.g., "agent")
-                        session_id=chunk.session_id
+                        session_id=chunk.session_id,
+                        turn_id=chunk.turn_id
                     )
             
             # Passthrough TEXT_DELTA

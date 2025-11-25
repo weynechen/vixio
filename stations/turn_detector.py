@@ -10,6 +10,7 @@ import time
 from typing import AsyncIterator, Optional
 from core.station import Station
 from core.chunk import Chunk, ChunkType, EventChunk, ControlChunk
+from utils import get_latency_monitor
 
 
 class TurnDetectorStation(Station):
@@ -47,6 +48,9 @@ class TurnDetectorStation(Station):
         self._should_emit_turn_end = False
         self._waiting_session_id: Optional[str] = None
         self._bot_is_speaking = False  # Track if bot is currently speaking
+        
+        # Latency monitoring
+        self._latency_monitor = get_latency_monitor()
     
     async def process_chunk(self, chunk: Chunk) -> AsyncIterator[Chunk]:
         """
@@ -107,6 +111,14 @@ class TurnDetectorStation(Station):
             
             # Voice ended - wait for silence then emit turn end
             elif chunk.type == ChunkType.EVENT_VAD_END:
+                # Record T0: user_speech_end (VAD_END received)
+                self._latency_monitor.record(
+                    chunk.session_id,
+                    chunk.turn_id,
+                    "user_speech_end",
+                    chunk.timestamp
+                )
+                
                 # Passthrough VAD_END first
                 yield chunk
                 
@@ -121,6 +133,13 @@ class TurnDetectorStation(Station):
                     # If flag still set (not cancelled), emit TURN_END
                     if self._should_emit_turn_end and self._waiting_session_id == chunk.session_id:
                         self.logger.info(f"Turn ended after {self.silence_threshold:.2f}s silence")
+                        
+                        # Record T1: turn_end_detected (TURN_END emitted)
+                        self._latency_monitor.record(
+                            chunk.session_id,
+                            chunk.turn_id,
+                            "turn_end_detected"
+                        )
                         
                         yield EventChunk(
                             type=ChunkType.EVENT_TURN_END,

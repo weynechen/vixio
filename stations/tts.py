@@ -12,6 +12,7 @@ from typing import AsyncIterator
 from core.station import Station
 from core.chunk import Chunk, ChunkType, AudioChunk, EventChunk, is_text_chunk
 from providers.tts import TTSProvider
+from utils import get_latency_monitor
 
 
 class TTSStation(Station):
@@ -36,6 +37,10 @@ class TTSStation(Station):
         super().__init__(name=name)
         self.tts = tts_provider
         self._is_speaking = False
+        
+        # Latency monitoring
+        self._latency_monitor = get_latency_monitor()
+        self._first_audio_recorded = {}
     
     async def process_chunk(self, chunk: Chunk) -> AsyncIterator[Chunk]:
         """
@@ -63,6 +68,8 @@ class TTSStation(Station):
                     )
                     
                     self._is_speaking = False
+                    # Clear first audio tracking
+                    self._first_audio_recorded.clear()
                     self.logger.info("TTS cancelled by interrupt")
             
             # Stop speaking when Agent completes (last sentence done)
@@ -136,6 +143,18 @@ class TTSStation(Station):
                     
                     if audio_data:
                         audio_count += 1
+                        
+                        # Record T5: tts_first_audio_ready (only for first audio per turn)
+                        session_turn_key = f"{chunk.session_id}_{chunk.turn_id}"
+                        if session_turn_key not in self._first_audio_recorded:
+                            self._latency_monitor.record(
+                                chunk.session_id,
+                                chunk.turn_id,
+                                "tts_first_audio_ready"
+                            )
+                            self._first_audio_recorded[session_turn_key] = True
+                            self.logger.debug("Recorded TTS first audio ready")
+                        
                         # TTS provider returns PCM audio (complete sentence now)
                         yield AudioChunk(
                             type=ChunkType.AUDIO_RAW,
@@ -143,7 +162,8 @@ class TTSStation(Station):
                             sample_rate=16000,
                             channels=1,
                             source=self.name,  # Mark as from TTS station for flow control
-                            session_id=chunk.session_id
+                            session_id=chunk.session_id,
+                            turn_id=chunk.turn_id
                         )
                 
                 self.logger.debug(f"TTS generated {audio_count} audio chunks (sentences)")

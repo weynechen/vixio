@@ -13,6 +13,7 @@ from typing import AsyncIterator, Optional
 from core.station import Station
 from core.chunk import Chunk, ChunkType, TextChunk, TextDeltaChunk, EventChunk, is_text_chunk
 from providers.agent import AgentProvider
+from utils import get_latency_monitor
 
 
 class AgentStation(Station):
@@ -43,6 +44,9 @@ class AgentStation(Station):
         self.agent = agent_provider
         self.timeout_seconds = timeout_seconds
         self._is_thinking = False
+        
+        # Latency monitoring
+        self._latency_monitor = get_latency_monitor()
     
     async def process_chunk(self, chunk: Chunk) -> AsyncIterator[Chunk]:
         """
@@ -111,6 +115,7 @@ class AgentStation(Station):
             try:
                 delta_count = 0
                 start_time = asyncio.get_event_loop().time()
+                first_token_recorded = False
                 
                 async for delta in self.agent.chat(text):
                     # Check if interrupted (turn_id changed)
@@ -153,11 +158,23 @@ class AgentStation(Station):
                     
                     if delta:
                         delta_count += 1
+                        
+                        # Record T3: agent_first_token (TTFT - Time To First Token)
+                        if not first_token_recorded:
+                            self._latency_monitor.record(
+                                chunk.session_id,
+                                chunk.turn_id,
+                                "agent_first_token"
+                            )
+                            first_token_recorded = True
+                            self.logger.debug("Recorded agent first token (TTFT)")
+                        
                         yield TextDeltaChunk(
                             type=ChunkType.TEXT_DELTA,
                             delta=delta,
                             source="agent",  # Mark as agent output
-                            session_id=chunk.session_id
+                            session_id=chunk.session_id,
+                            turn_id=chunk.turn_id
                         )
                 
                 self.logger.debug(f"Agent generated {delta_count} text deltas")

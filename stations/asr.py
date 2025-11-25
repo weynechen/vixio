@@ -12,6 +12,7 @@ from typing import AsyncIterator, List
 from core.station import Station
 from core.chunk import Chunk, ChunkType, TextDeltaChunk, EventChunk, is_audio_chunk
 from providers.asr import ASRProvider
+from utils import get_latency_monitor
 
 
 class ASRStation(Station):
@@ -36,6 +37,9 @@ class ASRStation(Station):
         super().__init__(name=name)
         self.asr = asr_provider
         self._audio_buffer: List[bytes] = []
+        
+        # Latency monitoring
+        self._latency_monitor = get_latency_monitor()
     
     async def process_chunk(self, chunk: Chunk) -> AsyncIterator[Chunk]:
         """
@@ -62,12 +66,21 @@ class ASRStation(Station):
                         
                         if text:
                             self.logger.info(f"ASR result: '{text}'")
+                            
+                            # Record T2: asr_complete (ASR transcription done)
+                            self._latency_monitor.record(
+                                chunk.session_id,
+                                chunk.turn_id,
+                                "asr_complete"
+                            )
+                            
                             # Output as TEXT_DELTA with source="asr"
                             yield TextDeltaChunk(
                                 type=ChunkType.TEXT_DELTA,
                                 delta=text,
                                 source="asr",  # Mark as ASR output
-                                session_id=chunk.session_id
+                                session_id=chunk.session_id,
+                                turn_id=chunk.turn_id
                             )
                             
                             # Emit TEXT_COMPLETE event to signal aggregator
@@ -75,7 +88,8 @@ class ASRStation(Station):
                                 type=ChunkType.EVENT_TEXT_COMPLETE,
                                 event_data={"source": "asr", "text_length": len(text)},
                                 source_station=self.name,
-                                session_id=chunk.session_id
+                                session_id=chunk.session_id,
+                                turn_id=chunk.turn_id
                             )
                         else:
                             self.logger.warning("ASR returned empty text")
