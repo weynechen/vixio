@@ -4,12 +4,16 @@ Station base class - workstation in the pipeline
 Processing rules:
 1. Data chunks: Transform and yield processed results
 2. Signal chunks: Immediately passthrough + optionally yield response chunks
+3. Turn-aware: Discard chunks from old turns, reset state on new turns
 """
 
 from abc import ABC, abstractmethod
-from typing import AsyncIterator, Optional
+from typing import AsyncIterator, Optional, TYPE_CHECKING
 from core.chunk import Chunk
 import logging
+
+if TYPE_CHECKING:
+    from core.control_bus import ControlBus
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +25,7 @@ class Station(ABC):
     Processing rules:
     1. Data chunks: Transform and yield processed results
     2. Signal chunks: Immediately passthrough + optionally yield response chunks
+    3. Turn-aware: Discard chunks from old turns, reset state on new turns
     
     Subclasses override process_chunk() to implement custom logic.
     """
@@ -34,14 +39,19 @@ class Station(ABC):
         """
         self.name = name or self.__class__.__name__
         self.logger = logging.getLogger(f"station.{self.name}")
+        
+        # Turn tracking
+        self.current_turn_id = 0
+        self.control_bus: Optional['ControlBus'] = None
     
     async def process(self, input_stream: AsyncIterator[Chunk]) -> AsyncIterator[Chunk]:
         """
-        Main processing loop.
+        Main processing loop with turn-awareness.
         
-        Routing logic:
-        - Signal chunks: Process (subclass can choose to passthrough or modify)
-        - Data chunks: Process and yield results
+        Turn handling:
+        - Discard chunks from old turns (turn_id < current_turn_id)
+        - Reset state when new turn starts (turn_id > current_turn_id)
+        - Process chunks from current turn normally
         
         This method should NOT be overridden by subclasses.
         
@@ -52,14 +62,51 @@ class Station(ABC):
             Processed chunks
         """
         async for chunk in input_stream:
-            # Process all chunks (data and signals) through process_chunk
+            # Check turn ID
+            if chunk.turn_id < self.current_turn_id:
+                # Old turn, discard
+                self.logger.debug(f"[{self.name}] Discarding old chunk: turn {chunk.turn_id} < {self.current_turn_id}")
+                continue
+            
+            if chunk.turn_id > self.current_turn_id:
+                # New turn started, reset state
+                self.logger.info(f"[{self.name}] New turn detected: {chunk.turn_id} (was {self.current_turn_id})")
+                self.current_turn_id = chunk.turn_id
+                await self.reset_state()
+            
+            # Process chunk
             try:
                 async for output_chunk in self.process_chunk(chunk):
+                    # Propagate turn ID
+                    output_chunk.turn_id = self.current_turn_id
                     self.logger.debug(f"[{self.name}] Yield: {output_chunk}")
                     yield output_chunk
             except Exception as e:
                 chunk_type = "signal" if chunk.is_signal() else "data"
                 self.logger.error(f"[{self.name}] Error processing {chunk_type} {chunk}: {e}", exc_info=True)
+    
+    async def reset_state(self) -> None:
+        """
+        Reset station state for new turn.
+        
+        Called automatically when a new turn starts.
+        Subclasses can override to clear accumulated state.
+        
+        Example: ASR station clears audio buffer, Agent clears conversation history.
+        """
+        self.logger.debug(f"[{self.name}] State reset for turn {self.current_turn_id}")
+    
+    def should_process(self, chunk: Chunk) -> bool:
+        """
+        Check if chunk should be processed based on turn ID.
+        
+        Args:
+            chunk: Chunk to check
+            
+        Returns:
+            True if chunk should be processed
+        """
+        return chunk.turn_id >= self.current_turn_id
     
     @abstractmethod
     async def process_chunk(self, chunk: Chunk) -> AsyncIterator[Chunk]:

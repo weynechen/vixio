@@ -125,6 +125,15 @@ class TTSStation(Station):
             try:
                 audio_count = 0
                 async for audio_data in self.tts.synthesize(text):
+                    # Check if interrupted (turn_id changed)
+                    if self.control_bus:
+                        current_turn = self.control_bus.get_current_turn_id()
+                        if current_turn > self.current_turn_id:
+                            self.logger.info(f"TTS interrupted: turn {self.current_turn_id} -> {current_turn}")
+                            # Cancel TTS provider to stop immediately
+                            self.tts.cancel()
+                            break
+                    
                     if audio_data:
                         audio_count += 1
                         # TTS provider returns PCM audio (complete sentence now)

@@ -95,6 +95,8 @@ class Chunk:
         metadata: Additional metadata
         timestamp: Creation timestamp
         session_id: Session identifier
+        turn_id: Conversation turn ID (incremented on interrupt)
+        sequence: Sequence number within the turn
     """
     type: ChunkType
     data: Any = None
@@ -102,6 +104,8 @@ class Chunk:
     metadata: Dict[str, Any] = field(default_factory=dict)
     timestamp: float = field(default_factory=time.time)
     session_id: Optional[str] = None
+    turn_id: int = 0  # Conversation turn ID, incremented on interrupt
+    sequence: int = 0  # Sequence number within the turn
     
     def is_data(self) -> bool:
         """Check if this is a data chunk (product)"""

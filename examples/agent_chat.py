@@ -83,8 +83,8 @@ async def main():
         logger.info("✓ ASR Provider initialized")
     
     # Agent Provider (OpenAI)
-    api_key = os.getenv("DEEPSEEK_API_KEY")
-    base_url = os.getenv("OPENAI_BASE_URL")  # Optional, for custom endpoints
+    api_key = os.getenv("API_KEY")
+    base_url = os.getenv("BASE_URL")  # Optional, for custom endpoints
     
     if not api_key:
         logger.error("OPENAI_API_KEY environment variable not set!")

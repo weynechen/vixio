@@ -113,6 +113,7 @@ class OpenAIAgentProvider(AgentProvider):
         if self.base_url:
             model_params["base_url"] = self.base_url
         
+        self.logger.info(f"Model params: {model_params}")
         self.model = LitellmModel(**model_params)
         
         # Convert tools to FunctionTool format

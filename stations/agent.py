@@ -8,7 +8,8 @@ Note: Agent is the central processing node. All text must go through Agent,
 even if it's just a passthrough (echo agent) or translation agent.
 """
 
-from typing import AsyncIterator
+import asyncio
+from typing import AsyncIterator, Optional
 from core.station import Station
 from core.chunk import Chunk, ChunkType, TextChunk, TextDeltaChunk, EventChunk, is_text_chunk
 from providers.agent import AgentProvider
@@ -24,16 +25,23 @@ class AgentStation(Station):
     Note: All TEXT_DELTA output has source="agent" to distinguish from ASR output.
     """
     
-    def __init__(self, agent_provider: AgentProvider, name: str = "Agent"):
+    def __init__(
+        self,
+        agent_provider: AgentProvider,
+        timeout_seconds: Optional[float] = 30.0,
+        name: str = "Agent"
+    ):
         """
         Initialize Agent station.
         
         Args:
             agent_provider: Agent provider instance
+            timeout_seconds: Timeout for agent processing (default: 30s, None = no timeout)
             name: Station name
         """
         super().__init__(name=name)
         self.agent = agent_provider
+        self.timeout_seconds = timeout_seconds
         self._is_thinking = False
     
     async def process_chunk(self, chunk: Chunk) -> AsyncIterator[Chunk]:
@@ -99,10 +107,50 @@ class AgentStation(Station):
             )
             self._is_thinking = True
             
-            # Stream agent response
+            # Stream agent response with timeout
             try:
                 delta_count = 0
+                start_time = asyncio.get_event_loop().time()
+                
                 async for delta in self.agent.chat(text):
+                    # Check if interrupted (turn_id changed)
+                    if self.control_bus:
+                        current_turn = self.control_bus.get_current_turn_id()
+                        if current_turn > self.current_turn_id:
+                            self.logger.info(f"Agent interrupted: turn {self.current_turn_id} -> {current_turn}")
+                            break
+                    
+                    # Check timeout
+                    if self.timeout_seconds:
+                        elapsed = asyncio.get_event_loop().time() - start_time
+                        if elapsed > self.timeout_seconds:
+                            self.logger.warning(f"Agent processing timeout after {elapsed:.1f}s")
+                            
+                            # Send interrupt signal via ControlBus
+                            if self.control_bus:
+                                await self.control_bus.send_interrupt(
+                                    source=self.name,
+                                    reason="agent_timeout",
+                                    metadata={
+                                        "timeout_seconds": self.timeout_seconds,
+                                        "elapsed_seconds": elapsed
+                                    }
+                                )
+                            
+                            # Emit timeout event
+                            yield EventChunk(
+                                type=ChunkType.EVENT_TIMEOUT,
+                                event_data={
+                                    "source": "Agent",
+                                    "timeout_seconds": self.timeout_seconds,
+                                    "elapsed_seconds": elapsed
+                                },
+                                source_station=self.name,
+                                session_id=chunk.session_id
+                            )
+                            
+                            break
+                    
                     if delta:
                         delta_count += 1
                         yield TextDeltaChunk(
@@ -121,6 +169,27 @@ class AgentStation(Station):
                     source_station=self.name,
                     session_id=chunk.session_id
                 )
+                self._is_thinking = False
+            
+            except asyncio.TimeoutError:
+                self.logger.error(f"Agent processing timed out after {self.timeout_seconds}s")
+                
+                # Send interrupt signal
+                if self.control_bus:
+                    await self.control_bus.send_interrupt(
+                        source=self.name,
+                        reason="agent_timeout",
+                        metadata={"timeout_seconds": self.timeout_seconds}
+                    )
+                
+                # Emit timeout event
+                yield EventChunk(
+                    type=ChunkType.EVENT_TIMEOUT,
+                    event_data={"source": "Agent", "timeout_seconds": self.timeout_seconds},
+                    source_station=self.name,
+                    session_id=chunk.session_id
+                )
+                
                 self._is_thinking = False
             
             except Exception as e:

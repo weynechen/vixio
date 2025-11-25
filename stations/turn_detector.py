@@ -1,33 +1,36 @@
 """
-TurnDetectorStation - Detect when user finishes speaking
+TurnDetectorStation - Detect when user finishes speaking and handle interrupts
 
-Input: EVENT_VAD_END
-Output: EVENT_TURN_END (after silence threshold)
+Input: EVENT_VAD_END, EVENT_VAD_START, EVENT_BOT_STARTED_SPEAKING
+Output: EVENT_TURN_END (after silence threshold), CONTROL_INTERRUPT (on valid interrupt)
 """
 
 import asyncio
 import time
 from typing import AsyncIterator, Optional
 from core.station import Station
-from core.chunk import Chunk, ChunkType, EventChunk
+from core.chunk import Chunk, ChunkType, EventChunk, ControlChunk
 
 
 class TurnDetectorStation(Station):
     """
-    Turn detector: Detects when user finishes speaking.
+    Turn detector: Detects when user finishes speaking and handles interrupts.
     
-    Input: EVENT_VAD_END, AUDIO_RAW
-    Output: EVENT_TURN_END (after silence threshold) + passthroughs
+    Input: EVENT_VAD_END, EVENT_VAD_START, EVENT_BOT_STARTED_SPEAKING, EVENT_BOT_STOPPED_SPEAKING
+    Output: EVENT_TURN_END (after silence threshold), CONTROL_INTERRUPT (on valid interrupt)
     
     Strategy:
     - Wait inline after VAD_END for silence threshold (using cancellable sleep)
     - If silence continues, emit TURN_END
     - If voice resumes (VAD_START) or interrupted, set cancel flag to suppress TURN_END
+    - Track session state (LISTENING vs SPEAKING)
+    - Send CONTROL_INTERRUPT when user speaks during bot speaking
     """
     
     def __init__(
         self,
         silence_threshold_ms: int = 800,
+        interrupt_enabled: bool = True,
         name: str = "TurnDetector"
     ):
         """
@@ -35,26 +38,75 @@ class TurnDetectorStation(Station):
         
         Args:
             silence_threshold_ms: Silence duration to consider turn ended (default: 800ms)
+            interrupt_enabled: Whether to enable interrupt detection (default: True)
             name: Station name
         """
         super().__init__(name=name)
         self.silence_threshold = silence_threshold_ms / 1000.0  # Convert to seconds
+        self.interrupt_enabled = interrupt_enabled
         self._should_emit_turn_end = False
         self._waiting_session_id: Optional[str] = None
+        self._bot_is_speaking = False  # Track if bot is currently speaking
     
     async def process_chunk(self, chunk: Chunk) -> AsyncIterator[Chunk]:
         """
-        Process chunk for turn detection.
+        Process chunk for turn detection and interrupt handling.
         
         Logic:
         - On EVENT_VAD_END: Passthrough, wait for silence threshold, emit TURN_END (if not cancelled)
-        - On EVENT_VAD_START: Cancel waiting (set flag to suppress TURN_END)
+        - On EVENT_VAD_START: Check if should interrupt (bot speaking), cancel waiting
+        - On EVENT_BOT_STARTED_SPEAKING: Set bot speaking flag
+        - On EVENT_BOT_STOPPED_SPEAKING: Clear bot speaking flag
         - On CONTROL_INTERRUPT: Cancel waiting and reset
         """
         # Handle signals
         if chunk.is_signal():
+            # Bot speaking state tracking
+            if chunk.type == ChunkType.EVENT_BOT_STARTED_SPEAKING:
+                self._bot_is_speaking = True
+                self.logger.debug("Bot started speaking")
+                yield chunk
+                return
+            
+            elif chunk.type == ChunkType.EVENT_BOT_STOPPED_SPEAKING:
+                self._bot_is_speaking = False
+                self.logger.debug("Bot stopped speaking")
+                yield chunk
+                return
+            
+            # Voice started - check for interrupt
+            elif chunk.type == ChunkType.EVENT_VAD_START:
+                # Cancel pending turn end
+                if self._should_emit_turn_end:
+                    self.logger.debug("Turn end cancelled (voice resumed)")
+                    self._should_emit_turn_end = False
+                    self._waiting_session_id = None
+                
+                # Check if should send interrupt (user speaking during bot speaking)
+                if self.interrupt_enabled and self._bot_is_speaking and self.control_bus:
+                    self.logger.warning("User interrupt detected (speaking during bot speaking)")
+                    
+                    # Send interrupt signal via ControlBus
+                    await self.control_bus.send_interrupt(
+                        source=self.name,
+                        reason="user_speaking_during_bot_speaking",
+                        metadata={"session_id": chunk.session_id}
+                    )
+                    
+                    # Emit CONTROL_INTERRUPT chunk for pipeline
+                    yield ControlChunk(
+                        type=ChunkType.CONTROL_INTERRUPT,
+                        command="interrupt",
+                        params={"reason": "user_speaking"},
+                        session_id=chunk.session_id
+                    )
+                
+                # Passthrough VAD_START
+                yield chunk
+                return
+            
             # Voice ended - wait for silence then emit turn end
-            if chunk.type == ChunkType.EVENT_VAD_END:
+            elif chunk.type == ChunkType.EVENT_VAD_END:
                 # Passthrough VAD_END first
                 yield chunk
                 
@@ -89,17 +141,11 @@ class TurnDetectorStation(Station):
                 
                 return
             
-            # Voice started - cancel waiting
-            elif chunk.type == ChunkType.EVENT_VAD_START:
-                if self._should_emit_turn_end:
-                    self.logger.debug("Turn end cancelled (voice resumed)")
-                    self._should_emit_turn_end = False
-                    self._waiting_session_id = None
-            
             # Reset on interrupt
             elif chunk.type == ChunkType.CONTROL_INTERRUPT:
                 self._should_emit_turn_end = False
                 self._waiting_session_id = None
+                self._bot_is_speaking = False
                 self.logger.debug("Turn detector reset by interrupt")
             
             # Passthrough all signals
@@ -108,3 +154,11 @@ class TurnDetectorStation(Station):
         
         # Passthrough all data chunks
         yield chunk
+    
+    async def reset_state(self) -> None:
+        """Reset turn detector state for new turn."""
+        await super().reset_state()
+        self._should_emit_turn_end = False
+        self._waiting_session_id = None
+        self._bot_is_speaking = False
+        self.logger.debug("Turn detector state reset")

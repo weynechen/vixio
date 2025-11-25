@@ -26,7 +26,7 @@ class TestChunkType:
     def test_audio_types(self):
         """Test audio chunk types"""
         assert ChunkType.AUDIO_RAW.value == "audio.raw"
-        assert ChunkType.AUDIO_ENCODED.value == "audio.encoded"
+        # Note: AUDIO_ENCODED removed - Transport layers handle format conversion
     
     def test_text_types(self):
         """Test text chunk types"""

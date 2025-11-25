@@ -464,6 +464,7 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
                 data = await websocket.receive()
                 
                 if "text" in data:
+                    self.logger.debug(f"Received text message: {data['text']}")
                     # JSON message
                     message = self.protocol.parse_message(data["text"])
                     chunk = await self._decode_message(message, session_id)
@@ -478,9 +479,16 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
                         yield chunk
         
         except WebSocketDisconnect:
-            self.logger.info(f"WebSocket disconnected in input_stream: {session_id}")
+            self.logger.info(f"WebSocket disconnected: {session_id[:8]}")
+        except RuntimeError as e:
+            # Handle normal disconnection (e.g., "Cannot call receive once a disconnect message has been received")
+            if "disconnect" in str(e).lower() or "receive" in str(e).lower():
+                self.logger.info(f"WebSocket closed by client: {session_id[:8]}")
+            else:
+                self.logger.error(f"Runtime error in input stream for {session_id[:8]}: {e}")
+                raise
         except Exception as e:
-            self.logger.error(f"Error in input stream for {session_id}: {e}")
+            self.logger.error(f"Error in input stream for {session_id[:8]}: {e}")
             raise
         finally:
             self._cleanup_buffers(session_id)
@@ -509,11 +517,14 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
         
         # Special handling for AUDIO_RAW with async queue and flow control
         # Only apply to TTS audio output (source contains "TTS")
-        if chunk.type == ChunkType.AUDIO_RAW and chunk.data and "TTS" in chunk.source:
-            # Ensure sender task is running
-            await self._ensure_sender_task(session_id)
-            # Put chunk in queue (non-blocking, allows TTS to continue)
-            await self._send_queues[session_id].put(chunk)
+        if chunk.type == ChunkType.AUDIO_RAW:
+            # Only send TTS audio to client, discard user input audio (prevent echo)
+            if chunk.data and "TTS" in chunk.source:
+                # Ensure sender task is running
+                await self._ensure_sender_task(session_id)
+                # Put chunk in queue (non-blocking, allows TTS to continue)
+                await self._send_queues[session_id].put(chunk)
+            # Discard all other AUDIO_RAW (e.g. user input passthrough from VAD/ASR)
             return
         
         # For TTS events (especially SENTENCE_START), also use queue to maintain order
@@ -692,6 +703,16 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
                     session_id=session_id
                 )
         
+        # Abort message (client interrupt request)
+        elif msg_type == "abort":
+            self.logger.info(f"Received abort request from client for session {session_id[:8]}")
+            return ControlChunk(
+                type=ChunkType.CONTROL_INTERRUPT,
+                command="abort",
+                params={"reason": "client_abort"},
+                session_id=session_id
+            )
+        
         # HELLO message
         elif msg_type == XiaozhiMessageType.HELLO:
             return ControlChunk(
@@ -789,7 +810,7 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
             # (TTS station will emit EVENT_TTS_SENTENCE_START with the text)
             elif "agent" in chunk.source.lower():
                 # Skip sending - will be sent as TTS sentence_start
-                self.logger.debug(f"Skipping TEXT from agent (will be sent via TTS event): {text_content[:50]}...")
+                # self.logger.debug(f"Skipping TEXT from agent (will be sent via TTS event): {text_content[:50]}...")
                 return None
             
             # For other sources, log warning and skip
@@ -846,6 +867,61 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
                 self._sender_worker(session_id, queue)
             )
             self.logger.debug(f"Started async sender task for session {session_id}")
+    
+    def clear_send_queue(self, session_id: str) -> None:
+        """
+        Clear send queue for session (used on interrupt to stop pending audio).
+        
+        Args:
+            session_id: Session identifier
+        """
+        if session_id in self._send_queues:
+            queue = self._send_queues[session_id]
+            cleared_count = 0
+            
+            # Clear all pending chunks in the queue
+            while not queue.empty():
+                try:
+                    queue.get_nowait()
+                    cleared_count += 1
+                except asyncio.QueueEmpty:
+                    break
+            
+            if cleared_count > 0:
+                self.logger.info(f"Cleared {cleared_count} pending chunks from send queue for session {session_id[:8]}")
+    
+    async def send_immediate(self, session_id: str, chunk: Chunk) -> None:
+        """
+        Send chunk immediately, bypassing the queue.
+        
+        Used for urgent control messages like TTS_STOP on interrupt.
+        
+        Args:
+            session_id: Session identifier
+            chunk: Chunk to send immediately
+        """
+        websocket = self._connections.get(session_id)
+        if not websocket:
+            self.logger.warning(f"Cannot send immediate to {session_id}: connection not found")
+            return
+        
+        # Encode and send immediately
+        message = await self._encode_chunk(chunk)
+        if not message:
+            return
+        
+        try:
+            encoded = self.protocol.encode_message(message)
+            
+            if isinstance(encoded, bytes):
+                await websocket.send_bytes(encoded)
+            else:
+                await websocket.send_text(encoded)
+            
+            self.logger.debug(f"Sent immediate message: {chunk.type.value}")
+        
+        except Exception as e:
+            self.logger.error(f"Error sending immediate to {session_id}: {e}")
     
     async def _stop_sender_task(self, session_id: str) -> None:
         """

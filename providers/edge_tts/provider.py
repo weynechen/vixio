@@ -49,8 +49,9 @@ class EdgeTTSProvider(TTSProvider):
             self.logger.error(f"Failed to import edge_tts: {e}")
             raise
         
-        # Cancellation flag
+        # Cancellation flag and current task
         self._cancelled = False
+        self._current_task = None
     
     async def synthesize(self, text: str) -> AsyncIterator[bytes]:
         """
@@ -90,17 +91,33 @@ class EdgeTTSProvider(TTSProvider):
                 pitch=self.pitch
             )
             
-            # Accumulate MP3 chunks (Edge TTS streams MP3 fragments, not complete frames)
-            mp3_chunks = []
-            async for chunk in communicate.stream():
-                if self._cancelled:
-                    self.logger.info("TTS synthesis cancelled")
-                    break
+            # Wrap stream generation in a task for immediate cancellation
+            async def generate_mp3_stream():
+                """Generate MP3 chunks from Edge TTS stream"""
+                mp3_chunks = []
+                async for chunk in communicate.stream():
+                    if self._cancelled:
+                        self.logger.info("TTS synthesis cancelled during streaming")
+                        break
+                    
+                    if chunk["type"] == "audio":
+                        audio_data = chunk["data"]
+                        if audio_data:
+                            mp3_chunks.append(audio_data)
                 
-                if chunk["type"] == "audio":
-                    audio_data = chunk["data"]
-                    if audio_data:
-                        mp3_chunks.append(audio_data)
+                return mp3_chunks
+            
+            # Create task for stream generation (can be cancelled immediately)
+            self._current_task = asyncio.create_task(generate_mp3_stream())
+            
+            try:
+                # Wait for stream generation to complete (or be cancelled)
+                mp3_chunks = await self._current_task
+            except asyncio.CancelledError:
+                self.logger.info("TTS synthesis task cancelled")
+                return
+            finally:
+                self._current_task = None
             
             # Convert accumulated MP3 to PCM and return complete sentence audio
             if mp3_chunks and not self._cancelled:
@@ -116,13 +133,28 @@ class EdgeTTSProvider(TTSProvider):
                     self.logger.debug(f"Yielding complete sentence audio: {len(pcm_data)} bytes of PCM")
                     yield pcm_data
         
+        except asyncio.CancelledError:
+            self.logger.info("TTS synthesis cancelled")
+            raise
         except Exception as e:
             self.logger.error(f"Error in TTS synthesis: {e}", exc_info=True)
     
     def cancel(self) -> None:
-        """Cancel ongoing synthesis"""
+        """
+        Cancel ongoing synthesis immediately.
+        
+        This will:
+        1. Set cancellation flag
+        2. Cancel current task (if any) to interrupt network IO immediately
+        """
         self._cancelled = True
-        self.logger.debug("TTS synthesis cancelled")
+        
+        # Cancel current task to interrupt immediately (don't wait for next network chunk)
+        if self._current_task and not self._current_task.done():
+            self._current_task.cancel()
+            self.logger.info("TTS synthesis task cancelled immediately")
+        else:
+            self.logger.debug("TTS synthesis cancellation flag set")
     
     def get_config(self) -> Dict[str, Any]:
         """Get provider configuration"""

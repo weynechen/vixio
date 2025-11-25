@@ -1,16 +1,18 @@
 """
 Pipeline - assembly line that connects workstations (stations)
 
-Design:
-- Each station's output becomes the next station's input
-- Chunks flow sequentially through all stations
-- Data chunks get transformed at each station
-- Signal chunks passthrough all stations, triggering state changes
+Design (Async Model):
+- Each station runs in an independent asyncio task
+- Stations connected via asyncio.Queue for non-blocking parallel processing
+- ControlBus integration for interrupt handling
+- Can clear queues and cancel tasks on interrupt
 """
 
-from typing import List, Optional, AsyncIterator
+import asyncio
+from typing import List, Optional, AsyncIterator, Set
 from core.station import Station
 from core.chunk import Chunk
+from core.control_bus import ControlBus
 import logging
 
 logger = logging.getLogger(__name__)
@@ -20,39 +22,61 @@ class Pipeline:
     """
     Pipeline - assembly line that connects workstations (stations).
     
-    Design:
-    - Each station's output becomes the next station's input
-    - Chunks flow sequentially through all stations
-    - Data chunks get transformed at each station
-    - Signal chunks passthrough all stations, triggering state changes
+    Async Design:
+    - Each station runs in an independent asyncio task
+    - Stations connected via asyncio.Queue for non-blocking parallel processing
+    - ControlBus integration for interrupt handling
+    - Can clear queues and cancel tasks on interrupt
     """
     
-    def __init__(self, stations: List[Station], name: Optional[str] = None):
+    def __init__(
+        self,
+        stations: List[Station],
+        control_bus: Optional[ControlBus] = None,
+        name: Optional[str] = None,
+        queue_size: int = 100
+    ):
         """
         Initialize pipeline.
         
         Args:
             stations: List of stations to chain together
+            control_bus: ControlBus for interrupt handling (optional)
             name: Pipeline name for logging
+            queue_size: Maximum size for inter-station queues
         """
         self.stations = stations
+        self.control_bus = control_bus
         self.name = name or "Pipeline"
+        self.queue_size = queue_size
         self.logger = logging.getLogger(f"pipeline.{self.name}")
+        
+        # Runtime state
+        self.queues: List[asyncio.Queue] = []
+        self.tasks: List[asyncio.Task] = []
+        self.cancellable_task_indices: Set[int] = set()  # Indices of slow tasks (Agent, TTS)
+        self._running = False
         
         if not stations:
             self.logger.warning(f"[{self.name}] Created empty pipeline")
         else:
             station_names = [s.name for s in stations]
             self.logger.info(f"[{self.name}] Created with {len(stations)} stations: {' -> '.join(station_names)}")
+            
+            # Pass ControlBus to all stations
+            if self.control_bus:
+                for station in self.stations:
+                    station.control_bus = self.control_bus
     
     async def run(self, input_stream: AsyncIterator[Chunk]) -> AsyncIterator[Chunk]:
         """
-        Run the pipeline - chain all stations together.
+        Run the pipeline - all stations in parallel with queues.
         
-        Flow:
-        1. Input stream feeds into first station
-        2. Each station's output feeds into next station
-        3. Final station's output is pipeline output
+        Async Flow:
+        1. Create queues between stations
+        2. Start each station as independent task
+        3. Feed input_stream into first queue
+        4. Yield from final queue
         
         Args:
             input_stream: Source of chunks (usually from Transport)
@@ -60,20 +84,220 @@ class Pipeline:
         Yields:
             Processed chunks from final station
         """
-        stream = input_stream
+        if not self.stations:
+            self.logger.warning(f"[{self.name}] Empty pipeline, no processing")
+            async for chunk in input_stream:
+                yield chunk
+            return
         
-        # Chain stations: station1.process(input) -> station2.process(station1_output) -> ...
-        for station in self.stations:
-            stream = station.process(stream)
+        self._running = True
         
-        # Yield final output
-        chunk_count = 0
-        async for chunk in stream:
-            chunk_count += 1
-            self.logger.debug(f"[{self.name}] Output chunk #{chunk_count}: {chunk}")
+        try:
+            # Create queues: n stations need n+1 queues
+            # Queue[0] gets input, Queue[n] provides output
+            self.queues = [asyncio.Queue(maxsize=self.queue_size) for _ in range(len(self.stations) + 1)]
+            
+            # Start all station tasks
+            self.tasks = []
+            for i, station in enumerate(self.stations):
+                task = asyncio.create_task(
+                    self._run_station(station, i, self.queues[i], self.queues[i + 1]),
+                    name=f"{self.name}-{station.name}"
+                )
+                self.tasks.append(task)
+                
+                # Mark slow tasks as cancellable
+                if self._is_slow_station(station):
+                    self.cancellable_task_indices.add(i)
+            
+            # Start input feeder task
+            input_task = asyncio.create_task(
+                self._feed_input(input_stream, self.queues[0]),
+                name=f"{self.name}-input-feeder"
+            )
+            
+            # Yield from output queue
+            chunk_count = 0
+            try:
+                while self._running:
+                    try:
+                        chunk = await asyncio.wait_for(self.queues[-1].get(), timeout=0.1)
+                        
+                        # None is used as end-of-stream marker, stop when received
+                        if chunk is None:
+                            break
+                        
+                        chunk_count += 1
+                        self.logger.debug(f"[{self.name}] Output chunk #{chunk_count}: {chunk}")
+                        yield chunk
+                    except asyncio.TimeoutError:
+                        # Check if input task is done and queue is empty
+                        if input_task.done() and self.queues[-1].empty():
+                            # Check if all tasks are done
+                            all_done = all(task.done() for task in self.tasks)
+                            if all_done:
+                                break
+                        continue
+            except Exception as e:
+                self.logger.error(f"[{self.name}] Error in output loop: {e}", exc_info=True)
+                raise
+            
+            self.logger.debug(f"[{self.name}] Completed processing {chunk_count} chunks")
+        
+        finally:
+            # Cleanup
+            self._running = False
+            await self._cleanup_tasks()
+    
+    async def _feed_input(self, input_stream: AsyncIterator[Chunk], input_queue: asyncio.Queue) -> None:
+        """
+        Feed input stream into first queue.
+        
+        Args:
+            input_stream: Source of chunks
+            input_queue: Queue to feed into
+        """
+        try:
+            async for chunk in input_stream:
+                await input_queue.put(chunk)
+                self.logger.debug(f"[{self.name}] Fed input chunk: {chunk}")
+        except RuntimeError as e:
+            # Handle normal disconnection from transport
+            if "disconnect" in str(e).lower() or "receive" in str(e).lower():
+                self.logger.debug(f"[{self.name}] Input stream closed: {e}")
+            else:
+                self.logger.error(f"[{self.name}] Runtime error feeding input: {e}", exc_info=True)
+        except Exception as e:
+            self.logger.error(f"[{self.name}] Error feeding input: {e}", exc_info=True)
+        finally:
+            # Signal end of input
+            await input_queue.put(None)
+            self.logger.debug(f"[{self.name}] Input feeding complete")
+    
+    async def _run_station(
+        self,
+        station: Station,
+        index: int,
+        input_queue: asyncio.Queue,
+        output_queue: asyncio.Queue
+    ) -> None:
+        """
+        Run a single station task.
+        
+        Args:
+            station: Station to run
+            index: Station index in pipeline
+            input_queue: Queue to read from
+            output_queue: Queue to write to
+        """
+        self.logger.debug(f"[{self.name}] Starting station {station.name} (index {index})")
+        
+        try:
+            async for chunk in self._queue_iterator(input_queue):
+                # Process chunk through station
+                async for output_chunk in station.process_chunk(chunk):
+                    await output_queue.put(output_chunk)
+            
+            # Signal downstream that this station is done
+            await output_queue.put(None)
+            
+        except asyncio.CancelledError:
+            self.logger.info(f"[{self.name}] Station {station.name} cancelled")
+            raise
+        except Exception as e:
+            self.logger.error(f"[{self.name}] Error in station {station.name}: {e}", exc_info=True)
+            # Still signal downstream
+            await output_queue.put(None)
+        finally:
+            self.logger.debug(f"[{self.name}] Station {station.name} finished")
+    
+    async def _queue_iterator(self, queue: asyncio.Queue) -> AsyncIterator[Chunk]:
+        """
+        Iterate over queue until None is received.
+        
+        Args:
+            queue: Queue to iterate over
+            
+        Yields:
+            Chunks from queue
+        """
+        while True:
+            chunk = await queue.get()
+            if chunk is None:
+                break
             yield chunk
+    
+    def _is_slow_station(self, station: Station) -> bool:
+        """
+        Check if station is potentially slow (Agent, TTS).
         
-        self.logger.debug(f"[{self.name}] Completed processing {chunk_count} chunks")
+        Args:
+            station: Station to check
+            
+        Returns:
+            True if station is slow
+        """
+        # Check station name or class name
+        name_lower = station.name.lower()
+        return 'agent' in name_lower or 'tts' in name_lower or 'llm' in name_lower
+    
+    async def _cleanup_tasks(self) -> None:
+        """Cleanup all running tasks."""
+        for task in self.tasks:
+            if not task.done():
+                task.cancel()
+        
+        if self.tasks:
+            await asyncio.gather(*self.tasks, return_exceptions=True)
+        
+        self.tasks.clear()
+        self.logger.debug(f"[{self.name}] All tasks cleaned up")
+    
+    def clear_queues(self, from_stage: int = 1) -> None:
+        """
+        Clear queues from specified stage onwards.
+        
+        This is used during interrupt handling to discard pending chunks.
+        Stage 0 (input queue) is typically preserved.
+        
+        Args:
+            from_stage: Stage index to start clearing from (default: 1)
+        """
+        if not self.queues:
+            return
+        
+        cleared_count = 0
+        for i in range(from_stage, len(self.queues)):
+            queue = self.queues[i]
+            while not queue.empty():
+                try:
+                    queue.get_nowait()
+                    cleared_count += 1
+                except asyncio.QueueEmpty:
+                    break
+        
+        self.logger.info(f"[{self.name}] Cleared {cleared_count} chunks from {len(self.queues) - from_stage} queues")
+    
+    def cancel_slow_tasks(self) -> None:
+        """
+        Cancel slow/long-running tasks (Agent, TTS).
+        
+        This is used during interrupt handling to quickly stop ongoing processing.
+        """
+        if not self.tasks:
+            return
+        
+        cancelled_count = 0
+        for i in self.cancellable_task_indices:
+            if i < len(self.tasks):
+                task = self.tasks[i]
+                if not task.done():
+                    task.cancel()
+                    cancelled_count += 1
+                    self.logger.info(f"[{self.name}] Cancelled task: {task.get_name()}")
+        
+        if cancelled_count > 0:
+            self.logger.info(f"[{self.name}] Cancelled {cancelled_count} slow tasks")
     
     def add_station(self, station: Station, position: Optional[int] = None) -> None:
         """
