@@ -28,9 +28,9 @@ from stations import (
     TTSStation
 )
 from providers import (
-    # Use shared model providers for better memory efficiency in multi-session scenarios
-    SharedModelSileroVADProvider,
-    SharedModelSherpaOnnxProvider,
+    # Use regular providers to ensure state isolation in concurrent scenarios
+    SileroVADProvider,
+    SherpaOnnxLocalProvider,
     EdgeTTSProvider,
     OpenAIAgentProvider
 )
@@ -136,17 +136,15 @@ async def main():
         logger.debug("Creating new pipeline with isolated providers...")
         
         # Create independent provider instances for this session
-        # Each session gets its own VAD provider with isolated state
-        #    Uses shared model (loaded once) but maintains per-session state
-        # is you use micor server , use regular provider
-        vad_provider = SharedModelSileroVADProvider(**vad_config)
+        # Each session gets its own VAD provider with completely isolated state and model
+        # This ensures thread-safety and prevents state pollution in concurrent scenarios
+        vad_provider = SileroVADProvider(**vad_config)
         
-        # Each session gets its own ASR provider (or None if disabled)
-        #    Uses shared model (loaded once) but maintains per-session state
-        # is you use micor server , use regular provider
+        # Each session gets its own ASR provider with isolated state and model
+        # This ensures accurate recognition without cross-session interference
         asr_provider = None
         if asr_config:
-            asr_provider = SharedModelSherpaOnnxProvider(**asr_config)
+            asr_provider = SherpaOnnxLocalProvider(**asr_config)
         
         # Each session gets its own Agent provider with isolated conversation history
         agent_provider = OpenAIAgentProvider(**agent_config)
@@ -221,11 +219,6 @@ async def main():
         await manager.stop()
         logger.info("Server stopped")
         logger.info("Note: Each session's providers are cleaned up automatically")
-        
-        # Unload shared models on application shutdown
-        SharedModelSileroVADProvider.unload_shared_model()
-        SharedModelSherpaOnnxProvider.unload_shared_recognizer()
-        logger.info("Shared models unloaded")
 
 
 if __name__ == "__main__":

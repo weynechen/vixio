@@ -85,6 +85,7 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
         self._connection_events: Dict[str, asyncio.Event] = {}  # Signal when connection should close
         self._connection_handler: Optional[ConnectionHandler] = None
         self._server_task: Optional[asyncio.Task] = None
+        self._pipeline_ready_events: Dict[str, asyncio.Event] = {}  # Signal when pipeline is ready
         
         # Audio flow control state per session
         # Format: {session_id: {"last_send_time": float, "packet_count": int, "start_time": float, "sequence": int}}
@@ -507,8 +508,18 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
         """
         websocket = self._connections.get(session_id)
         if not websocket:
-            self.logger.warning(f"Cannot send to {session_id}: connection not found")
+            # Connection closed - silently drop chunks (this is expected during shutdown)
             return
+        
+        # Check if WebSocket is still open/connected
+        # FastAPI WebSocket has client_state attribute
+        try:
+            if hasattr(websocket, 'client_state') and websocket.client_state.name not in ('CONNECTED', 'CONNECTING'):
+                # WebSocket is closing or closed, silently drop
+                return
+        except Exception:
+            # If we can't check state, try to send anyway
+            pass
         
         # Special handling for AUDIO_RAW with async queue and flow control
         # Only apply to TTS audio output (source contains "TTS")
@@ -548,17 +559,42 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
     
     async def _on_connection_established(self, session_id: str) -> None:
         """
-        Handle connection establishment (send HELLO message, etc.).
+        Handle connection establishment.
+        
+        NOTE: HELLO message is NOT sent here anymore!
+        It will be sent when pipeline is ready (via on_pipeline_ready).
+        This prevents clients from sending audio before the pipeline is ready to process it.
         
         Args:
             session_id: Session identifier
         """
         self.logger.info(f"New connection: {session_id}")
         
+        # Create pipeline ready event
+        ready_event = asyncio.Event()
+        self._pipeline_ready_events[session_id] = ready_event
+        
+        # Log that we're waiting for pipeline
+        self.logger.debug(f"Waiting for pipeline ready for session {session_id[:8]}...")
+    
+    async def on_pipeline_ready(self, session_id: str) -> None:
+        """
+        Called by SessionManager when pipeline is ready for this session.
+        Now it's safe to send HELLO and start receiving audio.
+        
+        Args:
+            session_id: Session identifier
+        """
+        self.logger.info(f"Pipeline ready for session {session_id[:8]}, sending HELLO")
+        
         # Send HELLO message
         hello_msg = self.protocol.create_hello_message(session_id=session_id)
         self.logger.debug(f"Sending HELLO message: {hello_msg}")
         await self._send_message(session_id, hello_msg)
+        
+        # Signal that pipeline is ready
+        if session_id in self._pipeline_ready_events:
+            self._pipeline_ready_events[session_id].set()
     
     async def _handle_websocket(self, websocket: WebSocket, token: Optional[str] = None) -> None:
         """
@@ -644,6 +680,7 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
             # Cleanup
             self._connections.pop(session_id, None)
             self._connection_events.pop(session_id, None)
+            self._pipeline_ready_events.pop(session_id, None)
             self._cleanup_buffers(session_id)
             # Cleanup flow control state
             self._audio_flow_control.pop(session_id, None)
@@ -980,13 +1017,18 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
         """
         websocket = self._connections.get(session_id)
         if not websocket:
-            self.logger.error(f"Sender worker: no websocket for {session_id}")
+            # Connection closed before sender started - silently exit
             return
         
         self.logger.debug(f"Sender worker started for session {session_id}")
         
         try:
             while True:
+                # Check if connection still exists
+                if session_id not in self._connections:
+                    self.logger.debug(f"Connection closed, stopping sender for {session_id}")
+                    break
+                
                 # Get next chunk from queue
                 chunk = await queue.get()
                 
@@ -995,10 +1037,22 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
                     self.logger.debug(f"Sender worker stopping for session {session_id}")
                     break
                 
+                # Check WebSocket state before sending
+                try:
+                    if hasattr(websocket, 'client_state') and websocket.client_state.name not in ('CONNECTED', 'CONNECTING'):
+                        # WebSocket is closing or closed, stop sending
+                        self.logger.debug(f"WebSocket not connected, stopping sender for {session_id}")
+                        break
+                except Exception:
+                    pass
+                
                 # Process chunk based on type
                 if chunk.type == ChunkType.AUDIO_RAW:
                     # Audio chunk: apply flow control
-                    await self._send_audio_with_flow_control(session_id, websocket, chunk)
+                    success = await self._send_audio_with_flow_control(session_id, websocket, chunk)
+                    if not success:
+                        # Connection closed during send, stop worker
+                        break
                 
                 else:
                     # Event chunk: send immediately (no delay)
@@ -1013,7 +1067,9 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
                                 await websocket.send_text(encoded)
                         
                         except Exception as e:
-                            self.logger.error(f"Error sending event to {session_id}: {e}")
+                            # Connection closed, stop sending
+                            self.logger.debug(f"Error sending event to {session_id}, connection likely closed: {e}")
+                            break
         
         except Exception as e:
             self.logger.error(f"Sender worker error for {session_id}: {e}", exc_info=True)
@@ -1026,7 +1082,7 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
         session_id: str,
         websocket: WebSocket,
         chunk: Chunk
-    ) -> None:
+    ) -> bool:
         """
         Send audio chunk with flow control.
         
@@ -1038,10 +1094,17 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
             session_id: Session identifier
             websocket: WebSocket connection
             chunk: Audio chunk to send
+            
+        Returns:
+            True if sent successfully, False if connection closed
         """
         pcm_data = chunk.data
         if not pcm_data:
-            return
+            return True  # Nothing to send, but not an error
+        
+        # Check if connection still exists
+        if session_id not in self._connections:
+            return False  # Connection closed
         
         # Initialize flow control for this session if needed
         if session_id not in self._audio_flow_control:
@@ -1134,5 +1197,8 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
                 flow_control["last_send_time"] = time.time()
             
             except Exception as e:
-                self.logger.error(f"Error sending audio frame to {session_id}: {e}")
-                break
+                # Connection closed during send (common during disconnect)
+                self.logger.debug(f"Audio send failed for {session_id[:8]}, connection likely closed")
+                return False
+        
+        return True  # All frames sent successfully

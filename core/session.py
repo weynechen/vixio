@@ -134,6 +134,10 @@ class SessionManager:
         )
         self._interrupt_tasks[connection_id] = interrupt_task
         
+        # Notify transport that pipeline is ready (so it can send HELLO)
+        if hasattr(self.transport, 'on_pipeline_ready'):
+            await self.transport.on_pipeline_ready(connection_id)
+        
         # Run pipeline in background task
         task = asyncio.create_task(
             self._run_pipeline(connection_id, pipeline),
