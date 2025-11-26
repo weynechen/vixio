@@ -15,7 +15,9 @@ from providers.agent import AgentProvider, Tool
 
 # Provider implementations
 from providers.silero_vad.provider import SileroVADProvider
+from providers.silero_vad.shared_provider import SharedModelSileroVADProvider
 from providers.sherpa_onnx_local.provider import SherpaOnnxLocalProvider
+from providers.sherpa_onnx_local.shared_provider import SharedModelSherpaOnnxProvider
 from providers.edge_tts.provider import EdgeTTSProvider
 from providers.openai_agent.provider import OpenAIAgentProvider
 
@@ -29,7 +31,9 @@ __all__ = [
     "Tool",
     # Implementations
     "SileroVADProvider",
+    "SharedModelSileroVADProvider",  # Recommended for multi-session
     "SherpaOnnxLocalProvider",
+    "SharedModelSherpaOnnxProvider",  # Recommended for multi-session
     "EdgeTTSProvider",
     "OpenAIAgentProvider",
 ]

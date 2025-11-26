@@ -150,6 +150,30 @@ class SileroVADProvider(VADProvider):
         self._is_speaking = False
         self.logger.debug("VAD state reset")
     
+    def cleanup(self) -> None:
+        """
+        Cleanup resources and free model memory.
+        
+        Explicitly releases Torch model to prevent memory leaks.
+        """
+        try:
+            if hasattr(self, 'model') and self.model is not None:
+                # Clear model reference
+                del self.model
+                self.model = None
+                
+                # Clear buffers
+                self._pcm_buffer.clear()
+                self._voice_window.clear()
+                
+                # Force CUDA cache cleanup if using GPU
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                
+                self.logger.debug("VAD model resources released")
+        except Exception as e:
+            self.logger.error(f"Error during VAD cleanup: {e}")
+    
     def get_config(self) -> Dict[str, Any]:
         """Get provider configuration"""
         config = super().get_config()

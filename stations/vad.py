@@ -36,6 +36,19 @@ class VADStation(Station):
         self.vad = vad_provider
         self._is_speaking = False
     
+    async def cleanup(self) -> None:
+        """
+        Cleanup VAD resources.
+        
+        Releases VAD provider resources to free memory.
+        """
+        try:
+            if self.vad and hasattr(self.vad, 'cleanup'):
+                self.vad.cleanup()
+                self.logger.debug("VAD provider cleaned up")
+        except Exception as e:
+            self.logger.error(f"Error cleaning up VAD provider: {e}")
+    
     async def process_chunk(self, chunk: Chunk) -> AsyncIterator[Chunk]:
         """
         Process chunk through VAD.

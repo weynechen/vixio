@@ -41,6 +41,23 @@ class ASRStation(Station):
         # Latency monitoring
         self._latency_monitor = get_latency_monitor()
     
+    async def cleanup(self) -> None:
+        """
+        Cleanup ASR resources.
+        
+        Releases ASR provider resources to free memory.
+        """
+        try:
+            # Clear audio buffer
+            self._audio_buffer.clear()
+            
+            # Cleanup ASR provider
+            if self.asr and hasattr(self.asr, 'cleanup'):
+                self.asr.cleanup()
+                self.logger.debug("ASR provider cleaned up")
+        except Exception as e:
+            self.logger.error(f"Error cleaning up ASR provider: {e}")
+    
     async def process_chunk(self, chunk: Chunk) -> AsyncIterator[Chunk]:
         """
         Process chunk through ASR.

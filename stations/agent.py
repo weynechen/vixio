@@ -48,6 +48,19 @@ class AgentStation(Station):
         # Latency monitoring
         self._latency_monitor = get_latency_monitor()
     
+    async def cleanup(self) -> None:
+        """
+        Cleanup agent resources.
+        
+        Calls shutdown on the agent provider to release resources properly.
+        """
+        try:
+            if self.agent and hasattr(self.agent, 'shutdown'):
+                await self.agent.shutdown()
+                self.logger.debug("Agent provider cleaned up")
+        except Exception as e:
+            self.logger.error(f"Error cleaning up agent provider: {e}")
+    
     async def process_chunk(self, chunk: Chunk) -> AsyncIterator[Chunk]:
         """
         Process chunk through Agent.

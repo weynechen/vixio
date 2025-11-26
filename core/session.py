@@ -46,10 +46,11 @@ class SessionManager:
         
         Args:
             transport: Transport to manage connections for
-            pipeline_factory: Factory function that creates a fresh Pipeline for each connection
+            pipeline_factory: Factory function (sync or async) that creates a fresh Pipeline for each connection
         """
         self.transport = transport
         self.pipeline_factory = pipeline_factory
+        self._is_async_factory = asyncio.iscoroutinefunction(pipeline_factory)
         self._sessions: Dict[str, asyncio.Task] = {}  # connection_id -> pipeline task
         self._control_buses: Dict[str, ControlBus] = {}  # connection_id -> control bus
         self._pipelines: Dict[str, Pipeline] = {}  # connection_id -> pipeline
@@ -116,8 +117,11 @@ class SessionManager:
         control_bus = ControlBus()
         self._control_buses[connection_id] = control_bus
         
-        # Create fresh pipeline with ControlBus
-        pipeline = self.pipeline_factory()
+        # Create fresh pipeline with ControlBus (support both sync and async factories)
+        if self._is_async_factory:
+            pipeline = await self.pipeline_factory()
+        else:
+            pipeline = self.pipeline_factory()
         pipeline.control_bus = control_bus
         self._pipelines[connection_id] = pipeline
         
@@ -332,15 +336,39 @@ class SessionManager:
                 task.cancel()
             del self._interrupt_tasks[connection_id]
         
+        # Cleanup pipeline resources (including provider cleanup)
+        if connection_id in self._pipelines:
+            pipeline = self._pipelines[connection_id]
+            # Schedule async cleanup in background
+            asyncio.create_task(
+                self._cleanup_pipeline(connection_id, pipeline),
+                name=f"cleanup-pipeline-{connection_id[:8]}"
+            )
+            del self._pipelines[connection_id]
+        
         # Cleanup session resources
         if connection_id in self._sessions:
             del self._sessions[connection_id]
         
-        if connection_id in self._pipelines:
-            del self._pipelines[connection_id]
-        
         if connection_id in self._control_buses:
             del self._control_buses[connection_id]
+    
+    async def _cleanup_pipeline(self, connection_id: str, pipeline: Pipeline) -> None:
+        """
+        Async cleanup for pipeline resources.
+        
+        Args:
+            connection_id: Connection ID (for logging)
+            pipeline: Pipeline to cleanup
+        """
+        try:
+            await pipeline.cleanup()
+            self.logger.debug(f"Pipeline cleaned up for connection {connection_id[:8]}")
+        except Exception as e:
+            self.logger.error(
+                f"Error cleaning up pipeline for connection {connection_id[:8]}: {e}",
+                exc_info=True
+            )
     
     def get_active_session_count(self) -> int:
         """

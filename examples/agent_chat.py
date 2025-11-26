@@ -28,8 +28,9 @@ from stations import (
     TTSStation
 )
 from providers import (
-    SileroVADProvider,
-    SherpaOnnxLocalProvider,
+    # Use shared model providers for better memory efficiency in multi-session scenarios
+    SharedModelSileroVADProvider,
+    SharedModelSherpaOnnxProvider,
     EdgeTTSProvider,
     OpenAIAgentProvider
 )
@@ -56,66 +57,61 @@ async def main():
     """
     logger.info("=== Voice Chat with AI Agent ===")
     
-    # Step 1: Initialize providers
-    logger.info("Initializing providers...")
+    # Step 1: Prepare provider configurations
+    logger.info("Preparing provider configurations...")
     
-    # VAD Provider
-    vad_provider = SileroVADProvider(
-        threshold=0.5,
-        min_speech_duration_ms=250,
-    )
-    logger.info("✓ VAD Provider initialized")
+    # VAD configuration
+    vad_config = {
+        "threshold": 0.5,
+        "min_speech_duration_ms": 250,
+    }
     
-    # ASR Provider
+    # ASR configuration
     model_path = os.path.join(
         os.path.dirname(__file__),
         "../models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17"
     )
+    asr_config = None
     if not os.path.exists(model_path):
         logger.warning(f"ASR model not found at {model_path}")
-        logger.warning("Using mock ASR for demo")
-        asr_provider = None
+        logger.warning("ASR will be disabled for this session")
     else:
-        asr_provider = SherpaOnnxLocalProvider(
-            model_path=model_path,
-            sample_rate=16000,
-        )
-        logger.info("✓ ASR Provider initialized")
+        asr_config = {
+            "model_path": model_path,
+            "sample_rate": 16000,
+        }
     
-    # Agent Provider (OpenAI)
+    # Agent configuration (OpenAI)
     api_key = os.getenv("API_KEY")
     base_url = os.getenv("BASE_URL")  # Optional, for custom endpoints
     
     if not api_key:
-        logger.error("OPENAI_API_KEY environment variable not set!")
-        logger.info("Please set: export OPENAI_API_KEY='your-api-key'")
+        logger.error("API_KEY environment variable not set!")
+        logger.info("Please set: export API_KEY='your-api-key'")
         return
     
-    agent_provider = OpenAIAgentProvider(
-        api_key=api_key,
-        model=os.getenv("LITELLM_MODEL", "deepseek/deepseek-chat"),
-        base_url=base_url,
-        temperature=0.7,
-        max_tokens=2000,
+    agent_config = {
+        "api_key": api_key,
+        "model": os.getenv("LITELLM_MODEL", "deepseek/deepseek-chat"),
+        "base_url": base_url,
+        "temperature": 0.7,
+        "max_tokens": 2000,
+    }
+    
+    agent_system_prompt = (
+        "You are a helpful AI voice assistant. "
+        "Keep your responses concise and conversational, "
+        "as they will be spoken aloud to the user."
     )
     
-    # Initialize agent with system prompt
-    await agent_provider.initialize(
-        system_prompt=(
-            "You are a helpful AI voice assistant. "
-            "Keep your responses concise and conversational, "
-            "as they will be spoken aloud to the user."
-        )
-    )
-    logger.info("✓ Agent Provider initialized")
+    # TTS configuration
+    tts_config = {
+        "voice": "zh-CN-XiaoxiaoNeural",
+        "rate": "+0%",
+        "volume": "+0%",
+    }
     
-    # TTS Provider
-    tts_provider = EdgeTTSProvider(
-        voice="zh-CN-XiaoxiaoNeural",
-        rate="+0%",
-        volume="+0%",
-    )
-    logger.info("✓ TTS Provider initialized")
+    logger.info("✓ Configurations prepared")
     
     # Step 2: Create transport
     # WebSocket endpoint: ws://0.0.0.0:8000/xiaozhi/v1/
@@ -126,13 +122,40 @@ async def main():
         websocket_path="/xiaozhi/v1/"
     )
     
-    # Step 3: Create pipeline factory
-    def create_pipeline():
+    # Step 3: Create async pipeline factory
+    async def create_pipeline():
         """
-        Factory function to create a fresh pipeline for each connection.
+        Async factory function to create a fresh pipeline for each connection.
         
-        This ensures each client has isolated state.
+        This ensures each client has completely isolated provider instances,
+        preventing state pollution between concurrent sessions.
+        
+        Returns:
+            Pipeline: New pipeline with independent provider instances
         """
+        logger.debug("Creating new pipeline with isolated providers...")
+        
+        # Create independent provider instances for this session
+        # Each session gets its own VAD provider with isolated state
+        #    Uses shared model (loaded once) but maintains per-session state
+        # is you use micor server , use regular provider
+        vad_provider = SharedModelSileroVADProvider(**vad_config)
+        
+        # Each session gets its own ASR provider (or None if disabled)
+        #    Uses shared model (loaded once) but maintains per-session state
+        # is you use micor server , use regular provider
+        asr_provider = None
+        if asr_config:
+            asr_provider = SharedModelSherpaOnnxProvider(**asr_config)
+        
+        # Each session gets its own Agent provider with isolated conversation history
+        agent_provider = OpenAIAgentProvider(**agent_config)
+        await agent_provider.initialize(system_prompt=agent_system_prompt)
+        
+        # Each session gets its own TTS provider (stateless but good practice)
+        tts_provider = EdgeTTSProvider(**tts_config)
+        
+        # Build station list
         stations = [
             # Stage 1: Voice detection
             VADStation(vad_provider),
@@ -153,6 +176,8 @@ async def main():
         
         # Stage 5: Speech synthesis
         stations.append(TTSStation(tts_provider))
+        
+        logger.debug("✓ Pipeline created with isolated providers")
         
         return Pipeline(
             stations=stations,
@@ -194,8 +219,13 @@ async def main():
         logger.info("\nShutting down...")
     finally:
         await manager.stop()
-        await agent_provider.shutdown()
         logger.info("Server stopped")
+        logger.info("Note: Each session's providers are cleaned up automatically")
+        
+        # Unload shared models on application shutdown
+        SharedModelSileroVADProvider.unload_shared_model()
+        SharedModelSherpaOnnxProvider.unload_shared_recognizer()
+        logger.info("Shared models unloaded")
 
 
 if __name__ == "__main__":

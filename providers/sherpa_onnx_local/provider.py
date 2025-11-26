@@ -110,6 +110,21 @@ class SherpaOnnxLocalProvider(ASRProvider):
         """Reset internal state"""
         self.logger.debug("ASR state reset")
     
+    def cleanup(self) -> None:
+        """
+        Cleanup resources and free model memory.
+        
+        Explicitly releases ONNX recognizer to prevent memory leaks.
+        """
+        try:
+            if hasattr(self, 'recognizer') and self.recognizer is not None:
+                # Clear recognizer reference
+                del self.recognizer
+                self.recognizer = None
+                self.logger.debug("ASR model resources released")
+        except Exception as e:
+            self.logger.error(f"Error during ASR cleanup: {e}")
+    
     def get_config(self) -> Dict[str, Any]:
         """Get provider configuration"""
         config = super().get_config()

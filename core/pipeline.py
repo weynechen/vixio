@@ -345,6 +345,39 @@ class Pipeline:
                 return station
         return None
     
+    async def cleanup(self) -> None:
+        """
+        Cleanup pipeline resources.
+        
+        Calls cleanup on all stations that have cleanup methods.
+        This is important when stations hold stateful providers that need explicit cleanup.
+        """
+        self.logger.debug(f"[{self.name}] Cleaning up pipeline resources...")
+        
+        cleanup_count = 0
+        for station in self.stations:
+            # Check if station has cleanup method
+            if hasattr(station, 'cleanup') and callable(getattr(station, 'cleanup')):
+                try:
+                    cleanup_method = getattr(station, 'cleanup')
+                    # Support both sync and async cleanup
+                    if asyncio.iscoroutinefunction(cleanup_method):
+                        await cleanup_method()
+                    else:
+                        cleanup_method()
+                    cleanup_count += 1
+                    self.logger.debug(f"[{self.name}] Cleaned up station: {station.name}")
+                except Exception as e:
+                    self.logger.error(f"[{self.name}] Error cleaning up station {station.name}: {e}")
+        
+        if cleanup_count > 0:
+            self.logger.info(f"[{self.name}] Cleaned up {cleanup_count} stations")
+            
+            # Force garbage collection to free memory immediately
+            import gc
+            gc.collect()
+            self.logger.debug(f"[{self.name}] Garbage collection triggered")
+    
     def __str__(self) -> str:
         station_names = [s.name for s in self.stations]
         return f"Pipeline({self.name}: {' -> '.join(station_names)})"
