@@ -35,6 +35,7 @@ class SharedModelSherpaOnnxProvider(ASRProvider):
     _shared_recognizer = None
     _shared_model_path: Optional[str] = None
     _model_lock = None  # For thread-safe initialization
+    _inference_lock = None  # For thread-safe model inference
     
     def __init__(
         self,
@@ -78,10 +79,11 @@ class SharedModelSherpaOnnxProvider(ASRProvider):
         
         This method is called by __init__ and loads the recognizer only once.
         """
-        # Initialize lock if needed
+        # Initialize locks if needed
         if cls._model_lock is None:
             import threading
             cls._model_lock = threading.Lock()
+            cls._inference_lock = threading.Lock()  # Lock for thread-safe inference
         
         # Load recognizer if not already loaded or path changed
         needs_reload = (
@@ -149,8 +151,10 @@ class SharedModelSherpaOnnxProvider(ASRProvider):
             stream = self._shared_recognizer.create_stream()
             stream.accept_waveform(self.sample_rate, audio_float)
             
-            # Decode (stream is isolated)
-            self._shared_recognizer.decode_stream(stream)
+            # ✅ Decode with thread-safe inference lock
+            # Although streams are isolated, recognizer.decode_stream() may not be thread-safe
+            with self._inference_lock:
+                self._shared_recognizer.decode_stream(stream)
             
             # Get result
             result = stream.result.text.strip()

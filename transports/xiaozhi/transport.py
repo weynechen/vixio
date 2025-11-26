@@ -95,23 +95,16 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
         self._send_queues: Dict[str, asyncio.Queue] = {}
         self._send_tasks: Dict[str, asyncio.Task] = {}
         
+        # Per-session Opus codecs for thread-safe audio encoding/decoding
+        # Each session gets its own codec instance to avoid race conditions
+        self._opus_codecs: Dict[str, 'OpusCodec'] = {}
+        
         # Override logger from mixin with more specific name
         self.logger = logger.bind(transport="XiaozhiTransport")
 
-        # Initialize Opus codec for audio format conversion
-        self.opus_codec = None
-        if OPUS_AVAILABLE:
-            try:
-                self.opus_codec = get_opus_codec(
-                    sample_rate=16000,
-                    channels=1,
-                    frame_duration_ms=60
-                )
-                self.logger.info("Opus codec initialized for audio conversion")
-            except Exception as e:
-                self.logger.warning(f"Failed to initialize Opus codec: {e}")
-        else:
-            self.logger.warning("Opus codec not available, audio conversion disabled")
+        # Check Opus availability (but don't create codec yet)
+        if not OPUS_AVAILABLE:
+            self.logger.warning("Opus codec not available, audio conversion will be disabled")
 
         # Initialize auth manager
         self._init_auth()
@@ -600,6 +593,20 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
             # Create event to signal when connection should close
             close_event = asyncio.Event()
             self._connection_events[session_id] = close_event
+            
+            # Create isolated Opus codec for this session
+            if OPUS_AVAILABLE:
+                try:
+                    from utils.audio import OpusCodec
+                    self._opus_codecs[session_id] = OpusCodec(
+                        sample_rate=16000,
+                        channels=1,
+                        frame_duration_ms=60
+                    )
+                    self.logger.debug(f"Created isolated Opus codec for session {session_id[:8]}")
+                except Exception as e:
+                    self.logger.warning(f"Failed to create Opus codec for session {session_id[:8]}: {e}")
+            
             self.logger.info(f"WebSocket accepted: {session_id}")
             
             # Notify new connection (send HELLO message)
@@ -640,6 +647,8 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
             self._cleanup_buffers(session_id)
             # Cleanup flow control state
             self._audio_flow_control.pop(session_id, None)
+            # Cleanup session-specific Opus codec
+            self._opus_codecs.pop(session_id, None)
             # Stop sender task
             await self._stop_sender_task(session_id)
             self.logger.info(f"WebSocket closed: {session_id}")
@@ -666,16 +675,17 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
         if msg_type == XiaozhiMessageType.AUDIO:
             opus_data = message.get("audio_data", b"")
             
-            # Decode Opus to PCM
+            # Decode Opus to PCM using session-specific codec
             pcm_data = opus_data
-            if self.opus_codec and opus_data:
+            opus_codec = self._opus_codecs.get(session_id)
+            if opus_codec and opus_data:
                 try:
-                    pcm_data = self.opus_codec.decode(opus_data)
+                    pcm_data = opus_codec.decode(opus_data)
                 except Exception as e:
-                    self.logger.error(f"Failed to decode Opus audio: {e}")
+                    self.logger.error(f"Failed to decode Opus audio for session {session_id[:8]}: {e}")
                     return None
-            elif not self.opus_codec:
-                self.logger.warning("Opus codec not available, cannot decode audio")
+            elif not opus_codec:
+                self.logger.warning(f"Opus codec not available for session {session_id[:8]}, cannot decode audio")
                 return None
             
             return AudioChunk(
@@ -751,16 +761,19 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
         if chunk.type == ChunkType.AUDIO_RAW:
             pcm_data = chunk.data if chunk.data else b""
             
-            # Encode PCM to Opus
+            # Encode PCM to Opus using session-specific codec
             opus_data = pcm_data
-            if self.opus_codec and pcm_data:
+            opus_codec = self._opus_codecs.get(chunk.session_id) if chunk.session_id else None
+            if opus_codec and pcm_data:
                 try:
-                    opus_data = self.opus_codec.encode(pcm_data)
+                    opus_data = opus_codec.encode(pcm_data)
                 except Exception as e:
-                    self.logger.error(f"Failed to encode PCM to Opus: {e}")
+                    session_str = chunk.session_id[:8] if chunk.session_id else 'unknown'
+                    self.logger.error(f"Failed to encode PCM to Opus for session {session_str}: {e}")
                     return None
-            elif not self.opus_codec and pcm_data:
-                self.logger.warning("Opus codec not available, sending raw PCM")
+            elif not opus_codec and pcm_data:
+                session_str = chunk.session_id[:8] if chunk.session_id else 'unknown'
+                self.logger.warning(f"Opus codec not available for session {session_str}, sending raw PCM")
             
             return {
                 "type": XiaozhiMessageType.AUDIO,
@@ -1054,17 +1067,18 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
         self.logger.debug(f"Sending {len(frames)} audio frames with flow control , chunk source: {chunk.source}")
         
         # Send frames with flow control
+        opus_codec = self._opus_codecs.get(session_id)
         for frame_idx, frame in enumerate(frames):
-            # Encode PCM to Opus
+            # Encode PCM to Opus using session-specific codec
             opus_data = frame
-            if self.opus_codec and frame:
+            if opus_codec and frame:
                 try:
-                    opus_data = self.opus_codec.encode(frame)
+                    opus_data = opus_codec.encode(frame)
                 except Exception as e:
-                    self.logger.error(f"Failed to encode PCM to Opus: {e}")
+                    self.logger.error(f"Failed to encode PCM to Opus for session {session_id[:8]}: {e}")
                     continue
-            elif not self.opus_codec:
-                self.logger.warning("Opus codec not available, sending raw PCM")
+            elif not opus_codec:
+                self.logger.warning(f"Opus codec not available for session {session_id[:8]}, sending raw PCM")
             
             # Apply flow control timing
             current_time = time.time()
