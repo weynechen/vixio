@@ -68,6 +68,10 @@ class SessionManager:
         # Register for new connections
         await self.transport.on_new_connection(self._handle_connection)
         
+        # Register disconnect handler to cancel sessions
+        if hasattr(self.transport, 'set_disconnect_handler'):
+            self.transport.set_disconnect_handler(self.cancel_session)
+        
         # Start transport server
         await self.transport.start()
         
@@ -391,3 +395,36 @@ class SessionManager:
             List of connection IDs
         """
         return list(self._sessions.keys())
+    
+    async def cancel_session(self, connection_id: str) -> None:
+        """
+        Cancel a specific session (e.g., when WebSocket disconnects).
+        
+        Args:
+            connection_id: Connection to cancel
+        """
+        self.logger.info(f"Cancelling session for connection {connection_id[:8]}")
+        
+        # Cancel pipeline task
+        if connection_id in self._sessions:
+            task = self._sessions[connection_id]
+            if not task.done():
+                task.cancel()
+                try:
+                    await asyncio.wait_for(task, timeout=2.0)
+                except (asyncio.CancelledError, asyncio.TimeoutError):
+                    pass
+                except Exception as e:
+                    self.logger.error(f"Error waiting for pipeline cancellation: {e}")
+        
+        # Cancel interrupt handler
+        if connection_id in self._interrupt_tasks:
+            task = self._interrupt_tasks[connection_id]
+            if not task.done():
+                task.cancel()
+                try:
+                    await asyncio.wait_for(task, timeout=1.0)
+                except (asyncio.CancelledError, asyncio.TimeoutError):
+                    pass
+        
+        self.logger.info(f"Session cancelled for connection {connection_id[:8]}")

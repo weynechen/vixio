@@ -84,6 +84,7 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
         self._connections: Dict[str, WebSocket] = {}
         self._connection_events: Dict[str, asyncio.Event] = {}  # Signal when connection should close
         self._connection_handler: Optional[ConnectionHandler] = None
+        self._disconnect_handler: Optional[ConnectionHandler] = None  # Called when connection closes
         self._server_task: Optional[asyncio.Task] = None
         self._pipeline_ready_events: Dict[str, asyncio.Event] = {}  # Signal when pipeline is ready
         
@@ -373,6 +374,15 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
             handler: Async function to handle new connections
         """
         self._connection_handler = handler
+    
+    def set_disconnect_handler(self, handler: ConnectionHandler) -> None:
+        """
+        Set disconnect handler callback.
+        
+        Args:
+            handler: Async function called when connection closes
+        """
+        self._disconnect_handler = handler
     
     async def on_new_connection(self, handler: ConnectionHandler) -> None:
         """
@@ -677,6 +687,13 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
         except Exception as e:
             self.logger.error(f"WebSocket error for {session_id}: {e}", exc_info=True)
         finally:
+            # Call disconnect handler to cancel pipeline
+            if self._disconnect_handler:
+                try:
+                    await self._disconnect_handler(session_id)
+                except Exception as e:
+                    self.logger.error(f"Error in disconnect handler for {session_id}: {e}")
+            
             # Cleanup
             self._connections.pop(session_id, None)
             self._connection_events.pop(session_id, None)

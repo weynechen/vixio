@@ -24,6 +24,9 @@ Logger Configuration:
 
 import asyncio
 import os
+import sys
+import signal
+import atexit
 import argparse
 from pathlib import Path
 from loguru import logger
@@ -46,6 +49,38 @@ from utils.service_manager import ServiceManager
 import dotenv
 
 dotenv.load_dotenv()
+
+# Global service manager for cleanup
+_global_service_manager: ServiceManager = None
+
+
+def cleanup_microservices():
+    """
+    Cleanup function called on exit.
+    Ensures microservices are stopped even if main process crashes.
+    """
+    global _global_service_manager
+    if _global_service_manager:
+        logger.info("🧹 Cleaning up microservices...")
+        try:
+            _global_service_manager.stop_all()
+            logger.info("✅ Microservices cleaned up")
+        except Exception as e:
+            logger.error(f"Error during cleanup: {e}")
+        _global_service_manager = None
+
+
+def signal_handler(signum, frame):
+    """Handle termination signals"""
+    logger.info(f"\n⚠️  Received signal {signum}, cleaning up...")
+    cleanup_microservices()
+    sys.exit(0)
+
+
+# Register cleanup handlers
+atexit.register(cleanup_microservices)
+signal.signal(signal.SIGTERM, signal_handler)
+signal.signal(signal.SIGINT, signal_handler)
 
 
 async def main():
@@ -89,6 +124,7 @@ async def main():
         logger.info("🚀 Dev Mode: Auto-managing local microservices...")
         logger.info("")
         
+        global _global_service_manager
         service_manager = ServiceManager(
             config_path=args.config or os.path.join(
                 Path(__file__).parent.parent,
@@ -96,11 +132,13 @@ async def main():
             ),
             env=args.env
         )
+        _global_service_manager = service_manager  # Store globally for cleanup
         
         # Start services
         if not service_manager.start_all():
             logger.error("Failed to start microservices")
-            return
+            cleanup_microservices()  # Clean up on failure
+            sys.exit(1)
         
         # Print service info
         service_manager.print_service_info()
@@ -308,7 +346,7 @@ async def main():
         # Stop microservices (dev mode only)
         if service_manager:
             logger.info("")
-            service_manager.stop_all()
+            cleanup_microservices()  # Use cleanup function
 
 
 if __name__ == "__main__":

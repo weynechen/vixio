@@ -157,7 +157,7 @@ class LocalKokoroTTSProvider(TTSProvider):
             text: Text to synthesize
             
         Yields:
-            Audio bytes (PCM format, 16-bit, mono)
+            Audio bytes (PCM format, 16-bit, mono, 16kHz)
         """
         if not self._client or not self.session_id:
             raise RuntimeError("TTS provider not initialized. Call initialize() first.")
@@ -171,9 +171,19 @@ class LocalKokoroTTSProvider(TTSProvider):
                 if is_final:
                     break
                 
+                # Resample from 24kHz to 16kHz if needed (for system compatibility)
+                if sample_rate == 24000:
+                    # Simple linear resampling: 24kHz -> 16kHz (3:2 ratio)
+                    # Take every 3rd sample out of 2 samples (downsample)
+                    target_length = int(len(audio_data) * 16000 / 24000)
+                    indices = np.linspace(0, len(audio_data) - 1, target_length)
+                    audio_resampled = np.interp(indices, np.arange(len(audio_data)), audio_data)
+                else:
+                    audio_resampled = audio_data
+                
                 # Convert float32 audio to int16 PCM bytes
                 # audio_data is np.ndarray with shape (N,) and dtype float32 in range [-1, 1]
-                audio_int16 = (audio_data * 32767).astype(np.int16)
+                audio_int16 = (audio_resampled * 32767).astype(np.int16)
                 audio_bytes = audio_int16.tobytes()
                 
                 yield audio_bytes

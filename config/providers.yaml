@@ -54,9 +54,9 @@ dev:
       config:
         service_url: "localhost:50053"
         voice: "zf_001"
-        speed: 1.0
+        speed: 1.1          # 稍微加快语速
         lang: "zh"
-        sample_rate: 16000
+        sample_rate: 24000  # Kokoro 原生采样率
 
 # ==============================================================================
 # Docker Mode
