@@ -101,6 +101,9 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
         # Each session gets its own codec instance to avoid race conditions
         self._opus_codecs: Dict[str, 'OpusCodec'] = {}
         
+        # Per-session ControlBus references (injected by SessionManager)
+        self._control_buses: Dict[str, 'ControlBus'] = {}
+        
         # Override logger from mixin with more specific name
         self.logger = logger.bind(transport="XiaozhiTransport")
 
@@ -133,6 +136,29 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
             secret_key=secret_key,
             expire_seconds=expire_seconds
         )
+    
+    def set_control_bus(self, connection_id: str, control_bus: 'ControlBus') -> None:
+        """
+        Set ControlBus for a connection (injected by SessionManager).
+        
+        Args:
+            connection_id: Connection identifier
+            control_bus: ControlBus instance for this connection
+        """
+        self._control_buses[connection_id] = control_bus
+        self.logger.info(f"ControlBus set for connection {connection_id[:8]}")
+    
+    def get_control_bus(self, connection_id: str) -> Optional['ControlBus']:
+        """
+        Get ControlBus for a connection.
+        
+        Args:
+            connection_id: Connection identifier
+            
+        Returns:
+            ControlBus instance or None
+        """
+        return self._control_buses.get(connection_id)
     
     def _get_websocket_url(self) -> str:
         """Get websocket URL."""
@@ -703,9 +729,26 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
             self._audio_flow_control.pop(session_id, None)
             # Cleanup session-specific Opus codec
             self._opus_codecs.pop(session_id, None)
+            # Cleanup ControlBus reference
+            self._control_buses.pop(session_id, None)
             # Stop sender task
             await self._stop_sender_task(session_id)
             self.logger.info(f"WebSocket closed: {session_id}")
+    
+    def _get_current_turn_id(self, session_id: str) -> int:
+        """
+        Get current turn_id for a session from ControlBus.
+        
+        Args:
+            session_id: Session identifier
+            
+        Returns:
+            Current turn_id or 0 if ControlBus not available
+        """
+        control_bus = self._control_buses.get(session_id)
+        if control_bus:
+            return control_bus.get_current_turn_id()
+        return 0
     
     async def _decode_message(
         self,
@@ -723,6 +766,9 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
             Chunk or None
         """
         msg_type = message.get("type")
+        
+        # Get current turn_id for this session
+        turn_id = self._get_current_turn_id(session_id)
         
         # Audio message (Opus encoded from client)
         # Transport responsibility: Decode Opus -> PCM
@@ -747,7 +793,8 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
                 data=pcm_data,
                 sample_rate=self.protocol.sample_rate,
                 channels=self.protocol.channels,
-                session_id=session_id
+                session_id=session_id,
+                turn_id=turn_id
             )
         
         # Control message
@@ -759,14 +806,16 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
                     type=ChunkType.CONTROL_INTERRUPT,
                     command="interrupt",
                     params={},
-                    session_id=session_id
+                    session_id=session_id,
+                    turn_id=turn_id
                 )
             elif action == XiaozhiControlAction.STOP:
                 return ControlChunk(
                     type=ChunkType.CONTROL_STOP,
                     command="stop",
                     params={},
-                    session_id=session_id
+                    session_id=session_id,
+                    turn_id=turn_id
                 )
         
         # Abort message (client interrupt request)
@@ -776,7 +825,8 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
                 type=ChunkType.CONTROL_INTERRUPT,
                 command="abort",
                 params={"reason": "client_abort"},
-                session_id=session_id
+                session_id=session_id,
+                turn_id=turn_id
             )
         
         # HELLO message
@@ -785,7 +835,8 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
                 type=ChunkType.CONTROL_HELLO,
                 command="hello",
                 params=message,
-                session_id=session_id
+                session_id=session_id,
+                turn_id=turn_id
             )
         
         # Text message (not commonly used in voice chat)
@@ -795,7 +846,8 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
                 return TextChunk(
                     type=ChunkType.TEXT,
                     content=content,
-                    session_id=session_id
+                    session_id=session_id,
+                    turn_id=turn_id
                 )
         
         return None

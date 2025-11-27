@@ -147,7 +147,8 @@ class SentenceSplitterStation(Station):
                         type=ChunkType.TEXT,
                         content=remaining,
                         source="agent",  # Final sentence from agent
-                        session_id=chunk.session_id
+                        session_id=chunk.session_id,
+                        turn_id=chunk.turn_id  # Inherit turn_id from event
                     )
             
             # Reset on interrupt

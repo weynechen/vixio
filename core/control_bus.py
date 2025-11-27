@@ -41,20 +41,28 @@ class ControlBus:
     """
     Centralized control bus for managing interrupts and turn transitions.
     
+    Turn Management Strategy:
+    - turn_id increments immediately when turn completes or is interrupted
+    - Components call increment_turn() when:
+      * TTS finishes (bot finished speaking)
+      * User interrupts (user starts speaking during bot speaking)
+    - All subsequent chunks naturally carry the new turn_id
+    - No "lazy increment" or "ready to start" states needed
+    
     Features:
     - Any component can send interrupt signals
-    - Monitor task coordinates turn transitions
+    - Simple, immediate turn_id increment on completion/interrupt
     - Provides current turn_id for all components
     - Thread-safe and async-friendly
     
     Usage:
         bus = ControlBus()
         
-        # Send interrupt
-        await bus.send_interrupt(source="vad", reason="user_speaking")
+        # Increment turn when complete/interrupted
+        new_turn = await bus.increment_turn(source="TTS", reason="bot_finished")
         
-        # Wait for interrupt (used by Session)
-        signal = await bus.wait_for_interrupt()
+        # Send interrupt signal
+        await bus.send_interrupt(source="TurnDetector", reason="user_interrupted")
         
         # Get current turn ID (used by Stations)
         turn_id = bus.get_current_turn_id()
@@ -120,13 +128,12 @@ class ControlBus:
         """
         signal = await self._interrupt_queue.get()
         
-        # Increment turn ID for new turn
+        # Update signal with current turn info
         async with self._lock:
-            self._current_turn_id += 1
             signal.turn_id = self._current_turn_id
             self._latest_interrupt = signal
         
-        self.logger.info(f"Processing interrupt: {signal}, new turn_id={self._current_turn_id}")
+        self.logger.info(f"Processing interrupt: {signal}, turn_id={self._current_turn_id}")
         
         return signal
     
@@ -165,17 +172,22 @@ class ControlBus:
         """
         return self._latest_interrupt
     
-    async def reset_turn(self) -> int:
+    async def increment_turn(self, source: str, reason: str) -> int:
         """
-        Manually reset to a new turn (used for session start).
+        Increment turn ID (called when turn completes or is interrupted).
+        
+        Args:
+            source: Component incrementing the turn (e.g., "TTS", "TurnDetector")
+            reason: Human-readable reason (e.g., "bot_finished", "user_interrupted")
         
         Returns:
             New turn ID
         """
         async with self._lock:
             self._current_turn_id += 1
-            self.logger.info(f"Turn reset to {self._current_turn_id}")
+            self.logger.info(f"Turn incremented to {self._current_turn_id} (source={source}, reason={reason})")
             return self._current_turn_id
+    
     
     def get_stats(self) -> Dict[str, Any]:
         """

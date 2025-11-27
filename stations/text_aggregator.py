@@ -61,7 +61,8 @@ class TextAggregatorStation(Station):
                         type=ChunkType.TEXT,
                         content=self._text_buffer,
                         source=self._source or "aggregator",  # Preserve original source
-                        session_id=chunk.session_id
+                        session_id=chunk.session_id,
+                        turn_id=chunk.turn_id  # Inherit turn_id from event
                     )
                     
                     # Clear buffer

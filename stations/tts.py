@@ -64,13 +64,17 @@ class TTSStation(Station):
                         type=ChunkType.EVENT_TTS_STOP,
                         event_data={"reason": "user_interrupt"},
                         source_station=self.name,
-                        session_id=chunk.session_id
+                        session_id=chunk.session_id,
+                        turn_id=chunk.turn_id
                     )
                     
                     self._is_speaking = False
                     # Clear first audio tracking
                     self._first_audio_recorded.clear()
                     self.logger.info("TTS cancelled by interrupt")
+                    
+                    # Note: Don't mark turn completed on interrupt
+                    # Interrupt handler already started a new turn
             
             # Stop speaking when Agent completes (last sentence done)
             elif chunk.type == ChunkType.EVENT_AGENT_STOP:
@@ -80,9 +84,17 @@ class TTSStation(Station):
                         type=ChunkType.EVENT_TTS_STOP,
                         event_data={"reason": "agent_complete"},
                         source_station=self.name,
-                        session_id=chunk.session_id
+                        session_id=chunk.session_id,
+                        turn_id=chunk.turn_id
                     )
                     self._is_speaking = False
+                    
+                    # Increment turn - bot finished speaking
+                    if self.control_bus:
+                        await self.control_bus.increment_turn(source=self.name, reason="bot_finished")
+                        self.logger.info("Turn incremented after bot finished speaking")
+                    else:
+                        self.logger.warning("ControlBus not available, cannot increment turn")
             
             # Passthrough signals
             yield chunk
@@ -116,7 +128,8 @@ class TTSStation(Station):
                     type=ChunkType.EVENT_TTS_START,
                     event_data={"text_length": len(text)},
                     source_station=self.name,
-                    session_id=chunk.session_id
+                    session_id=chunk.session_id,
+                    turn_id=chunk.turn_id
                 )
                 self._is_speaking = True
             
@@ -125,7 +138,8 @@ class TTSStation(Station):
                 type=ChunkType.EVENT_TTS_SENTENCE_START,
                 event_data={"text": text},
                 source_station=self.name,
-                session_id=chunk.session_id
+                session_id=chunk.session_id,
+                turn_id=chunk.turn_id
             )
             
             # Synthesize text to audio (streaming)
@@ -179,7 +193,8 @@ class TTSStation(Station):
                     type=ChunkType.EVENT_ERROR,
                     event_data={"error": str(e), "source": "TTS"},
                     source_station=self.name,
-                    session_id=chunk.session_id
+                    session_id=chunk.session_id,
+                    turn_id=chunk.turn_id
                 )
                 
                 # Send TTS stop on error
@@ -188,9 +203,17 @@ class TTSStation(Station):
                         type=ChunkType.EVENT_TTS_STOP,
                         event_data={"reason": "error"},
                         source_station=self.name,
-                        session_id=chunk.session_id
+                        session_id=chunk.session_id,
+                        turn_id=chunk.turn_id
                     )
                     self._is_speaking = False
+                    
+                    # Increment turn even on error
+                    if self.control_bus:
+                        await self.control_bus.increment_turn(source=self.name, reason="tts_error")
+                        self.logger.info("Turn incremented after TTS error")
+                    else:
+                        self.logger.warning("ControlBus not available on error, cannot increment turn")
             
             # Passthrough original text chunk
             yield chunk

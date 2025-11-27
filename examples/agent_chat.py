@@ -249,7 +249,7 @@ async def main():
         stations = [
             # Stage 1: Voice detection
             VADStation(vad_provider),
-            TurnDetectorStation(silence_threshold_ms=800),
+            TurnDetectorStation(silence_threshold_ms=100),
         ]
         
         # Stage 2: Speech recognition (if available)

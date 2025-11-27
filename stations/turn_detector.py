@@ -26,11 +26,16 @@ class TurnDetectorStation(Station):
     - If voice resumes (VAD_START) or interrupted, set cancel flag to suppress TURN_END
     - Track session state (LISTENING vs SPEAKING)
     - Send CONTROL_INTERRUPT when user speaks during bot speaking
+    
+    Turn Management:
+    - Increments turn_id when user interrupts (speaks during bot speaking)
+    - TTS station increments turn_id when bot finishes speaking
+    - This ensures turn_id changes immediately on completion/interrupt
     """
     
     def __init__(
         self,
-        silence_threshold_ms: int = 800,
+        silence_threshold_ms: int = 100,
         interrupt_enabled: bool = True,
         name: str = "TurnDetector"
     ):
@@ -38,7 +43,7 @@ class TurnDetectorStation(Station):
         Initialize turn detector station.
         
         Args:
-            silence_threshold_ms: Silence duration to consider turn ended (default: 800ms)
+            silence_threshold_ms: Silence duration to consider turn ended (default: 100ms)
             interrupt_enabled: Whether to enable interrupt detection (default: True)
             name: Station name
         """
@@ -57,11 +62,17 @@ class TurnDetectorStation(Station):
         Process chunk for turn detection and interrupt handling.
         
         Logic:
-        - On EVENT_VAD_END: Passthrough, wait for silence threshold, emit TURN_END (if not cancelled)
-        - On EVENT_VAD_START: Check if should interrupt (bot speaking), cancel waiting
+        - On EVENT_VAD_START: Check if user interrupted (bot speaking)
+          * If yes: increment turn_id immediately, send CONTROL_INTERRUPT
+          * Cancel pending turn end if any
+        - On EVENT_VAD_END: Wait for silence threshold, emit TURN_END (if not cancelled)
         - On EVENT_BOT_STARTED_SPEAKING: Set bot speaking flag
         - On EVENT_BOT_STOPPED_SPEAKING: Clear bot speaking flag
         - On CONTROL_INTERRUPT: Cancel waiting and reset
+        
+        Turn Management:
+        - Increments turn_id immediately when user interrupts bot
+        - TTS station increments turn_id when bot finishes
         """
         # Handle signals
         if chunk.is_signal():
@@ -90,11 +101,20 @@ class TurnDetectorStation(Station):
                 if self.interrupt_enabled and self._bot_is_speaking and self.control_bus:
                     self.logger.warning("User interrupt detected (speaking during bot speaking)")
                     
+                    # Increment turn immediately - user interrupted bot
+                    new_turn_id = await self.control_bus.increment_turn(
+                        source=self.name,
+                        reason="user_interrupted"
+                    )
+                    
+                    # Update chunk's turn_id to new turn
+                    chunk.turn_id = new_turn_id
+                    
                     # Send interrupt signal via ControlBus
                     await self.control_bus.send_interrupt(
                         source=self.name,
                         reason="user_speaking_during_bot_speaking",
-                        metadata={"session_id": chunk.session_id}
+                        metadata={"session_id": chunk.session_id, "new_turn_id": new_turn_id}
                     )
                     
                     # Emit CONTROL_INTERRUPT chunk for pipeline
@@ -102,7 +122,8 @@ class TurnDetectorStation(Station):
                         type=ChunkType.CONTROL_INTERRUPT,
                         command="interrupt",
                         params={"reason": "user_speaking"},
-                        session_id=chunk.session_id
+                        session_id=chunk.session_id,
+                        turn_id=new_turn_id
                     )
                 
                 # Passthrough VAD_START
@@ -111,6 +132,9 @@ class TurnDetectorStation(Station):
             
             # Voice ended - wait for silence then emit turn end
             elif chunk.type == ChunkType.EVENT_VAD_END:
+                # Wait for silence threshold and emit TURN_END
+                # Turn increment happens when bot finishes (TTS) or user interrupts (above)
+                
                 # Record T0: user_speech_end (VAD_END received)
                 self._latency_monitor.record(
                     chunk.session_id,
@@ -125,6 +149,7 @@ class TurnDetectorStation(Station):
                 # Set flag to emit TURN_END
                 self._should_emit_turn_end = True
                 self._waiting_session_id = chunk.session_id
+                waiting_turn_id = chunk.turn_id  # Capture turn_id for TURN_END event
                 
                 # Wait for silence threshold
                 try:
@@ -137,7 +162,7 @@ class TurnDetectorStation(Station):
                         # Record T1: turn_end_detected (TURN_END emitted)
                         self._latency_monitor.record(
                             chunk.session_id,
-                            chunk.turn_id,
+                            waiting_turn_id,
                             "turn_end_detected"
                         )
                         
@@ -145,7 +170,8 @@ class TurnDetectorStation(Station):
                             type=ChunkType.EVENT_TURN_END,
                             event_data={"silence_duration": self.silence_threshold},
                             source_station=self.name,
-                            session_id=chunk.session_id
+                            session_id=chunk.session_id,
+                            turn_id=waiting_turn_id
                         )
                 
                 except asyncio.CancelledError:

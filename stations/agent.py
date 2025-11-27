@@ -109,7 +109,7 @@ class AgentStation(Station):
                 yield chunk  # Passthrough
                 return
             
-            self.logger.info(f"Agent processing: '{text[:50]}...'")
+            self.logger.info(f"Agent processing: '{text[:50]}...' (chunk.turn_id={chunk.turn_id}, self.current_turn_id={self.current_turn_id})")
             
             # Passthrough input TEXT first for immediate client feedback
             # This allows ASR results to be sent immediately before Agent processing

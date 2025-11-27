@@ -22,6 +22,7 @@ class VADStation(Station):
     Output: AUDIO_RAW (passthrough) + EVENT_VAD_START/END
     
     Note: Expects PCM audio data. Transport layers handle format conversion.
+    Turn management is handled by TTS/TurnDetector stations (increment on completion/interrupt).
     """
     
     def __init__(self, vad_provider: VADProvider, name: str = "VAD"):
@@ -51,7 +52,7 @@ class VADStation(Station):
     
     async def process_chunk(self, chunk: Chunk) -> AsyncIterator[Chunk]:
         """
-        Process chunk through VAD with event-based locking.
+        Process chunk through VAD.
         
         For audio chunks:
         - Detect voice activity
@@ -99,7 +100,8 @@ class VADStation(Station):
                 type=ChunkType.EVENT_VAD_START,
                 event_data={"has_voice": True},
                 source_station=self.name,
-                session_id=chunk.session_id
+                session_id=chunk.session_id,
+                turn_id=chunk.turn_id
             )
         
         elif not has_voice and self._is_speaking:
@@ -112,7 +114,8 @@ class VADStation(Station):
                 type=ChunkType.EVENT_VAD_END,
                 event_data={"has_voice": False},
                 source_station=self.name,
-                session_id=chunk.session_id
+                session_id=chunk.session_id,
+                turn_id=chunk.turn_id
             )
         
         # Always passthrough audio

@@ -44,7 +44,7 @@ class Pipeline:
             queue_size: Maximum size for inter-station queues
         """
         self.stations = stations
-        self.control_bus = control_bus
+        self._control_bus = control_bus
         self.name = name or "Pipeline"
         self.queue_size = queue_size
         self.logger = logger.bind(pipeline=self.name)
@@ -61,10 +61,32 @@ class Pipeline:
             station_names = [s.name for s in stations]
             self.logger.info(f"[{self.name}] Created with {len(stations)} stations: {' -> '.join(station_names)}")
             
-            # Pass ControlBus to all stations
-            if self.control_bus:
-                for station in self.stations:
-                    station.control_bus = self.control_bus
+            # Pass ControlBus to all stations (if provided)
+            if self._control_bus:
+                self._propagate_control_bus()
+    
+    @property
+    def control_bus(self) -> Optional[ControlBus]:
+        """Get control bus."""
+        return self._control_bus
+    
+    @control_bus.setter
+    def control_bus(self, value: Optional[ControlBus]) -> None:
+        """
+        Set control bus and propagate to all stations.
+        
+        This ensures stations always have access to control_bus even if set after pipeline creation.
+        """
+        self._control_bus = value
+        if value:
+            self._propagate_control_bus()
+    
+    def _propagate_control_bus(self) -> None:
+        """Propagate control_bus to all stations."""
+        if self._control_bus:
+            for station in self.stations:
+                station.control_bus = self._control_bus
+            self.logger.info(f"[{self.name}] ControlBus propagated to {len(self.stations)} stations")
     
     async def run(self, input_stream: AsyncIterator[Chunk]) -> AsyncIterator[Chunk]:
         """
@@ -191,10 +213,9 @@ class Pipeline:
         self.logger.debug(f"[{self.name}] Starting station {station.name} (index {index})")
         
         try:
-            async for chunk in self._queue_iterator(input_queue):
-                # Process chunk through station
-                async for output_chunk in station.process_chunk(chunk):
-                    await output_queue.put(output_chunk)
+            # Use station.process() instead of process_chunk() to enable turn management
+            async for output_chunk in station.process(self._queue_iterator(input_queue)):
+                await output_queue.put(output_chunk)
             
             # Signal downstream that this station is done
             await output_queue.put(None)

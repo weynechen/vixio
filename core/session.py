@@ -121,6 +121,13 @@ class SessionManager:
         control_bus = ControlBus()
         self._control_buses[connection_id] = control_bus
         
+        # Inject ControlBus into Transport (for turn_id management)
+        if hasattr(self.transport, 'set_control_bus'):
+            self.transport.set_control_bus(connection_id, control_bus)
+            self.logger.info(f"Injected ControlBus into Transport for connection {connection_id[:8]}")
+        else:
+            self.logger.warning(f"Transport does not support set_control_bus for connection {connection_id[:8]}")
+        
         # Create fresh pipeline with ControlBus (support both sync and async factories)
         if self._is_async_factory:
             pipeline = await self.pipeline_factory()
@@ -336,6 +343,10 @@ class SessionManager:
             connection_id: Connection to cleanup
         """
         self.logger.debug(f"Cleaning up session for connection {connection_id[:8]}")
+        
+        # Remove ControlBus from Transport
+        if hasattr(self.transport, '_control_buses'):
+            self.transport._control_buses.pop(connection_id, None)
         
         # Cancel interrupt handler
         if connection_id in self._interrupt_tasks:
