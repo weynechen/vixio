@@ -147,11 +147,13 @@ class LatencyMonitor:
             t2 = t1
         
         # Agent TTFT (Time To First Token) - most critical for LLM
+        # network latency and llm inference latency
         if "agent_first_token" in timestamps:
             t3 = timestamps["agent_first_token"]
             latencies["agent_ttft_ms"] = round((t3 - t2) * 1000, 2)
         
         # Agent first sentence complete
+        # network latency and sentence length
         if "first_sentence_complete" in timestamps:
             t4 = timestamps["first_sentence_complete"]
             latencies["agent_sentence_ms"] = round((t4 - t2) * 1000, 2)
