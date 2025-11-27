@@ -1,0 +1,137 @@
+# VAD Service - Kubernetes Deployment with HPA
+# Supports horizontal scaling (2-10 replicas based on CPU)
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vad-service
+  namespace: vixio
+  labels:
+    app: vad-service
+    component: voice-processing
+    tier: backend
+spec:
+  replicas: 2  # Initial replicas (HPA will adjust)
+  selector:
+    matchLabels:
+      app: vad-service
+  template:
+    metadata:
+      labels:
+        app: vad-service
+        component: voice-processing
+        tier: backend
+    spec:
+      containers:
+      - name: vad
+        image: your-registry/vixio-vad-service:latest
+        imagePullPolicy: Always
+        ports:
+        - name: grpc
+          containerPort: 50051
+          protocol: TCP
+        env:
+        - name: LOG_LEVEL
+          value: "INFO"
+        resources:
+          requests:
+            cpu: "200m"
+            memory: "150Mi"
+          limits:
+            cpu: "500m"
+            memory: "200Mi"
+        livenessProbe:
+          exec:
+            command:
+            - python
+            - -c
+            - "import socket; s=socket.socket(); s.connect(('localhost', 50051)); s.close()"
+          initialDelaySeconds: 10
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          exec:
+            command:
+            - python
+            - -c
+            - "import socket; s=socket.socket(); s.connect(('localhost', 50051)); s.close()"
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 3
+      # Graceful shutdown
+      terminationGracePeriodSeconds: 30
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vad-service
+  namespace: vixio
+  labels:
+    app: vad-service
+    component: voice-processing
+spec:
+  type: ClusterIP
+  selector:
+    app: vad-service
+  ports:
+  - name: grpc
+    port: 50051
+    targetPort: 50051
+    protocol: TCP
+  sessionAffinity: None  # Load balance requests across pods
+
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: vad-hpa
+  namespace: vixio
+  labels:
+    app: vad-service
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: vad-service
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  # Scale up/down behavior
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+      - type: Percent
+        value: 100
+        periodSeconds: 60
+      - type: Pods
+        value: 2
+        periodSeconds: 60
+      selectPolicy: Max
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+      - type: Percent
+        value: 50
+        periodSeconds: 60
+      selectPolicy: Min
+
+---
+# Namespace (create if not exists)
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: vixio
+  labels:
+    name: vixio
+    environment: production
+

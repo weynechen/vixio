@@ -1,0 +1,28 @@
+[project]
+name = "vixio-sherpa-asr-service"
+version = "1.0.0"
+description = "Sherpa ONNX ASR gRPC microservice for Vixio"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24.0",
+    "grpcio>=1.60.0",
+    "grpcio-tools>=1.60.0",
+    "sherpa-onnx>=1.9.0",
+    "loguru>=0.7.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+dev-dependencies = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+]
+
+# UV package indexes (optional, for faster downloads in China)
+# [[tool.uv.index]]
+# url = "https://mirrors.aliyun.com/pypi/simple/"
+# default = true
+

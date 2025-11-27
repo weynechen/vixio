@@ -1,0 +1,60 @@
+syntax = "proto3";
+
+package asr;
+
+// ASR Service Definition
+service ASRService {
+  // Create a new ASR session
+  rpc CreateSession(CreateSessionRequest) returns (CreateSessionResponse);
+  
+  // Transcribe audio chunks to text
+  rpc Transcribe(TranscribeRequest) returns (TranscribeResponse);
+  
+  // Destroy an ASR session
+  rpc DestroySession(DestroySessionRequest) returns (Empty);
+  
+  // Get service stats
+  rpc GetStats(Empty) returns (StatsResponse);
+}
+
+// Request to create a new session
+message CreateSessionRequest {
+  string session_id = 1;
+  string language = 2;  // "auto" / "zh" / "en" / etc
+}
+
+// Response for session creation
+message CreateSessionResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+// Request to transcribe audio
+message TranscribeRequest {
+  string session_id = 1;
+  repeated bytes audio_chunks = 2;  // Opus encoded frames
+}
+
+// Response with transcription
+message TranscribeResponse {
+  string text = 1;
+  float confidence = 2;
+  string session_id = 3;
+}
+
+// Request to destroy session
+message DestroySessionRequest {
+  string session_id = 1;
+}
+
+// Empty message
+message Empty {
+}
+
+// Service statistics
+message StatsResponse {
+  int32 active_sessions = 1;
+  int64 total_requests = 2;
+  int64 total_chunks_processed = 3;
+}
+

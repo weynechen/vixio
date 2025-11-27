@@ -1,0 +1,86 @@
+syntax = "proto3";
+
+package kokoro;
+
+// Kokoro TTS Service Definition
+service TTSService {
+  // Create a new TTS session
+  rpc CreateSession(CreateSessionRequest) returns (CreateSessionResponse);
+  
+  // Synthesize text to speech (streaming)
+  rpc Synthesize(SynthesizeRequest) returns (stream SynthesizeResponse);
+  
+  // Get voice list
+  rpc GetVoices(Empty) returns (VoicesResponse);
+  
+  // Destroy a TTS session
+  rpc DestroySession(DestroySessionRequest) returns (Empty);
+  
+  // Get service stats
+  rpc GetStats(Empty) returns (StatsResponse);
+}
+
+// Request to create a new session
+message CreateSessionRequest {
+  string session_id = 1;
+  string voice = 2;          // Default: "zf_001"
+  float speed = 3;           // Default: 1.0
+  string lang = 4;           // Default: "zh"
+  int32 sample_rate = 5;     // Default: 24000
+}
+
+// Response for session creation
+message CreateSessionResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+// Request to synthesize text
+message SynthesizeRequest {
+  string session_id = 1;
+  string text = 2;
+  bool join_sentences = 3;   // Default: true
+}
+
+// Response with audio chunks
+message SynthesizeResponse {
+  bytes audio_data = 1;      // Float32 PCM audio data
+  int32 sample_rate = 2;
+  bool is_final = 3;         // Is this the last chunk?
+  string session_id = 4;
+}
+
+// Request to destroy session
+message DestroySessionRequest {
+  string session_id = 1;
+}
+
+// Empty message
+message Empty {
+}
+
+// Voice information
+message Voice {
+  string id = 1;
+  string name = 2;
+  string lang = 3;
+}
+
+// Response with available voices
+message VoicesResponse {
+  repeated Voice voices = 1;
+}
+
+// Service statistics
+message StatsResponse {
+  int32 active_sessions = 1;
+  int64 total_requests = 2;
+  repeated SessionStats sessions = 3;
+}
+
+message SessionStats {
+  string session_id = 1;
+  int64 synthesis_count = 2;
+  double age_seconds = 3;
+}
+

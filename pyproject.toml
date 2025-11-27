@@ -52,6 +52,8 @@ dependencies = [
     "PyJWT>=2.10.0",
     "psutil>=7.0.0",
     "aioconsole>=0.8.2",
+    "grpcio>=1.76.0",
+    "grpcio-tools>=1.76.0",
 ]
 
 [project.optional-dependencies]

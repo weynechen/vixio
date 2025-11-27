@@ -1,0 +1,79 @@
+# Docker Compose for Vixio Services
+# Mode: Docker (single-replica services)
+
+version: '3.8'
+
+services:
+  # Silero VAD gRPC Service
+  silero-vad-service:
+    build:
+      context: .
+      dockerfile: micro_services/silero_vad/Dockerfile
+    container_name: vixio-silero-vad-service
+    ports:
+      - "50051:50051"
+    environment:
+      - LOG_LEVEL=INFO
+    healthcheck:
+      test: ["CMD-SHELL", "python -c 'import socket; s=socket.socket(); s.connect((\"localhost\", 50051)); s.close()'"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - vixio-network
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 500M
+        reservations:
+          cpus: '0.5'
+          memory: 200M
+
+  # Main Vixio Service (placeholder - to be implemented)
+  # main:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile
+  #   container_name: vixio-main
+  #   ports:
+  #     - "8000:8000"
+  #   environment:
+  #     - ENV=docker
+  #     - CONFIG_FILE=config/providers.yaml
+  #     - OPENAI_API_KEY=${OPENAI_API_KEY}
+  #   depends_on:
+  #     vad-service:
+  #       condition: service_healthy
+  #   restart: unless-stopped
+  #   networks:
+  #     - vixio-network
+  #   deploy:
+  #     resources:
+  #       limits:
+  #         cpus: '2.0'
+  #         memory: 2G
+  #       reservations:
+  #         cpus: '1.0'
+  #         memory: 1G
+
+networks:
+  vixio-network:
+    driver: bridge
+
+# Usage:
+# ------
+# Start services:
+#   docker-compose up -d
+#
+# View logs:
+#   docker-compose logs -f vad-service
+#
+# Stop services:
+#   docker-compose down
+#
+# Rebuild:
+#   docker-compose up -d --build
+

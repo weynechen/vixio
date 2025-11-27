@@ -11,7 +11,7 @@ for format conversion (e.g., Opus -> PCM) before chunks enter the pipeline.
 from typing import AsyncIterator
 from core.station import Station
 from core.chunk import Chunk, ChunkType, AudioChunk, EventChunk, is_audio_chunk
-from providers.vad import VADProvider
+from providers.vad import VADProvider, VADEvent
 
 
 class VADStation(Station):
@@ -44,17 +44,18 @@ class VADStation(Station):
         """
         try:
             if self.vad and hasattr(self.vad, 'cleanup'):
-                self.vad.cleanup()
+                await self.vad.cleanup()
                 self.logger.debug("VAD provider cleaned up")
         except Exception as e:
             self.logger.error(f"Error cleaning up VAD provider: {e}")
     
     async def process_chunk(self, chunk: Chunk) -> AsyncIterator[Chunk]:
         """
-        Process chunk through VAD.
+        Process chunk through VAD with event-based locking.
         
         For audio chunks:
         - Detect voice activity
+        - Send VAD events (START/CHUNK/END) to provider
         - Emit VAD events on state change
         - Passthrough audio chunk
         
@@ -66,8 +67,11 @@ class VADStation(Station):
         if chunk.is_signal():
             if chunk.type == ChunkType.CONTROL_INTERRUPT:
                 # Reset VAD state on interrupt
+                if self._is_speaking:
+                    # Send END event if VAD was active
+                    await self.vad.detect(b'', VADEvent.END)
                 self._is_speaking = False
-                self.vad.reset()
+                await self.vad.reset()
                 self.logger.debug("VAD state reset by interrupt")
             # Always passthrough signals
             yield chunk
@@ -78,13 +82,18 @@ class VADStation(Station):
             yield chunk
             return
         
-        # Detect voice in PCM audio
+        # Prepare audio data
         audio_data = chunk.data if isinstance(chunk.data, bytes) else b''
-        has_voice = self.vad.detect(audio_data)
+        
+        # Detect voice activity with appropriate event
+        has_voice = await self.vad.detect(audio_data, VADEvent.CHUNK)
         
         # Emit VAD events on state change
         if has_voice and not self._is_speaking:
-            # Voice activity started
+            # Voice activity started: send START event
+            await self.vad.detect(b'', VADEvent.START)
+            self._is_speaking = True
+            
             self.logger.info("Voice activity started")
             yield EventChunk(
                 type=ChunkType.EVENT_VAD_START,
@@ -92,10 +101,12 @@ class VADStation(Station):
                 source_station=self.name,
                 session_id=chunk.session_id
             )
-            self._is_speaking = True
         
         elif not has_voice and self._is_speaking:
-            # Voice activity ended
+            # Voice activity ended: send END event
+            await self.vad.detect(b'', VADEvent.END)
+            self._is_speaking = False
+            
             self.logger.info("Voice activity ended")
             yield EventChunk(
                 type=ChunkType.EVENT_VAD_END,
@@ -103,7 +114,6 @@ class VADStation(Station):
                 source_station=self.name,
                 session_id=chunk.session_id
             )
-            self._is_speaking = False
         
         # Always passthrough audio
         yield chunk

@@ -1,0 +1,172 @@
+# Vixio Provider Configuration
+# Supports three deployment modes: dev, docker, k8s
+
+# ==============================================================================
+# Development Mode (uv run)
+# ==============================================================================
+# Local processes without Docker
+# - VAD: localhost:50051 (1 replica)
+# - ASR: localhost:50052 (1 replica)
+# 
+# Usage:
+#   ./scripts/dev/start-all.sh
+#   uv run python examples/agent_chat.py --env dev
+# ==============================================================================
+dev:
+  providers:
+    # VAD Provider (Local gRPC)
+    vad:
+      provider: silero-vad-grpc
+      config:
+        service_url: "localhost:50051"
+        threshold: 0.5
+        threshold_low: 0.2
+        frame_window_threshold: 3
+    
+    # ASR Provider (Local gRPC) - TODO: implement
+    # asr:
+    #   provider: sherpa-onnx-asr-grpc
+    #   config:
+    #     service_url: "localhost:50052"
+    #     language: "auto"
+    
+    # Agent Provider (Remote API)
+    agent:
+      provider: openai-agent
+      config:
+        api_key: ${OPENAI_API_KEY}
+        model: "gpt-4"
+        temperature: 0.7
+    
+    # TTS Provider (可选: edge-tts 或 kokoro-tts-grpc)
+    tts:
+      provider: edge-tts
+      config:
+        voice: "zh-CN-XiaoxiaoNeural"
+        rate: "+0%"
+        volume: "+0%"
+    
+    # TTS Provider (Local gRPC - Kokoro)
+    # tts:
+    #   provider: kokoro-tts-grpc
+    #   config:
+    #     service_url: "localhost:50053"
+    #     voice: "zf_001"
+    #     speed: 1.0
+    #     lang: "zh"
+    #     sample_rate: 24000
+
+# ==============================================================================
+# Docker Mode
+# ==============================================================================
+# Docker containers with Docker Compose
+# - VAD: vad-service:50051 (1 replica)
+# - ASR: asr-service:50052 (1 replica)
+# 
+# Usage:
+#   docker-compose up -d
+# ==============================================================================
+docker:
+  providers:
+    # VAD Provider (Local gRPC via Docker DNS)
+    vad:
+      provider: silero-vad-grpc
+      config:
+        service_url: "vad-service:50051"
+        threshold: 0.5
+        threshold_low: 0.2
+        frame_window_threshold: 3
+    
+    # ASR Provider (Local gRPC) - TODO: implement
+    # asr:
+    #   provider: sherpa-onnx-asr-grpc
+    #   config:
+    #     service_url: "asr-service:50052"
+    #     language: "auto"
+    
+    # Agent Provider (Remote API)
+    agent:
+      provider: openai-agent
+      config:
+        api_key: ${OPENAI_API_KEY}
+        model: "gpt-4"
+        temperature: 0.7
+    
+    # TTS Provider (Remote API)
+    tts:
+      provider: edge-tts
+      config:
+        voice: "zh-CN-XiaoxiaoNeural"
+        rate: "+0%"
+        volume: "+0%"
+
+# ==============================================================================
+# Kubernetes Mode
+# ==============================================================================
+# K8s with HPA (Horizontal Pod Autoscaling)
+# - VAD: vad-service:50051 (2-10 replicas, auto-scaled)
+# - ASR: asr-service:50052 (2-10 replicas, auto-scaled)
+# 
+# Usage:
+#   kubectl apply -f k8s/
+# ==============================================================================
+k8s:
+  providers:
+    # VAD Provider (Local gRPC via K8s Service)
+    vad:
+      provider: silero-vad-grpc
+      config:
+        service_url: "vad-service:50051"
+        threshold: 0.5
+        threshold_low: 0.2
+        frame_window_threshold: 3
+    
+    # ASR Provider (Local gRPC) - TODO: implement
+    # asr:
+    #   provider: sherpa-onnx-asr-grpc
+    #   config:
+    #     service_url: "asr-service:50052"
+    #     language: "auto"
+    
+    # Agent Provider (Remote API)
+    agent:
+      provider: openai-agent
+      config:
+        api_key: ${OPENAI_API_KEY}
+        model: "gpt-4"
+        temperature: 0.7
+    
+    # TTS Provider (Remote API)
+    tts:
+      provider: edge-tts
+      config:
+        voice: "zh-CN-XiaoxiaoNeural"
+        rate: "+0%"
+        volume: "+0%"
+
+# ==============================================================================
+# Notes:
+# ==============================================================================
+# 1. Environment Variables:
+#    - Use ${VAR_NAME} syntax for environment variable substitution
+#    - Example: api_key: ${OPENAI_API_KEY}
+# 
+# 2. Provider Types:
+#    - Local (is_local=True): Self-hosted services (VAD, ASR)
+#      - Requires our own deployment and scaling
+#      - Uses gRPC for inter-service communication
+#    - Remote (is_local=False): Cloud APIs (OpenAI, Edge TTS)
+#      - Scaling handled by cloud provider
+#      - Uses HTTP/REST APIs
+# 
+# 3. Deployment Differences:
+#    - Dev: Single-instance services on localhost
+#    - Docker: Single-instance services with Docker DNS
+#    - K8s: Multi-replica services with K8s load balancing
+# 
+# 4. Concurrency Model:
+#    - Stateful providers (VAD): VAD-cycle locking (START→END)
+#    - Stateless providers (ASR): Chunk-level concurrency
+#    - K8s HPA: Auto-scale based on CPU utilization
+# ==============================================================================
+
