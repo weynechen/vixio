@@ -3,7 +3,10 @@
 import grpc
 import warnings
 
-from . import tts_pb2 as tts__pb2
+try:
+    from . import tts_pb2 as tts__pb2
+except ImportError:
+    import tts_pb2 as tts__pb2
 
 GRPC_GENERATED_VERSION = '1.76.0'
 GRPC_VERSION = grpc.__version__

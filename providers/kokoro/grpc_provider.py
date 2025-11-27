@@ -48,8 +48,7 @@ class LocalKokoroTTSProvider(TTSProvider):
         voice: str = "zf_001",
         speed: float = 1.0,
         lang: str = "zh",
-        sample_rate: int = 24000,
-        name: str = "KokoroTTS-gRPC"
+        sample_rate: int = 16000
     ):
         """
         Initialize Local Kokoro TTS provider.
@@ -63,8 +62,9 @@ class LocalKokoroTTSProvider(TTSProvider):
             speed: Speech speed multiplier
             lang: Language code
             sample_rate: Audio sample rate
-            name: Provider name
         """
+        # Use registered name from decorator
+        name = getattr(self.__class__, '_registered_name', self.__class__.__name__)
         super().__init__(name=name)
         
         self.service_url = service_url
@@ -113,7 +113,7 @@ class LocalKokoroTTSProvider(TTSProvider):
             },
             "sample_rate": {
                 "type": "int",
-                "default": 24000,
+                "default": 16000,
                 "description": "Audio sample rate"
             }
         }
@@ -149,48 +149,7 @@ class LocalKokoroTTSProvider(TTSProvider):
     async def synthesize(
         self,
         text: str
-    ) -> tuple[int, np.ndarray]:
-        """
-        Synthesize text to speech (non-streaming).
-        
-        Args:
-            text: Text to synthesize
-            
-        Returns:
-            Tuple of (sample_rate, audio_data)
-        """
-        if not self._client or not self.session_id:
-            raise RuntimeError("TTS provider not initialized. Call initialize() first.")
-        
-        try:
-            audio_chunks = []
-            sample_rate = self.sample_rate
-            
-            async for sr, audio_data, is_final in self._client.synthesize(
-                session_id=self.session_id,
-                text=text,
-                join_sentences=True
-            ):
-                if is_final:
-                    break
-                
-                sample_rate = sr
-                audio_chunks.append(audio_data)
-            
-            if audio_chunks:
-                combined_audio = np.concatenate(audio_chunks)
-                return (sample_rate, combined_audio)
-            else:
-                return (sample_rate, np.array([], dtype=np.float32))
-        
-        except Exception as e:
-            self.logger.error(f"TTS synthesis failed: {e}")
-            raise
-    
-    async def stream_synthesize(
-        self,
-        text: str
-    ) -> AsyncGenerator[tuple[int, np.ndarray], None]:
+    ) -> AsyncGenerator[bytes, None]:
         """
         Synthesize text to speech (streaming).
         
@@ -198,7 +157,46 @@ class LocalKokoroTTSProvider(TTSProvider):
             text: Text to synthesize
             
         Yields:
-            Tuple of (sample_rate, audio_chunk)
+            Audio bytes (PCM format, 16-bit, mono)
+        """
+        if not self._client or not self.session_id:
+            raise RuntimeError("TTS provider not initialized. Call initialize() first.")
+        
+        try:
+            async for sample_rate, audio_data, is_final in self._client.synthesize(
+                session_id=self.session_id,
+                text=text,
+                join_sentences=True
+            ):
+                if is_final:
+                    break
+                
+                # Convert float32 audio to int16 PCM bytes
+                # audio_data is np.ndarray with shape (N,) and dtype float32 in range [-1, 1]
+                audio_int16 = (audio_data * 32767).astype(np.int16)
+                audio_bytes = audio_int16.tobytes()
+                
+                yield audio_bytes
+        
+        except Exception as e:
+            self.logger.error(f"TTS synthesis failed: {e}")
+            raise
+    
+    async def synthesize_raw(
+        self,
+        text: str
+    ) -> AsyncGenerator[tuple[int, np.ndarray], None]:
+        """
+        Synthesize text to speech (streaming, raw audio format).
+        
+        This is a helper method that returns raw float32 audio with sample rate.
+        For the standard interface, use synthesize() which returns PCM bytes.
+        
+        Args:
+            text: Text to synthesize
+            
+        Yields:
+            Tuple of (sample_rate, audio_chunk as float32 numpy array)
         """
         if not self._client or not self.session_id:
             raise RuntimeError("TTS provider not initialized. Call initialize() first.")
@@ -217,6 +215,16 @@ class LocalKokoroTTSProvider(TTSProvider):
         except Exception as e:
             self.logger.error(f"TTS stream synthesis failed: {e}")
             raise
+    
+    def cancel(self) -> None:
+        """
+        Cancel ongoing synthesis.
+        
+        For gRPC-based TTS, cancellation is handled by the client closing
+        the stream or the caller stopping iteration. This is a no-op
+        as the gRPC stream is automatically cleaned up.
+        """
+        self.logger.debug("TTS synthesis cancellation requested (gRPC stream will be closed)")
     
     async def cleanup(self) -> None:
         """

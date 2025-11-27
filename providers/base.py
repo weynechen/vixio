@@ -64,12 +64,14 @@ class BaseProvider(ABC):
         """
         pass
     
+    @classmethod
     @abstractmethod
-    def get_config_schema(self) -> Dict[str, Any]:
+    def get_config_schema(cls) -> Dict[str, Any]:
         """
         Return configuration schema for this provider.
         
         Used for validation and documentation generation.
+        This is a class method because schema is class-level information.
         
         Returns:
             Dictionary describing required/optional config parameters

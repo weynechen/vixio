@@ -87,15 +87,19 @@ def register_provider(name: str):
     Decorator for registering providers.
     
     Usage:
-        @register_provider("silero-vad")
+        @register_provider("silero-vad-grpc")
         class LocalSileroVADProvider(VADProvider):
             ...
     
+    The registered name will also be used as the provider's instance name.
+    
     Args:
-        name: Provider unique identifier
+        name: Provider unique identifier (used in config files and as instance name)
     """
     def decorator(provider_class: Type[BaseProvider]):
         ProviderRegistry.register(name, provider_class)
+        # Store registered name on class for auto-naming
+        provider_class._registered_name = name
         return provider_class
     return decorator
 

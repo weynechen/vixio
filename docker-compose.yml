@@ -31,6 +31,64 @@ services:
         reservations:
           cpus: '0.5'
           memory: 200M
+  
+  # Sherpa ONNX ASR gRPC Service
+  sherpa-asr-service:
+    build:
+      context: .
+      dockerfile: micro_services/sherpa_onnx_local/Dockerfile
+    container_name: vixio-sherpa-asr-service
+    ports:
+      - "50052:50052"
+    volumes:
+      - ./models:/app/models:ro  # Mount models directory (read-only)
+    environment:
+      - LOG_LEVEL=INFO
+    healthcheck:
+      test: ["CMD-SHELL", "python -c 'import socket; s=socket.socket(); s.connect((\"localhost\", 50052)); s.close()'"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+    networks:
+      - vixio-network
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 1G
+        reservations:
+          cpus: '1.0'
+          memory: 400M
+  
+  # Kokoro TTS gRPC Service
+  kokoro-tts-service:
+    build:
+      context: .
+      dockerfile: micro_services/kokoro/Dockerfile
+    container_name: vixio-kokoro-tts-service
+    ports:
+      - "50053:50053"
+    environment:
+      - LOG_LEVEL=INFO
+    healthcheck:
+      test: ["CMD-SHELL", "python -c 'import socket; s=socket.socket(); s.connect((\"localhost\", 50053)); s.close()'"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+    networks:
+      - vixio-network
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '1.0'
+          memory: 1G
 
   # Main Vixio Service (placeholder - to be implemented)
   # main:

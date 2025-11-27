@@ -17,11 +17,27 @@ uv run python -m grpc_tools.protoc \
 
 echo "✅ Proto file compiled"
 
-# Fix imports to use relative imports
+# Fix imports to support both package and script mode
 echo "Fixing imports..."
-sed -i 's/^import vad_pb2 as vad__pb2$/from . import vad_pb2 as vad__pb2/' vad_pb2_grpc.py
+# Replace absolute import with try-except pattern
+python3 << 'EOF'
+with open('vad_pb2_grpc.py', 'r') as f:
+    content = f.read()
+
+# Replace import line with try-except pattern
+content = content.replace(
+    'import vad_pb2 as vad__pb2',
+    '''try:
+    from . import vad_pb2 as vad__pb2
+except ImportError:
+    import vad_pb2 as vad__pb2'''
+)
+
+with open('vad_pb2_grpc.py', 'w') as f:
+    f.write(content)
+EOF
 
 echo "Generated files:"
 echo "  - vad_pb2.py"
-echo "  - vad_pb2_grpc.py (fixed imports)"
+echo "  - vad_pb2_grpc.py"
 

@@ -48,7 +48,7 @@ class ProviderFactory:
             )
         
         # Validate config against schema
-        schema = provider_class.get_config_schema(provider_class)
+        schema = provider_class.get_config_schema()
         _validate_config(config, schema, provider_name)
         
         # Create instance
@@ -168,7 +168,10 @@ def _expand_env_vars(config: Dict) -> Dict:
     """
     Expand environment variables in config values.
     
-    Supports ${VAR_NAME} syntax.
+    Supports:
+    - ${VAR_NAME} - use environment variable (error if not set)
+    - ${VAR_NAME:default} - use default if not set
+    - ${VAR_NAME:} - use empty string if not set (no warning)
     
     Args:
         config: Configuration dictionary
@@ -180,18 +183,30 @@ def _expand_env_vars(config: Dict) -> Dict:
     import re
     
     expanded = {}
-    env_var_pattern = re.compile(r'\$\{([^}]+)\}')
+    # Pattern matches ${VAR} or ${VAR:default}
+    env_var_pattern = re.compile(r'\$\{([^:}]+)(?::([^}]*))?\}')
     
     for key, value in config.items():
         if isinstance(value, str):
-            # Replace ${VAR} with environment variable
+            # Replace ${VAR} or ${VAR:default} with environment variable
             def replace_env(match):
                 var_name = match.group(1)
+                default_value = match.group(2)  # None if no default specified
+                
                 env_value = os.getenv(var_name)
-                if env_value is None:
-                    logger.warning(f"Environment variable {var_name} not set, using empty string")
-                    return ""
-                return env_value
+                
+                if env_value is not None:
+                    # Environment variable is set
+                    return env_value
+                elif default_value is not None:
+                    # Use default value (can be empty string)
+                    if default_value:
+                        logger.debug(f"Environment variable {var_name} not set, using default: {default_value}")
+                    return default_value
+                else:
+                    # No default, variable must be set
+                    logger.error(f"Required environment variable {var_name} not set!")
+                    raise ValueError(f"Required environment variable {var_name} not set")
             
             expanded[key] = env_var_pattern.sub(replace_env, value)
         elif isinstance(value, dict):

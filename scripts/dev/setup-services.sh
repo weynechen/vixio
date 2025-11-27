@@ -29,6 +29,13 @@ cd ../..
 echo "✅ Sherpa ONNX ASR dependencies installed"
 
 echo ""
+echo "📦 Installing Sherpa ONNX ASR service dependencies..."
+cd micro_services/sherpa_onnx_local
+uv sync
+cd ../..
+echo "✅ Sherpa ONNX ASR dependencies installed"
+
+echo ""
 echo "📦 Installing Kokoro TTS service dependencies..."
 cd micro_services/kokoro
 uv sync
@@ -41,6 +48,9 @@ echo "✅ All microservice dependencies installed!"
 echo "="*60
 echo ""
 echo "🎯 Next steps:"
-echo "   ./scripts/dev/start-all.sh"
+echo "   uv run python examples/agent_chat.py --env dev"
+echo ""
+echo "Note: ASR service requires model files in models/ directory"
+echo "      Download: https://github.com/k2-fsa/sherpa-onnx/releases"
 echo ""
 

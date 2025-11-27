@@ -41,8 +41,7 @@ class LocalSileroVADProvider(VADProvider):
         service_url: str,
         threshold: float = 0.5,
         threshold_low: float = 0.2,
-        frame_window_threshold: int = 3,
-        name: str = "SileroVAD-gRPC"
+        frame_window_threshold: int = 3
     ):
         """
         Initialize Local Silero VAD provider.
@@ -55,8 +54,9 @@ class LocalSileroVADProvider(VADProvider):
             threshold: Voice detection threshold (0.0-1.0)
             threshold_low: Lower threshold for hysteresis
             frame_window_threshold: Minimum frames to confirm voice
-            name: Provider name
         """
+        # Use registered name from decorator
+        name = getattr(self.__class__, '_registered_name', self.__class__.__name__)
         super().__init__(name=name)
         
         self.service_url = service_url

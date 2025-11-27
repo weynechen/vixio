@@ -23,38 +23,40 @@ dev:
         threshold_low: 0.2
         frame_window_threshold: 3
     
-    # ASR Provider (Local gRPC) - TODO: implement
-    # asr:
-    #   provider: sherpa-onnx-asr-grpc
-    #   config:
-    #     service_url: "localhost:50052"
-    #     language: "auto"
+    # ASR Provider (Local gRPC)
+    asr:
+      provider: sherpa-onnx-asr-grpc
+      config:
+        service_url: "localhost:50052"
+        language: "auto"
     
     # Agent Provider (Remote API)
     agent:
       provider: openai-agent
       config:
-        api_key: ${OPENAI_API_KEY}
-        model: "gpt-4"
+        api_key: ${API_KEY}
+        model: ${LITELLM_MODEL:deepseek/deepseek-chat}
+        base_url: ${BASE_URL:}
         temperature: 0.7
+        max_tokens: 2000
     
     # TTS Provider (可选: edge-tts 或 kokoro-tts-grpc)
-    tts:
-      provider: edge-tts
-      config:
-        voice: "zh-CN-XiaoxiaoNeural"
-        rate: "+0%"
-        volume: "+0%"
+    # tts:
+    #   provider: edge-tts
+    #   config:
+    #     voice: "zh-CN-XiaoxiaoNeural"
+    #     rate: "+0%"
+    #     volume: "+0%"
     
     # TTS Provider (Local gRPC - Kokoro)
-    # tts:
-    #   provider: kokoro-tts-grpc
-    #   config:
-    #     service_url: "localhost:50053"
-    #     voice: "zf_001"
-    #     speed: 1.0
-    #     lang: "zh"
-    #     sample_rate: 24000
+    tts:
+      provider: kokoro-tts-grpc
+      config:
+        service_url: "localhost:50053"
+        voice: "zf_001"
+        speed: 1.0
+        lang: "zh"
+        sample_rate: 16000
 
 # ==============================================================================
 # Docker Mode
@@ -72,25 +74,27 @@ docker:
     vad:
       provider: silero-vad-grpc
       config:
-        service_url: "vad-service:50051"
+        service_url: "silero-vad-service:50051"
         threshold: 0.5
         threshold_low: 0.2
         frame_window_threshold: 3
     
-    # ASR Provider (Local gRPC) - TODO: implement
-    # asr:
-    #   provider: sherpa-onnx-asr-grpc
-    #   config:
-    #     service_url: "asr-service:50052"
-    #     language: "auto"
+    # ASR Provider (Local gRPC via Docker DNS)
+    asr:
+      provider: sherpa-onnx-asr-grpc
+      config:
+        service_url: "sherpa-asr-service:50052"
+        language: "auto"
     
     # Agent Provider (Remote API)
     agent:
       provider: openai-agent
       config:
-        api_key: ${OPENAI_API_KEY}
-        model: "gpt-4"
+        api_key: ${API_KEY}
+        model: ${LITELLM_MODEL:deepseek/deepseek-chat}
+        base_url: ${BASE_URL:}
         temperature: 0.7
+        max_tokens: 2000
     
     # TTS Provider (Remote API)
     tts:
@@ -116,25 +120,27 @@ k8s:
     vad:
       provider: silero-vad-grpc
       config:
-        service_url: "vad-service:50051"
+        service_url: "silero-vad-service:50051"
         threshold: 0.5
         threshold_low: 0.2
         frame_window_threshold: 3
     
-    # ASR Provider (Local gRPC) - TODO: implement
-    # asr:
-    #   provider: sherpa-onnx-asr-grpc
-    #   config:
-    #     service_url: "asr-service:50052"
-    #     language: "auto"
+    # ASR Provider (Local gRPC via K8s Service)
+    asr:
+      provider: sherpa-onnx-asr-grpc
+      config:
+        service_url: "sherpa-asr-service:50052"
+        language: "auto"
     
     # Agent Provider (Remote API)
     agent:
       provider: openai-agent
       config:
-        api_key: ${OPENAI_API_KEY}
-        model: "gpt-4"
+        api_key: ${API_KEY}
+        model: ${LITELLM_MODEL:deepseek/deepseek-chat}
+        base_url: ${BASE_URL:}
         temperature: 0.7
+        max_tokens: 2000
     
     # TTS Provider (Remote API)
     tts:

@@ -4,6 +4,7 @@ OpenAI Agent provider implementation using OpenAI Agents framework and LiteLLM
 
 from typing import Any, AsyncIterator, Dict, List, Optional
 from providers.agent import AgentProvider, Tool
+from providers.registry import register_provider
 
 
 try:
@@ -15,6 +16,7 @@ except ImportError:
     AGENTS_AVAILABLE = False
 
 
+@register_provider("openai-agent")
 class OpenAIAgentProvider(AgentProvider):
     """
     OpenAI Agent provider implementation.
@@ -23,6 +25,21 @@ class OpenAIAgentProvider(AgentProvider):
     Delegates conversation management, memory, and tool execution to the framework.
     """
     
+    @property
+    def is_local(self) -> bool:
+        """This is a remote (cloud API) service"""
+        return False
+    
+    @property
+    def is_stateful(self) -> bool:
+        """Agent is stateful (maintains conversation history)"""
+        return True
+    
+    @property
+    def category(self) -> str:
+        """Provider category"""
+        return "agent"
+    
     def __init__(
         self,
         api_key: str,
@@ -30,7 +47,6 @@ class OpenAIAgentProvider(AgentProvider):
         base_url: Optional[str] = None,
         temperature: float = 0.7,
         max_tokens: int = 2000,
-        name: str = "OpenAIAgent",
         timeout: int = 300,
         top_p: Optional[float] = None,
         frequency_penalty: Optional[float] = None,
@@ -44,7 +60,6 @@ class OpenAIAgentProvider(AgentProvider):
             base_url: Optional custom base URL (for Azure, OpenAI-compatible APIs, etc.)
             temperature: Response randomness (0.0-2.0)
             max_tokens: Maximum tokens in response
-            name: Provider name
             timeout: Request timeout in seconds
             top_p: Nucleus sampling parameter (optional)
             frequency_penalty: Frequency penalty parameter (optional)
@@ -54,6 +69,9 @@ class OpenAIAgentProvider(AgentProvider):
                 "OpenAI Agents framework not available. "
                 "Please install: pip install agents litellm"
             )
+        
+        # Use registered name from decorator
+        name = getattr(self.__class__, '_registered_name', self.__class__.__name__)
         
         config = {
             "api_key": api_key,
@@ -85,6 +103,52 @@ class OpenAIAgentProvider(AgentProvider):
             f"OpenAI Agent provider created: model={model}, "
             f"temperature={temperature}, max_tokens={max_tokens}"
         )
+    
+    @classmethod
+    def get_config_schema(cls) -> Dict[str, Any]:
+        """Return configuration schema"""
+        return {
+            "api_key": {
+                "type": "string",
+                "required": True,
+                "description": "API key for OpenAI or compatible service"
+            },
+            "model": {
+                "type": "string",
+                "default": "deepseek/deepseek-chat",
+                "description": "Model name (e.g., gpt-4, deepseek/deepseek-chat)"
+            },
+            "base_url": {
+                "type": "string",
+                "default": None,
+                "description": "Optional custom base URL (for Azure, OpenAI-compatible APIs)"
+            },
+            "temperature": {
+                "type": "float",
+                "default": 0.7,
+                "description": "Response randomness (0.0-2.0)"
+            },
+            "max_tokens": {
+                "type": "int",
+                "default": 2000,
+                "description": "Maximum tokens in response"
+            },
+            "timeout": {
+                "type": "int",
+                "default": 300,
+                "description": "Request timeout in seconds"
+            },
+            "top_p": {
+                "type": "float",
+                "default": None,
+                "description": "Nucleus sampling parameter (optional)"
+            },
+            "frequency_penalty": {
+                "type": "float",
+                "default": None,
+                "description": "Frequency penalty parameter (optional)"
+            }
+        }
     
     async def initialize(
         self,
@@ -192,11 +256,11 @@ class OpenAIAgentProvider(AgentProvider):
         # previous_response_id starts a fresh conversation
         self.logger.info("Conversation reset (next run will start fresh)")
     
-    async def shutdown(self) -> None:
+    async def cleanup(self) -> None:
         """
-        Shutdown Agent and cleanup resources.
+        Cleanup Agent and resources.
         """
-        self.logger.info("Shutting down OpenAI Agent")
+        self.logger.info("Cleaning up OpenAI Agent")
         # Agent framework doesn't require explicit cleanup
         # But we can clear references
         self.agent = None

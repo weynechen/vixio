@@ -12,15 +12,7 @@ dependencies = [
     "loguru>=0.7.0",
 ]
 
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
 
-[tool.uv]
-dev-dependencies = [
-    "pytest>=7.0.0",
-    "pytest-asyncio>=0.21.0",
-]
 
 # UV package indexes (optional, for faster downloads in China)
 # [[tool.uv.index]]

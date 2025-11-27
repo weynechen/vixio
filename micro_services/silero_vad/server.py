@@ -10,7 +10,7 @@ This allows multiple sessions to interleave their non-VAD periods,
 maximizing CPU utilization on a single service instance.
 """
 
-import time
+import time,sys
 import threading
 import asyncio
 from dataclasses import dataclass, field
@@ -21,8 +21,13 @@ import numpy as np
 import grpc
 from loguru import logger
 
-# Import proto files from current package
-from . import vad_pb2, vad_pb2_grpc
+# Import proto files - support both package and script mode
+try:
+    # When run as package (e.g., from agent_chat.py)
+    from . import vad_pb2, vad_pb2_grpc
+except ImportError:
+    # When run as script (e.g., uv run server.py)
+    import vad_pb2, vad_pb2_grpc
 
 
 @dataclass
@@ -346,6 +351,16 @@ def main():
         sys.stderr,
         format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan> - <level>{message}</level>",
         level=args.log_level
+    )
+
+    logger.add(
+        "logs/silero_vad.log",
+        format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function}:{line} | {message}",
+        level=args.log_level,
+        rotation="100 MB",
+        retention="30 days",
+        compression="zip",  # Compress rotated logs
+        encoding="utf-8",
     )
     
     # Start server

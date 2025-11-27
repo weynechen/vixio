@@ -21,12 +21,16 @@ micro_services/
 │   ├── Dockerfile          # Docker镜像
 │   └── __init__.py
 │
-├── sherpa_onnx_local/      # Sherpa ONNX ASR微服务
+├── sherpa_onnx_local/      # Sherpa ONNX ASR微服务 ✨
 │   ├── pyproject.toml      # ✨ 独立依赖管理
 │   ├── asr.proto           # Proto定义
 │   ├── asr_pb2.py
 │   ├── asr_pb2_grpc.py
 │   ├── compile_proto.sh
+│   ├── server.py           # gRPC服务端
+│   ├── client.py           # gRPC客户端
+│   ├── Dockerfile
+│   ├── README.md
 │   └── __init__.py
 │
 ├── kokoro/                 # Kokoro TTS微服务

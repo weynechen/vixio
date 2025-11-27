@@ -4,6 +4,16 @@ Example 3: Complete voice conversation with AI Agent
 A full voice chat pipeline with VAD, ASR, Agent, sentence splitting, and TTS.
 Demonstrates the complete integration of all components including LLM.
 
+Usage:
+    # Development mode (with local microservices)
+    uv run python examples/agent_chat.py --env dev
+    
+    # Docker mode
+    uv run python examples/agent_chat.py --env docker
+    
+    # Kubernetes mode
+    uv run python examples/agent_chat.py --env k8s
+
 Logger Configuration:
     Logger is auto-configured on import with INFO level, logging to logs/ directory.
     To customize, call configure_logger() before other imports:
@@ -14,6 +24,8 @@ Logger Configuration:
 
 import asyncio
 import os
+import argparse
+from pathlib import Path
 from loguru import logger
 from core.pipeline import Pipeline
 from core.session import SessionManager
@@ -27,14 +39,9 @@ from stations import (
     SentenceSplitterStation,
     TTSStation
 )
-from providers import (
-    # Use regular providers to ensure state isolation in concurrent scenarios
-    SileroVADProvider,
-    SherpaOnnxLocalProvider,
-    EdgeTTSProvider,
-    OpenAIAgentProvider
-)
+from providers.factory import ProviderFactory
 from utils import get_local_ip
+from utils.service_manager import ServiceManager
 
 import dotenv
 
@@ -55,63 +62,101 @@ async def main():
     7. TTS synthesizes each sentence to audio
     8. Audio sent back to client via WebSocket
     """
-    logger.info("=== Voice Chat with AI Agent ===")
-    
-    # Step 1: Prepare provider configurations
-    logger.info("Preparing provider configurations...")
-    
-    # VAD configuration
-    vad_config = {
-        "threshold": 0.5,
-        "min_speech_duration_ms": 250,
-    }
-    
-    # ASR configuration
-    model_path = os.path.join(
-        os.path.dirname(__file__),
-        "../models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17"
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser(description="Vixio AI Agent Voice Chat Server")
+    parser.add_argument(
+        "--env",
+        type=str,
+        default="dev",
+        choices=["dev", "docker", "k8s"],
+        help="Deployment environment (default: dev)"
     )
-    asr_config = None
-    if not os.path.exists(model_path):
-        logger.warning(f"ASR model not found at {model_path}")
-        logger.warning("ASR will be disabled for this session")
-    else:
-        asr_config = {
-            "model_path": model_path,
-            "sample_rate": 16000,
-        }
+    parser.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        help="Path to provider config file (default: config/providers.yaml)"
+    )
+    args = parser.parse_args()
     
-    # Agent configuration (OpenAI)
-    api_key = os.getenv("API_KEY")
-    base_url = os.getenv("BASE_URL")  # Optional, for custom endpoints
+    logger.info("=== Voice Chat with AI Agent ===")
+    logger.info(f"Environment: {args.env}")
     
-    if not api_key:
-        logger.error("API_KEY environment variable not set!")
-        logger.info("Please set: export API_KEY='your-api-key'")
+    # Step 0: In dev mode, auto-start local microservices
+    service_manager = None
+    if args.env == "dev":
+        logger.info("")
+        logger.info("🚀 Dev Mode: Auto-managing local microservices...")
+        logger.info("")
+        
+        service_manager = ServiceManager(
+            config_path=args.config or os.path.join(
+                Path(__file__).parent.parent,
+                "config/providers.yaml"
+            ),
+            env=args.env
+        )
+        
+        # Start services
+        if not service_manager.start_all():
+            logger.error("Failed to start microservices")
+            return
+        
+        # Print service info
+        service_manager.print_service_info()
+        logger.info("")
+    
+    # Step 1: Load provider configurations from file
+    logger.info("Loading provider configurations...")
+    
+    config_path = args.config or os.path.join(
+        Path(__file__).parent.parent,
+        "config/providers.yaml"
+    )
+    
+    if not os.path.exists(config_path):
+        logger.error(f"Config file not found: {config_path}")
         return
     
-    agent_config = {
-        "api_key": api_key,
-        "model": os.getenv("LITELLM_MODEL", "deepseek/deepseek-chat"),
-        "base_url": base_url,
-        "temperature": 0.7,
-        "max_tokens": 2000,
-    }
+    try:
+        # Load all providers from config
+        providers_dict = ProviderFactory.create_from_config_file(
+            config_path=config_path,
+            env=args.env
+        )
+        
+        logger.info(f"✓ Loaded providers: {list(providers_dict.keys())}")
+        
+        # Check required providers
+        if "vad" not in providers_dict:
+            logger.error("VAD provider not configured!")
+            return
+        
+        if "agent" not in providers_dict:
+            logger.error("Agent provider not configured!")
+            return
+        
+        if "tts" not in providers_dict:
+            logger.error("TTS provider not configured!")
+            return
+        
+        # ASR is optional (for testing)
+        has_asr = "asr" in providers_dict
+        if not has_asr:
+            logger.warning("ASR provider not configured - text input only mode")
+        
+    except Exception as e:
+        logger.error(f"Failed to load provider configurations: {e}")
+        return
     
+    # Agent system prompt
     agent_system_prompt = (
         "You are a helpful AI voice assistant. "
         "Keep your responses concise and conversational, "
         "as they will be spoken aloud to the user."
     )
     
-    # TTS configuration
-    tts_config = {
-        "voice": "zh-CN-XiaoxiaoNeural",
-        "rate": "+0%",
-        "volume": "+0%",
-    }
-    
-    logger.info("✓ Configurations prepared")
+    logger.info("✓ Configurations loaded")
     
     # Step 2: Create transport
     # WebSocket endpoint: ws://0.0.0.0:8000/xiaozhi/v1/
@@ -127,31 +172,40 @@ async def main():
         """
         Async factory function to create a fresh pipeline for each connection.
         
-        This ensures each client has completely isolated provider instances,
-        preventing state pollution between concurrent sessions.
+        Each session gets NEW provider instances created from the config,
+        ensuring complete isolation between concurrent sessions.
+        
+        For gRPC providers (VAD, ASR, TTS):
+        - Each instance creates its own gRPC client connection
+        - Server-side session isolation via session IDs
+        - VAD-cycle locking for stateful operations
         
         Returns:
             Pipeline: New pipeline with independent provider instances
         """
         logger.debug("Creating new pipeline with isolated providers...")
         
-        # Create independent provider instances for this session
-        # Each session gets its own VAD provider with completely isolated state and model
-        # This ensures thread-safety and prevents state pollution in concurrent scenarios
-        vad_provider = SileroVADProvider(**vad_config)
+        # Create fresh provider instances for this session
+        # Load providers from config again to get new instances
+        session_providers = ProviderFactory.create_from_config_file(
+            config_path=config_path,
+            env=args.env
+        )
         
-        # Each session gets its own ASR provider with isolated state and model
-        # This ensures accurate recognition without cross-session interference
-        asr_provider = None
-        if asr_config:
-            asr_provider = SherpaOnnxLocalProvider(**asr_config)
+        vad_provider = session_providers["vad"]
+        await vad_provider.initialize()
         
-        # Each session gets its own Agent provider with isolated conversation history
-        agent_provider = OpenAIAgentProvider(**agent_config)
+        asr_provider = session_providers.get("asr")
+        if asr_provider:
+            await asr_provider.initialize()
+        
+        agent_provider = session_providers["agent"]
         await agent_provider.initialize(system_prompt=agent_system_prompt)
         
-        # Each session gets its own TTS provider (stateless but good practice)
-        tts_provider = EdgeTTSProvider(**tts_config)
+        tts_provider = session_providers["tts"]
+        # TTS providers may not need explicit initialization
+        if hasattr(tts_provider, "initialize"):
+            await tts_provider.initialize()
         
         # Build station list
         stations = [
@@ -195,6 +249,13 @@ async def main():
     logger.info("=" * 70)
     logger.info("Vixio AI Agent Voice Chat Server")
     logger.info("=" * 70)
+    logger.info(f"Environment: {args.env.upper()}")
+    logger.info(f"")
+    logger.info(f"Providers:")
+    for category, provider in providers_dict.items():
+        provider_type = "Local (gRPC)" if provider.is_local else "Remote (API)"
+        logger.info(f"  - {category.upper():6s}: {provider.name:20s} [{provider_type}]")
+    logger.info("")
     logger.info(f"WebSocket endpoint:")
     logger.info(f"  ws://{local_ip}:{transport.port}{transport.websocket_path}")
     logger.info(f"")
@@ -205,8 +266,31 @@ async def main():
     logger.info(f"  - OTA interface:   http://{local_ip}:{transport.port}/xiaozhi/ota/")
     logger.info(f"  - Vision analysis: http://{local_ip}:{transport.port}/mcp/vision/explain")
     logger.info("")
-    logger.info("Pipeline: VAD -> TurnDetector -> ASR -> TextAggregator -> Agent -> SentenceSplitter -> TTS")
+    
+    # Build pipeline description
+    pipeline_stages = ["VAD", "TurnDetector"]
+    if has_asr:
+        pipeline_stages.extend(["ASR", "TextAggregator"])
+    pipeline_stages.extend(["Agent", "SentenceSplitter", "TTS"])
+    logger.info(f"Pipeline: {' -> '.join(pipeline_stages)}")
     logger.info("=" * 70)
+    
+    # Show deployment-specific notes
+    if args.env == "dev":
+        logger.info("📌 Dev Mode Notes:")
+        logger.info("   - Ensure microservices are running: ./scripts/dev/start-all.sh")
+        logger.info("   - VAD service: localhost:50051")
+        if has_asr:
+            logger.info("   - ASR service: localhost:50052")
+        logger.info("")
+    elif args.env == "docker":
+        logger.info("📌 Docker Mode Notes:")
+        logger.info("   - Ensure Docker services are running: docker-compose up -d")
+        logger.info("")
+    elif args.env == "k8s":
+        logger.info("📌 K8s Mode Notes:")
+        logger.info("   - Services are auto-scaled by HPA (2-10 replicas)")
+        logger.info("")
     
     await manager.start()
     
@@ -216,9 +300,15 @@ async def main():
     except KeyboardInterrupt:
         logger.info("\nShutting down...")
     finally:
+        # Stop main server
         await manager.stop()
         logger.info("Server stopped")
         logger.info("Note: Each session's providers are cleaned up automatically")
+        
+        # Stop microservices (dev mode only)
+        if service_manager:
+            logger.info("")
+            service_manager.stop_all()
 
 
 if __name__ == "__main__":

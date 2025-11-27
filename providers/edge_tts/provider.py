@@ -5,9 +5,11 @@ Edge TTS provider implementation
 import asyncio
 from typing import AsyncIterator, Dict, Any
 from providers.tts import TTSProvider
+from providers.registry import register_provider
 from utils.audio import mp3_to_pcm, MP3_AVAILABLE
 
 
+@register_provider("edge-tts")
 class EdgeTTSProvider(TTSProvider):
     """
     Edge TTS provider implementation.
@@ -15,13 +17,27 @@ class EdgeTTSProvider(TTSProvider):
     Uses Microsoft Edge TTS for speech synthesis.
     """
     
+    @property
+    def is_local(self) -> bool:
+        """This is a remote (cloud API) service"""
+        return False
+    
+    @property
+    def is_stateful(self) -> bool:
+        """TTS is stateless - each request is independent"""
+        return False
+    
+    @property
+    def category(self) -> str:
+        """Provider category"""
+        return "tts"
+    
     def __init__(
         self,
         voice: str = "zh-CN-XiaoxiaoNeural",
         rate: str = "+0%",
         volume: str = "+0%",
-        pitch: str = "+0Hz",
-        name: str = "EdgeTTS"
+        pitch: str = "+0Hz"
     ):
         """
         Initialize Edge TTS provider.
@@ -31,8 +47,9 @@ class EdgeTTSProvider(TTSProvider):
             rate: Speech rate (e.g., "+0%", "+20%", "-10%")
             volume: Speech volume (e.g., "+0%", "+20%", "-10%")
             pitch: Speech pitch (e.g., "+0Hz", "+5Hz", "-5Hz")
-            name: Provider name
         """
+        # Use registered name from decorator
+        name = getattr(self.__class__, '_registered_name', self.__class__.__name__)
         super().__init__(name=name)
         
         self.voice = voice
@@ -52,6 +69,50 @@ class EdgeTTSProvider(TTSProvider):
         # Cancellation flag and current task
         self._cancelled = False
         self._current_task = None
+    
+    @classmethod
+    def get_config_schema(cls) -> Dict[str, Any]:
+        """Return configuration schema"""
+        return {
+            "voice": {
+                "type": "string",
+                "default": "zh-CN-XiaoxiaoNeural",
+                "description": "Voice name (e.g., zh-CN-XiaoxiaoNeural)"
+            },
+            "rate": {
+                "type": "string",
+                "default": "+0%",
+                "description": "Speech rate (e.g., +0%, +20%, -10%)"
+            },
+            "volume": {
+                "type": "string",
+                "default": "+0%",
+                "description": "Speech volume (e.g., +0%, +20%, -10%)"
+            },
+            "pitch": {
+                "type": "string",
+                "default": "+0Hz",
+                "description": "Speech pitch (e.g., +0Hz, +5Hz, -5Hz)"
+            }
+        }
+    
+    async def initialize(self) -> None:
+        """
+        Initialize Edge TTS provider.
+        
+        Edge TTS doesn't require initialization, but we implement this
+        to satisfy the BaseProvider interface.
+        """
+        self.logger.debug("Edge TTS provider initialized (no-op)")
+    
+    async def cleanup(self) -> None:
+        """
+        Cleanup Edge TTS provider resources.
+        
+        Cancel any ongoing synthesis and cleanup resources.
+        """
+        self.cancel()
+        self.logger.debug("Edge TTS provider cleaned up")
     
     async def synthesize(self, text: str) -> AsyncIterator[bytes]:
         """

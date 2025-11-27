@@ -18,16 +18,14 @@ from providers.agent import AgentProvider, Tool
 from providers.registry import ProviderRegistry, register_provider
 from providers.factory import ProviderFactory
 
-# Provider implementations (legacy - direct instantiation)
-from providers.silero_vad.provider import SileroVADProvider
-from providers.sherpa_onnx_local.provider import SherpaOnnxLocalProvider
-from providers.sherpa_onnx_local.shared_provider import SharedModelSherpaOnnxProvider
+# Provider implementations (Remote APIs - no heavy dependencies)
 from providers.edge_tts.provider import EdgeTTSProvider
 from providers.openai_agent.provider import OpenAIAgentProvider
 
-# Provider implementations (plugin system - registry-based)
+# Provider implementations (Local gRPC Clients - auto-registered)
 # These are auto-registered via @register_provider decorator
 from providers.silero_vad.grpc_provider import LocalSileroVADProvider
+from providers.sherpa_onnx_local.grpc_provider import LocalSherpaASRProvider
 from providers.kokoro.grpc_provider import LocalKokoroTTSProvider
 
 __all__ = [
@@ -43,14 +41,12 @@ __all__ = [
     "ProviderRegistry",
     "register_provider",
     "ProviderFactory",
-    # Implementations (legacy)
-    "SileroVADProvider",
-    "SherpaOnnxLocalProvider",
-    "SharedModelSherpaOnnxProvider",
+    # Remote Provider Implementations
     "EdgeTTSProvider",
     "OpenAIAgentProvider",
-    # Implementations (plugin system - gRPC)
+    # Local gRPC Provider Implementations
     "LocalSileroVADProvider",
+    "LocalSherpaASRProvider",
     "LocalKokoroTTSProvider",
 ]
 

@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\ttts.proto\x12\x06kokoro\"k\n\x14\x43reateSessionRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\r\n\x05voice\x18\x02 \x01(\t\x12\r\n\x05speed\x18\x03 \x01(\x02\x12\x0c\n\x04lang\x18\x04 \x01(\t\x12\x13\n\x0bsample_rate\x18\x05 \x01(\x05\"9\n\x15\x43reateSessionResponse\x12\x0f\n\x07success\x18\x01 \x01(\x08\x12\x0f\n\x07message\x18\x02 \x01(\t\"M\n\x11SynthesizeRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x0c\n\x04text\x18\x02 \x01(\t\x12\x16\n\x0ejoin_sentences\x18\x03 \x01(\x08\"c\n\x12SynthesizeResponse\x12\x12\n\naudio_data\x18\x01 \x01(\x0c\x12\x13\n\x0bsample_rate\x18\x02 \x01(\x05\x12\x10\n\x08is_final\x18\x03 \x01(\x08\x12\x12\n\nsession_id\x18\x04 \x01(\t\"+\n\x15\x44\x65stroySessionRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t\"\x07\n\x05\x45mpty\"/\n\x05Voice\x12\n\n\x02id\x18\x01 \x01(\t\x12\x0c\n\x04name\x18\x02 \x01(\t\x12\x0c\n\x04lang\x18\x03 \x01(\t\"/\n\x0eVoicesResponse\x12\x1d\n\x06voices\x18\x01 \x03(\x0b\x32\r.kokoro.Voice\"h\n\rStatsResponse\x12\x17\n\x0f\x61\x63tive_sessions\x18\x01 \x01(\x05\x12\x16\n\x0etotal_requests\x18\x02 \x01(\x03\x12&\n\x08sessions\x18\x03 \x03(\x0b\x32\x14.kokoro.SessionStats\"P\n\x0cSessionStats\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x17\n\x0fsynthesis_count\x18\x02 \x01(\x03\x12\x13\n\x0b\x61ge_seconds\x18\x03 \x01(\x01\x32\xc7\x02\n\nTTSService\x12L\n\rCreateSession\x12\x1c.kokoro.CreateSessionRequest\x1a\x1d.kokoro.CreateSessionResponse\x12\x45\n\nSynthesize\x12\x19.kokoro.SynthesizeRequest\x1a\x1a.kokoro.SynthesizeResponse0\x01\x12\x32\n\tGetVoices\x12\r.kokoro.Empty\x1a\x16.kokoro.VoicesResponse\x12>\n\x0e\x44\x65stroySession\x12\x1d.kokoro.DestroySessionRequest\x1a\r.kokoro.Empty\x12\x30\n\x08GetStats\x12\r.kokoro.Empty\x1a\x15.kokoro.StatsResponseb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\ttts.proto\x12\x06kokoro\"k\n\x14\x43reateSessionRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\r\n\x05voice\x18\x02 \x01(\t\x12\r\n\x05speed\x18\x03 \x01(\x02\x12\x0c\n\x04lang\x18\x04 \x01(\t\x12\x13\n\x0bsample_rate\x18\x05 \x01(\x05\"9\n\x15\x43reateSessionResponse\x12\x0f\n\x07success\x18\x01 \x01(\x08\x12\x0f\n\x07message\x18\x02 \x01(\t\"e\n\x11SynthesizeRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x0c\n\x04text\x18\x02 \x01(\t\x12\x1b\n\x0ejoin_sentences\x18\x03 \x01(\x08H\x00\x88\x01\x01\x42\x11\n\x0f_join_sentences\"c\n\x12SynthesizeResponse\x12\x12\n\naudio_data\x18\x01 \x01(\x0c\x12\x13\n\x0bsample_rate\x18\x02 \x01(\x05\x12\x10\n\x08is_final\x18\x03 \x01(\x08\x12\x12\n\nsession_id\x18\x04 \x01(\t\"+\n\x15\x44\x65stroySessionRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t\"\x07\n\x05\x45mpty\"/\n\x05Voice\x12\n\n\x02id\x18\x01 \x01(\t\x12\x0c\n\x04name\x18\x02 \x01(\t\x12\x0c\n\x04lang\x18\x03 \x01(\t\"/\n\x0eVoicesResponse\x12\x1d\n\x06voices\x18\x01 \x03(\x0b\x32\r.kokoro.Voice\"h\n\rStatsResponse\x12\x17\n\x0f\x61\x63tive_sessions\x18\x01 \x01(\x05\x12\x16\n\x0etotal_requests\x18\x02 \x01(\x03\x12&\n\x08sessions\x18\x03 \x03(\x0b\x32\x14.kokoro.SessionStats\"P\n\x0cSessionStats\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x17\n\x0fsynthesis_count\x18\x02 \x01(\x03\x12\x13\n\x0b\x61ge_seconds\x18\x03 \x01(\x01\x32\xc7\x02\n\nTTSService\x12L\n\rCreateSession\x12\x1c.kokoro.CreateSessionRequest\x1a\x1d.kokoro.CreateSessionResponse\x12\x45\n\nSynthesize\x12\x19.kokoro.SynthesizeRequest\x1a\x1a.kokoro.SynthesizeResponse0\x01\x12\x32\n\tGetVoices\x12\r.kokoro.Empty\x1a\x16.kokoro.VoicesResponse\x12>\n\x0e\x44\x65stroySession\x12\x1d.kokoro.DestroySessionRequest\x1a\r.kokoro.Empty\x12\x30\n\x08GetStats\x12\r.kokoro.Empty\x1a\x15.kokoro.StatsResponseb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -36,21 +36,21 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_CREATESESSIONRESPONSE']._serialized_start=130
   _globals['_CREATESESSIONRESPONSE']._serialized_end=187
   _globals['_SYNTHESIZEREQUEST']._serialized_start=189
-  _globals['_SYNTHESIZEREQUEST']._serialized_end=266
-  _globals['_SYNTHESIZERESPONSE']._serialized_start=268
-  _globals['_SYNTHESIZERESPONSE']._serialized_end=367
-  _globals['_DESTROYSESSIONREQUEST']._serialized_start=369
-  _globals['_DESTROYSESSIONREQUEST']._serialized_end=412
-  _globals['_EMPTY']._serialized_start=414
-  _globals['_EMPTY']._serialized_end=421
-  _globals['_VOICE']._serialized_start=423
-  _globals['_VOICE']._serialized_end=470
-  _globals['_VOICESRESPONSE']._serialized_start=472
-  _globals['_VOICESRESPONSE']._serialized_end=519
-  _globals['_STATSRESPONSE']._serialized_start=521
-  _globals['_STATSRESPONSE']._serialized_end=625
-  _globals['_SESSIONSTATS']._serialized_start=627
-  _globals['_SESSIONSTATS']._serialized_end=707
-  _globals['_TTSSERVICE']._serialized_start=710
-  _globals['_TTSSERVICE']._serialized_end=1037
+  _globals['_SYNTHESIZEREQUEST']._serialized_end=290
+  _globals['_SYNTHESIZERESPONSE']._serialized_start=292
+  _globals['_SYNTHESIZERESPONSE']._serialized_end=391
+  _globals['_DESTROYSESSIONREQUEST']._serialized_start=393
+  _globals['_DESTROYSESSIONREQUEST']._serialized_end=436
+  _globals['_EMPTY']._serialized_start=438
+  _globals['_EMPTY']._serialized_end=445
+  _globals['_VOICE']._serialized_start=447
+  _globals['_VOICE']._serialized_end=494
+  _globals['_VOICESRESPONSE']._serialized_start=496
+  _globals['_VOICESRESPONSE']._serialized_end=543
+  _globals['_STATSRESPONSE']._serialized_start=545
+  _globals['_STATSRESPONSE']._serialized_end=649
+  _globals['_SESSIONSTATS']._serialized_start=651
+  _globals['_SESSIONSTATS']._serialized_end=731
+  _globals['_TTSSERVICE']._serialized_start=734
+  _globals['_TTSSERVICE']._serialized_end=1061
 # @@protoc_insertion_point(module_scope)

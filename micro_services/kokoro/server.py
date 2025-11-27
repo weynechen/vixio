@@ -14,9 +14,17 @@ import numpy as np
 import grpc
 from loguru import logger
 
-# Import proto files from current package
-from . import tts_pb2, tts_pb2_grpc
-from .kokoro import KokoroV11ZhTTSModel, KokoroV11ZhTTSOptions
+# Import proto files - support both package and script mode
+try:
+    # When run as package (e.g., from agent_chat.py)
+    from . import tts_pb2, tts_pb2_grpc
+except ImportError:
+    # When run as script (e.g., uv run server.py)
+    import tts_pb2, tts_pb2_grpc
+
+# Import Kokoro TTS
+from kokoro import KModel, KPipeline
+import torch
 
 
 @dataclass
@@ -39,8 +47,13 @@ class TTSServiceServicer(tts_pb2_grpc.TTSServiceServicer):
     
     def __init__(self, repo_id: str = "hexgrad/Kokoro-82M-v1.1-zh"):
         """Initialize TTS service"""
+        # Determine device
+        self._device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        logger.info(f"Using device: {self._device}")
+        
         # Load Kokoro TTS model (shared across sessions)
-        self._model = KokoroV11ZhTTSModel(repo_id=repo_id)
+        self._model = KModel(repo_id=repo_id).to(self._device).eval()
+        self._repo_id = repo_id
         
         # Session management
         self._sessions: Dict[str, SessionState] = {}
@@ -49,7 +62,7 @@ class TTSServiceServicer(tts_pb2_grpc.TTSServiceServicer):
         # Service stats
         self._total_requests = 0
         
-        logger.info("Kokoro TTS gRPC service initialized")
+        logger.info(f"Kokoro TTS gRPC service initialized (repo: {repo_id}, device: {self._device})")
     
     async def CreateSession(self, request, context):
         """Create a new TTS session"""
@@ -63,7 +76,7 @@ class TTSServiceServicer(tts_pb2_grpc.TTSServiceServicer):
             voice=request.voice or "zf_001",
             speed=request.speed or 1.0,
             lang=request.lang or "zh",
-            sample_rate=request.sample_rate or 24000,
+            sample_rate=request.sample_rate or 16000,
         )
         
         with self._sessions_lock:
@@ -107,29 +120,47 @@ class TTSServiceServicer(tts_pb2_grpc.TTSServiceServicer):
         logger.info(f"[{session_id}] Synthesizing text: {text[:50]}...")
         
         try:
-            # Create TTS options
-            options = KokoroV11ZhTTSOptions(
-                voice=session.voice,
-                speed=session.speed,
-                lang=session.lang,
-                sample_rate=session.sample_rate,
-                join_sentences=join_sentences
+            # Create pipeline for this synthesis
+            # Use 'z' for Chinese (zh), 'a' for English (en)
+            lang_code = 'z' if session.lang == 'zh' else 'a'
+            pipeline = KPipeline(
+                lang_code=lang_code,
+                repo_id=self._repo_id,
+                model=self._model
             )
             
-            # Stream TTS
-            chunk_count = 0
-            async for sample_rate, audio_chunk in self._model.stream_tts(text, options):
-                chunk_count += 1
-                
-                # Convert float32 numpy array to bytes
-                audio_bytes = audio_chunk.astype(np.float32).tobytes()
-                
-                yield tts_pb2.SynthesizeResponse(
-                    audio_data=audio_bytes,
-                    sample_rate=sample_rate,
-                    is_final=False,
-                    session_id=session_id
-                )
+            # HACK: Mitigate rushing caused by lack of training data beyond ~100 tokens
+            def speed_callable(len_ps):
+                speed = session.speed * 0.8
+                if len_ps <= 83:
+                    speed = session.speed
+                elif len_ps < 183:
+                    speed = session.speed * (1 - (len_ps - 83) / 500)
+                return speed * 1.1
+            
+            # Generate audio
+            generator = pipeline(text, voice=session.voice, speed=speed_callable)
+            result = next(generator)
+            
+            # Get audio data (PyTorch Tensor -> NumPy array)
+            audio_data = result.audio
+            if hasattr(audio_data, 'cpu'):
+                # Convert PyTorch Tensor to NumPy
+                audio_np = audio_data.cpu().numpy()
+            else:
+                # Already NumPy array
+                audio_np = audio_data
+            
+            # Convert to bytes (ensure float32)
+            audio_bytes = audio_np.astype(np.float32).tobytes()
+            
+            # Send audio chunk
+            yield tts_pb2.SynthesizeResponse(
+                audio_data=audio_bytes,
+                sample_rate=session.sample_rate,
+                is_final=False,
+                session_id=session_id
+            )
             
             # Send final marker
             yield tts_pb2.SynthesizeResponse(
@@ -139,7 +170,7 @@ class TTSServiceServicer(tts_pb2_grpc.TTSServiceServicer):
                 session_id=session_id
             )
             
-            logger.info(f"[{session_id}] Synthesis completed: {chunk_count} chunks")
+            logger.info(f"[{session_id}] Synthesis completed: {len(audio_np)} samples")
         
         except Exception as e:
             logger.error(f"[{session_id}] Synthesis error: {e}")
@@ -235,6 +266,20 @@ def main():
         sys.stderr,
         format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan> - <level>{message}</level>",
         level=args.log_level
+    )
+    
+    # Also log to file
+    from pathlib import Path
+    log_dir = Path("logs")
+    log_dir.mkdir(exist_ok=True)
+    logger.add(
+        log_dir / "kokoro.log",
+        format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function}:{line} | {message}",
+        level=args.log_level,
+        rotation="100 MB",
+        retention="30 days",
+        compression="zip",
+        encoding="utf-8",
     )
     
     # Start server

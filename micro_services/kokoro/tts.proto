@@ -39,7 +39,7 @@ message CreateSessionResponse {
 message SynthesizeRequest {
   string session_id = 1;
   string text = 2;
-  bool join_sentences = 3;   // Default: true
+  optional bool join_sentences = 3;   // Default: true
 }
 
 // Response with audio chunks

@@ -17,11 +17,27 @@ uv run python -m grpc_tools.protoc \
 
 echo "✅ Proto file compiled"
 
-# Fix imports to use relative imports
+# Fix imports to support both package and script mode
 echo "Fixing imports..."
-sed -i 's/^import asr_pb2 as asr__pb2$/from . import asr_pb2 as asr__pb2/' asr_pb2_grpc.py
+# Replace absolute import with try-except pattern
+python3 << 'EOF'
+with open('asr_pb2_grpc.py', 'r') as f:
+    content = f.read()
+
+# Replace import line with try-except pattern
+content = content.replace(
+    'import asr_pb2 as asr__pb2',
+    '''try:
+    from . import asr_pb2 as asr__pb2
+except ImportError:
+    import asr_pb2 as asr__pb2'''
+)
+
+with open('asr_pb2_grpc.py', 'w') as f:
+    f.write(content)
+EOF
 
 echo "Generated files:"
 echo "  - asr_pb2.py"
-echo "  - asr_pb2_grpc.py (fixed imports)"
+echo "  - asr_pb2_grpc.py"
 
