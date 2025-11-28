@@ -2,6 +2,7 @@
 OpenAI Agent provider implementation using OpenAI Agents framework and LiteLLM
 """
 
+import asyncio
 from typing import Any, AsyncIterator, Dict, List, Optional
 from providers.agent import AgentProvider, Tool
 from providers.registry import register_provider
@@ -221,12 +222,17 @@ class OpenAIAgentProvider(AgentProvider):
             
         Yields:
             Response chunks (pure text deltas)
+            
+        Note:
+            This generator can be closed via aclose() to immediately terminate
+            the OpenAI streaming connection. This is critical for handling interrupts.
         """
         if not self._initialized:
             raise RuntimeError("Agent not initialized. Call initialize() first.")
         
         self.logger.debug(f"User message: {message[:100]}...")
         
+        result = None
         try:
             # Import required types for event filtering
             from openai.types.responses import ResponseTextDeltaEvent
@@ -240,10 +246,35 @@ class OpenAIAgentProvider(AgentProvider):
                     if isinstance(event.data, ResponseTextDeltaEvent):
                         if event.data.delta:
                             yield event.data.delta
+            
+            self.logger.debug("Agent streaming completed normally")
+        
+        except asyncio.CancelledError:
+            # Stream was cancelled (user interrupted)
+            self.logger.info("Agent stream cancelled by interrupt")
+            # Don't yield anything, just cleanup and exit
+            raise
+        
+        except GeneratorExit:
+            # Generator is being closed (aclose() was called)
+            self.logger.info("Agent stream closed via aclose()")
+            # Cleanup will happen in finally block
         
         except Exception as e:
             self.logger.error(f"Error during chat: {e}", exc_info=True)
             yield f"[Error: {str(e)}]"
+        
+        finally:
+            # Ensure OpenAI stream is properly closed
+            # This terminates the underlying HTTP connection
+            if result is not None:
+                try:
+                    # Runner result cleanup (if available)
+                    if hasattr(result, 'close'):
+                        await result.close()
+                    self.logger.debug("OpenAI stream resources cleaned up")
+                except Exception as e:
+                    self.logger.warning(f"Error cleaning up OpenAI stream: {e}")
     
     async def reset_conversation(self) -> None:
         """

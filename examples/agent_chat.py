@@ -192,6 +192,7 @@ async def main():
         "You are a helpful AI voice assistant. "
         "Keep your responses concise and conversational, "
         "as they will be spoken aloud to the user."
+        "You should always respond with a short sentence first, ending with a period, not a comma."
     )
     
     logger.info("✓ Configurations loaded")

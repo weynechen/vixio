@@ -1075,10 +1075,12 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
         Processes chunks serially to maintain order:
         1. TTS events (text) - sent immediately
         2. Audio chunks - split into frames with flow control
+        3. When EVENT_TTS_STOP is received and all audio sent, increment turn
         
         This design allows:
         - TTS to generate next sentence while current audio is being sent
         - Text and audio stay synchronized (text event sent just before audio)
+        - bot_finished signal sent after last audio frame reaches device
         
         Args:
             session_id: Session identifier
@@ -1091,6 +1093,11 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
         
         self.logger.debug(f"Sender worker started for session {session_id}")
         
+        # Track TTS completion state
+        tts_stop_received = False
+        tts_stop_turn_id = None
+        audio_chunks_after_stop = 0
+        
         try:
             while True:
                 # Check if connection still exists
@@ -1098,8 +1105,35 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
                     self.logger.debug(f"Connection closed, stopping sender for {session_id}")
                     break
                 
-                # Get next chunk from queue
-                chunk = await queue.get()
+                # Get next chunk from queue (with timeout to detect empty queue)
+                try:
+                    chunk = await asyncio.wait_for(queue.get(), timeout=0.1)
+                except asyncio.TimeoutError:
+                    # Queue is empty
+                    if tts_stop_received and queue.empty():
+                        # All audio sent after TTS stop, increment turn now
+                        self.logger.info(
+                            f"All audio sent after TTS stop ({audio_chunks_after_stop} chunks), "
+                            f"incrementing turn (session={session_id[:8]})"
+                        )
+                        
+                        # Increment turn via ControlBus
+                        control_bus = self._control_buses.get(session_id)
+                        if control_bus:
+                            await control_bus.increment_turn(
+                                source="Transport",
+                                reason="bot_finished"
+                            )
+                        else:
+                            self.logger.warning(f"ControlBus not available for session {session_id[:8]}")
+                        
+                        # Reset state for next turn
+                        tts_stop_received = False
+                        tts_stop_turn_id = None
+                        audio_chunks_after_stop = 0
+                    
+                    # Continue waiting for more chunks
+                    continue
                 
                 # Stop signal
                 if chunk is None:
@@ -1115,6 +1149,13 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
                 except Exception:
                     pass
                 
+                # Detect EVENT_TTS_STOP
+                if chunk.type == ChunkType.EVENT_TTS_STOP:
+                    tts_stop_received = True
+                    tts_stop_turn_id = chunk.turn_id
+                    audio_chunks_after_stop = 0
+                    self.logger.debug(f"TTS stop received, will increment turn after audio queue drains (turn={tts_stop_turn_id})")
+                
                 # Process chunk based on type
                 if chunk.type == ChunkType.AUDIO_RAW:
                     # Audio chunk: apply flow control
@@ -1122,6 +1163,10 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
                     if not success:
                         # Connection closed during send, stop worker
                         break
+                    
+                    # Track audio chunks sent after TTS stop
+                    if tts_stop_received:
+                        audio_chunks_after_stop += 1
                 
                 else:
                     # Event chunk: send immediately (no delay)

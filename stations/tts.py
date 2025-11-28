@@ -89,12 +89,8 @@ class TTSStation(Station):
                     )
                     self._is_speaking = False
                     
-                    # Increment turn - bot finished speaking
-                    if self.control_bus:
-                        await self.control_bus.increment_turn(source=self.name, reason="bot_finished")
-                        self.logger.info("Turn incremented after bot finished speaking")
-                    else:
-                        self.logger.warning("ControlBus not available, cannot increment turn")
+                    # Note: Turn increment moved to Transport
+                    # Transport will increment after all audio frames are sent to device
             
             # Passthrough signals
             yield chunk
@@ -208,12 +204,7 @@ class TTSStation(Station):
                     )
                     self._is_speaking = False
                     
-                    # Increment turn even on error
-                    if self.control_bus:
-                        await self.control_bus.increment_turn(source=self.name, reason="tts_error")
-                        self.logger.info("Turn incremented after TTS error")
-                    else:
-                        self.logger.warning("ControlBus not available on error, cannot increment turn")
+                    # Note: Turn increment moved to Transport (will happen after queue drains)
             
             # Passthrough original text chunk
             yield chunk

@@ -44,6 +44,7 @@ class AgentStation(Station):
         self.agent = agent_provider
         self.timeout_seconds = timeout_seconds
         self._is_thinking = False
+        self._streaming_task: Optional[asyncio.Task] = None
         
         # Latency monitoring
         self._latency_monitor = get_latency_monitor()
@@ -75,6 +76,17 @@ class AgentStation(Station):
         if chunk.is_signal():
             # Reset conversation on interrupt
             if chunk.type == ChunkType.CONTROL_INTERRUPT:
+                # Close ongoing streaming generator immediately to stop OpenAI API calls
+                if self._streaming_task is not None:
+                    try:
+                        await self._streaming_task.aclose()
+                        self.logger.info("Closed ongoing Agent streaming generator")
+                    except Exception as e:
+                        self.logger.warning(f"Error closing Agent stream: {e}")
+                    finally:
+                        self._streaming_task = None
+                
+                # Reset conversation
                 if self.agent.is_initialized():
                     await self.agent.reset_conversation()
                     self.logger.info("Agent conversation reset")
@@ -129,77 +141,98 @@ class AgentStation(Station):
                 delta_count = 0
                 start_time = asyncio.get_event_loop().time()
                 first_token_recorded = False
+                interrupted = False
                 
-                async for delta in self.agent.chat(text):
-                    # Check if interrupted (turn_id changed)
-                    if self.control_bus:
-                        current_turn = self.control_bus.get_current_turn_id()
-                        if current_turn > self.current_turn_id:
-                            self.logger.info(f"Agent interrupted: turn {self.current_turn_id} -> {current_turn}")
-                            break
-                    
-                    # Check timeout
-                    if self.timeout_seconds:
-                        elapsed = asyncio.get_event_loop().time() - start_time
-                        if elapsed > self.timeout_seconds:
-                            self.logger.warning(f"Agent processing timeout after {elapsed:.1f}s")
-                            
-                            # Send interrupt signal via ControlBus
-                            if self.control_bus:
-                                await self.control_bus.send_interrupt(
-                                    source=self.name,
-                                    reason="agent_timeout",
-                                    metadata={
+                # Store the generator so we can close it on interrupt
+                agent_stream = self.agent.chat(text)
+                self._streaming_task = agent_stream  # Store reference for cancellation
+                
+                try:
+                    async for delta in agent_stream:
+                        # Check if interrupted (turn_id changed)
+                        if self.control_bus:
+                            current_turn = self.control_bus.get_current_turn_id()
+                            if current_turn > self.current_turn_id:
+                                self.logger.info(f"Agent interrupted: turn {self.current_turn_id} -> {current_turn}")
+                                interrupted = True
+                                break
+                        
+                        # Check timeout
+                        if self.timeout_seconds:
+                            elapsed = asyncio.get_event_loop().time() - start_time
+                            if elapsed > self.timeout_seconds:
+                                self.logger.warning(f"Agent processing timeout after {elapsed:.1f}s")
+                                
+                                # Send interrupt signal via ControlBus
+                                if self.control_bus:
+                                    await self.control_bus.send_interrupt(
+                                        source=self.name,
+                                        reason="agent_timeout",
+                                        metadata={
+                                            "timeout_seconds": self.timeout_seconds,
+                                            "elapsed_seconds": elapsed
+                                        }
+                                    )
+                                
+                                # Emit timeout event
+                                yield EventChunk(
+                                    type=ChunkType.EVENT_TIMEOUT,
+                                    event_data={
+                                        "source": "Agent",
                                         "timeout_seconds": self.timeout_seconds,
                                         "elapsed_seconds": elapsed
-                                    }
+                                    },
+                                    source_station=self.name,
+                                    session_id=chunk.session_id
                                 )
+                                
+                                interrupted = True
+                                break
+                        
+                        if delta:
+                            delta_count += 1
                             
-                            # Emit timeout event
-                            yield EventChunk(
-                                type=ChunkType.EVENT_TIMEOUT,
-                                event_data={
-                                    "source": "Agent",
-                                    "timeout_seconds": self.timeout_seconds,
-                                    "elapsed_seconds": elapsed
-                                },
-                                source_station=self.name,
-                                session_id=chunk.session_id
+                            # Record T3: agent_first_token (TTFT - Time To First Token)
+                            if not first_token_recorded:
+                                self._latency_monitor.record(
+                                    chunk.session_id,
+                                    chunk.turn_id,
+                                    "agent_first_token"
+                                )
+                                first_token_recorded = True
+                                self.logger.debug("Recorded agent first token (TTFT)")
+                            
+                            yield TextDeltaChunk(
+                                type=ChunkType.TEXT_DELTA,
+                                delta=delta,
+                                source="agent",  # Mark as agent output
+                                session_id=chunk.session_id,
+                                turn_id=chunk.turn_id
                             )
-                            
-                            break
                     
-                    if delta:
-                        delta_count += 1
-                        
-                        # Record T3: agent_first_token (TTFT - Time To First Token)
-                        if not first_token_recorded:
-                            self._latency_monitor.record(
-                                chunk.session_id,
-                                chunk.turn_id,
-                                "agent_first_token"
-                            )
-                            first_token_recorded = True
-                            self.logger.debug("Recorded agent first token (TTFT)")
-                        
-                        yield TextDeltaChunk(
-                            type=ChunkType.TEXT_DELTA,
-                            delta=delta,
-                            source="agent",  # Mark as agent output
-                            session_id=chunk.session_id,
-                            turn_id=chunk.turn_id
-                        )
+                    self.logger.debug(f"Agent generated {delta_count} text deltas (interrupted={interrupted})")
                 
-                self.logger.debug(f"Agent generated {delta_count} text deltas")
+                finally:
+                    # Ensure the generator is properly closed to terminate OpenAI stream
+                    await agent_stream.aclose()
+                    self._streaming_task = None
+                    self.logger.debug("Agent stream closed")
                 
                 # Emit AGENT_STOP event
                 yield EventChunk(
                     type=ChunkType.EVENT_AGENT_STOP,
-                    event_data={"delta_count": delta_count},
+                    event_data={"delta_count": delta_count, "interrupted": interrupted},
                     source_station=self.name,
                     session_id=chunk.session_id
                 )
                 self._is_thinking = False
+            
+            except asyncio.CancelledError:
+                # Stream was cancelled (from external CONTROL_INTERRUPT)
+                self.logger.info("Agent streaming was cancelled")
+                self._streaming_task = None
+                self._is_thinking = False
+                raise  # Re-raise to properly propagate cancellation
             
             except asyncio.TimeoutError:
                 self.logger.error(f"Agent processing timed out after {self.timeout_seconds}s")
@@ -220,6 +253,7 @@ class AgentStation(Station):
                     session_id=chunk.session_id
                 )
                 
+                self._streaming_task = None
                 self._is_thinking = False
             
             except Exception as e:
@@ -233,6 +267,7 @@ class AgentStation(Station):
                     session_id=chunk.session_id
                 )
                 
+                self._streaming_task = None
                 self._is_thinking = False
         else:
             # Passthrough non-text data

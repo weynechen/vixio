@@ -2,7 +2,10 @@
 TurnDetectorStation - Detect when user finishes speaking and handle interrupts
 
 Input: EVENT_VAD_END, EVENT_VAD_START, EVENT_BOT_STARTED_SPEAKING
-Output: EVENT_TURN_END (after silence threshold), CONTROL_INTERRUPT (on valid interrupt)
+Output: EVENT_TURN_END (after silence threshold)
+
+Note: Sends interrupt signal to ControlBus when user speaks during bot speaking.
+Session's interrupt handler injects CONTROL_INTERRUPT into pipeline.
 """
 
 import asyncio
@@ -18,19 +21,20 @@ class TurnDetectorStation(Station):
     Turn detector: Detects when user finishes speaking and handles interrupts.
     
     Input: EVENT_VAD_END, EVENT_VAD_START, EVENT_BOT_STARTED_SPEAKING, EVENT_BOT_STOPPED_SPEAKING
-    Output: EVENT_TURN_END (after silence threshold), CONTROL_INTERRUPT (on valid interrupt)
+    Output: EVENT_TURN_END (after silence threshold)
     
     Strategy:
     - Wait inline after VAD_END for silence threshold (using cancellable sleep)
     - If silence continues, emit TURN_END
     - If voice resumes (VAD_START) or interrupted, set cancel flag to suppress TURN_END
     - Track session state (LISTENING vs SPEAKING)
-    - Send CONTROL_INTERRUPT when user speaks during bot speaking
+    - Send interrupt signal when user speaks during bot speaking
     
     Turn Management:
-    - Increments turn_id when user interrupts (speaks during bot speaking)
+    - Sends interrupt signal to ControlBus when user interrupts (speaks during bot speaking)
+    - Session's interrupt handler increments turn_id for all interrupts
     - TTS station increments turn_id when bot finishes speaking
-    - This ensures turn_id changes immediately on completion/interrupt
+    - This ensures turn_id changes immediately and consistently on completion/interrupt
     """
     
     def __init__(
@@ -63,7 +67,7 @@ class TurnDetectorStation(Station):
         
         Logic:
         - On EVENT_VAD_START: Check if user interrupted (bot speaking)
-          * If yes: increment turn_id immediately, send CONTROL_INTERRUPT
+          * If yes: send interrupt signal to ControlBus (Session will handle turn increment)
           * Cancel pending turn end if any
         - On EVENT_VAD_END: Wait for silence threshold, emit TURN_END (if not cancelled)
         - On EVENT_BOT_STARTED_SPEAKING: Set bot speaking flag
@@ -71,7 +75,8 @@ class TurnDetectorStation(Station):
         - On CONTROL_INTERRUPT: Cancel waiting and reset
         
         Turn Management:
-        - Increments turn_id immediately when user interrupts bot
+        - Sends interrupt signal when user interrupts bot (speaks during bot speaking)
+        - Session's interrupt handler increments turn_id for all interrupts
         - TTS station increments turn_id when bot finishes
         """
         # Handle signals
@@ -101,30 +106,17 @@ class TurnDetectorStation(Station):
                 if self.interrupt_enabled and self._bot_is_speaking and self.control_bus:
                     self.logger.warning("User interrupt detected (speaking during bot speaking)")
                     
-                    # Increment turn immediately - user interrupted bot
-                    new_turn_id = await self.control_bus.increment_turn(
-                        source=self.name,
-                        reason="user_interrupted"
-                    )
-                    
-                    # Update chunk's turn_id to new turn
-                    chunk.turn_id = new_turn_id
-                    
                     # Send interrupt signal via ControlBus
+                    # Session will handle turn increment for all interrupts
                     await self.control_bus.send_interrupt(
                         source=self.name,
                         reason="user_speaking_during_bot_speaking",
-                        metadata={"session_id": chunk.session_id, "new_turn_id": new_turn_id}
+                        metadata={"session_id": chunk.session_id}
                     )
                     
-                    # Emit CONTROL_INTERRUPT chunk for pipeline
-                    yield ControlChunk(
-                        type=ChunkType.CONTROL_INTERRUPT,
-                        command="interrupt",
-                        params={"reason": "user_speaking"},
-                        session_id=chunk.session_id,
-                        turn_id=new_turn_id
-                    )
+                    # Note: Don't emit CONTROL_INTERRUPT chunk here anymore
+                    # Session's interrupt handler will send it after incrementing turn
+                    # This ensures proper turn_id synchronization
                 
                 # Passthrough VAD_START
                 yield chunk

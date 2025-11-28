@@ -190,6 +190,17 @@ class SessionManager:
                     f"[{connection_id[:8]}] Interrupt received: {interrupt.source} - {interrupt.reason}"
                 )
                 
+                # Increment turn FIRST to invalidate old chunks (unified handling for all interrupts)
+                # This ensures any streaming output from Agent/TTS with old turn_id gets discarded
+                old_turn = control_bus.get_current_turn_id()
+                new_turn = await control_bus.increment_turn(
+                    source="SessionManager", 
+                    reason=interrupt.reason
+                )
+                self.logger.info(
+                    f"[{connection_id[:8]}] Turn incremented {old_turn} -> {new_turn} due to {interrupt.reason}"
+                )
+                
                 # Clear pipeline queues (keep input queue)
                 # This removes pending chunks from all queues
                 pipeline.clear_queues(from_stage=1)
@@ -197,6 +208,28 @@ class SessionManager:
                 # Note: We do NOT cancel tasks anymore!
                 # Tasks continue running and will automatically discard old chunks
                 # based on turn_id. This ensures they can process new chunks.
+                
+                # Inject CONTROL_INTERRUPT into input queue for stations to reset state
+                # This must be done after clear_queues to ensure it's not cleared
+                try:
+                    from core.chunk import ControlChunk, ChunkType
+                    
+                    interrupt_chunk = ControlChunk(
+                        type=ChunkType.CONTROL_INTERRUPT,
+                        command="interrupt",
+                        params={"reason": interrupt.reason, "interrupt_source": interrupt.source},
+                        source="SessionManager",  # Use 'source' not 'source_station'
+                        session_id=connection_id,
+                        turn_id=new_turn
+                    )
+                    
+                    # Put into input queue (queue[0]) for stations to process
+                    if pipeline.queues and len(pipeline.queues) > 0:
+                        await pipeline.queues[0].put(interrupt_chunk)
+                        self.logger.debug(f"Injected CONTROL_INTERRUPT into pipeline (turn={new_turn})")
+                    
+                except Exception as e:
+                    self.logger.warning(f"Failed to inject CONTROL_INTERRUPT: {e}")
                 
                 # Clear transport send queue to stop pending audio
                 if hasattr(self.transport, 'clear_send_queue'):
