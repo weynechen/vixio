@@ -150,7 +150,7 @@ class TestSentenceSplitterStation:
         agent_stop = EventChunk(
             type=ChunkType.EVENT_AGENT_STOP,
             event_data={},
-            source_station="Agent",
+            source="Agent",
             session_id=session_id
         )
         

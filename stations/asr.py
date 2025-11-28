@@ -53,7 +53,7 @@ class ASRStation(Station):
             
             # Cleanup ASR provider
             if self.asr and hasattr(self.asr, 'cleanup'):
-                self.asr.cleanup()
+                await self.asr.cleanup()
                 self.logger.debug("ASR provider cleaned up")
         except Exception as e:
             self.logger.error(f"Error cleaning up ASR provider: {e}")
@@ -104,7 +104,7 @@ class ASRStation(Station):
                             yield EventChunk(
                                 type=ChunkType.EVENT_TEXT_COMPLETE,
                                 event_data={"source": "asr", "text_length": len(text)},
-                                source_station=self.name,
+                                source=self.name,
                                 session_id=chunk.session_id,
                                 turn_id=chunk.turn_id
                             )
@@ -114,7 +114,7 @@ class ASRStation(Station):
                             yield EventChunk(
                                 type=ChunkType.EVENT_TEXT_COMPLETE,
                                 event_data={"source": "asr", "text_length": 0},
-                                source_station=self.name,
+                                source=self.name,
                                 session_id=chunk.session_id
                             )
                     

@@ -115,7 +115,7 @@ class AgentStation(Station):
                 yield EventChunk(
                     type=ChunkType.EVENT_ERROR,
                     event_data={"error": "Agent not initialized", "source": "Agent"},
-                    source_station=self.name,
+                    source=self.name,
                     session_id=chunk.session_id
                 )
                 yield chunk  # Passthrough
@@ -131,7 +131,7 @@ class AgentStation(Station):
             yield EventChunk(
                 type=ChunkType.EVENT_AGENT_START,
                 event_data={"input_text": text[:100]},
-                source_station=self.name,
+                source=self.name,
                 session_id=chunk.session_id
             )
             self._is_thinking = True
@@ -182,7 +182,7 @@ class AgentStation(Station):
                                         "timeout_seconds": self.timeout_seconds,
                                         "elapsed_seconds": elapsed
                                     },
-                                    source_station=self.name,
+                                    source=self.name,
                                     session_id=chunk.session_id
                                 )
                                 
@@ -222,7 +222,7 @@ class AgentStation(Station):
                 yield EventChunk(
                     type=ChunkType.EVENT_AGENT_STOP,
                     event_data={"delta_count": delta_count, "interrupted": interrupted},
-                    source_station=self.name,
+                    source=self.name,
                     session_id=chunk.session_id
                 )
                 self._is_thinking = False
@@ -249,7 +249,7 @@ class AgentStation(Station):
                 yield EventChunk(
                     type=ChunkType.EVENT_TIMEOUT,
                     event_data={"source": "Agent", "timeout_seconds": self.timeout_seconds},
-                    source_station=self.name,
+                    source=self.name,
                     session_id=chunk.session_id
                 )
                 
@@ -263,7 +263,7 @@ class AgentStation(Station):
                 yield EventChunk(
                     type=ChunkType.EVENT_ERROR,
                     event_data={"error": str(e), "source": "Agent"},
-                    source_station=self.name,
+                    source=self.name,
                     session_id=chunk.session_id
                 )
                 

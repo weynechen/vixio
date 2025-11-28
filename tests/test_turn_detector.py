@@ -24,7 +24,7 @@ async def test_turn_detector_emits_turn_end_after_silence(turn_detector):
     vad_start = EventChunk(
         type=ChunkType.EVENT_VAD_START,
         event_data={"has_voice": True},
-        source_station="VAD",
+        source="VAD",
         session_id=session_id
     )
     
@@ -40,7 +40,7 @@ async def test_turn_detector_emits_turn_end_after_silence(turn_detector):
     vad_end = EventChunk(
         type=ChunkType.EVENT_VAD_END,
         event_data={"has_voice": False},
-        source_station="VAD",
+        source="VAD",
         session_id=session_id
     )
     
@@ -65,7 +65,7 @@ async def test_turn_detector_cancels_on_voice_resume(turn_detector):
     vad_end = EventChunk(
         type=ChunkType.EVENT_VAD_END,
         event_data={"has_voice": False},
-        source_station="VAD",
+        source="VAD",
         session_id=session_id
     )
     
@@ -81,7 +81,7 @@ async def test_turn_detector_cancels_on_voice_resume(turn_detector):
     vad_start = EventChunk(
         type=ChunkType.EVENT_VAD_START,
         event_data={"has_voice": True},
-        source_station="VAD",
+        source="VAD",
         session_id=session_id
     )
     
@@ -126,7 +126,7 @@ async def test_turn_detector_reset_on_interrupt(turn_detector):
     vad_end = EventChunk(
         type=ChunkType.EVENT_VAD_END,
         event_data={"has_voice": False},
-        source_station="VAD",
+        source="VAD",
         session_id=session_id
     )
     

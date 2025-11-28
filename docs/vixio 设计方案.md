@@ -233,10 +233,12 @@ class EventChunk(Chunk):
     - EVENT_TTS_START/STOP: TTS generation events
     - EVENT_STATE_*: State change events
     - EVENT_ERROR: Error occurred
+    
+    Note:
+        Use the inherited 'source' field to specify which station generated this event
     """
     type: ChunkType = ChunkType.EVENT_VAD_START
     event_data: Any = None  # Event-specific data
-    source_station: Optional[str] = None  # Which station generated this event
     # data field can store additional event payload
 
 # ============ Usage Examples ============
@@ -287,7 +289,7 @@ config_update = ControlChunk(
 vad_event = EventChunk(
     type=ChunkType.EVENT_VAD_START,
     event_data={"confidence": 0.95},
-    source_station="VADStation",
+    source="VADStation",
     session_id="session_123"
 )
 
@@ -297,7 +299,7 @@ error_event = EventChunk(
         "error": "Timeout waiting for ASR response",
         "duration_ms": 5000
     },
-    source_station="ASRStation",
+    source="ASRStation",
     session_id="session_123"
 )
 
@@ -318,7 +320,7 @@ elif chunk.is_signal():
     if isinstance(chunk, ControlChunk):
         print(f"Control: {chunk.command}, params={chunk.params}")
     elif isinstance(chunk, EventChunk):
-        print(f"Event: {chunk.event_type} from {chunk.source_station}")
+        print(f"Event: {chunk.event_type} from {chunk.source}")
 ```
 ### 2. Transport 层抽象（流水线接口）
 Transport 是流水线的输入输出接口，**同时包含协议处理逻辑**，负责：
@@ -1007,7 +1009,7 @@ class VADStation(Station):
             yield EventChunk(
                 type=ChunkType.EVENT_VAD_START,
                 event_data={"has_voice": True},
-                source_station=self.name,
+                source=self.name,
                 session_id=chunk.session_id
             )
             self._is_speaking = True
@@ -1017,7 +1019,7 @@ class VADStation(Station):
             yield EventChunk(
                 type=ChunkType.EVENT_VAD_END,
                 event_data={"has_voice": False},
-                source_station=self.name,
+                source=self.name,
                 session_id=chunk.session_id
             )
             self._is_speaking = False
@@ -1127,7 +1129,7 @@ class TTSStation(Station):
                     yield EventChunk(
                         type=ChunkType.EVENT_TTS_STOP,
                         event_data={"reason": "user_interrupt"},
-                        source_station=self.name,
+                        source=self.name,
                         session_id=chunk.session_id
                     )
                     self._is_speaking = False
@@ -1142,7 +1144,7 @@ class TTSStation(Station):
         if not self._is_speaking:
             yield EventChunk(
                 type=ChunkType.EVENT_TTS_START,
-                source_station=self.name,
+                source=self.name,
                 session_id=chunk.session_id
             )
             self._is_speaking = True
@@ -1629,7 +1631,7 @@ class SessionManager:
                     stop_event = EventChunk(
                         type=ChunkType.EVENT_TTS_STOP,
                         event_data={"reason": "interrupted"},
-                        source_station="SessionManager",
+                        source="SessionManager",
                         session_id=connection_id
                     )
                     
@@ -1637,7 +1639,7 @@ class SessionManager:
                     state_event = EventChunk(
                         type=ChunkType.EVENT_STATE_LISTENING,
                         event_data={"reason": "interrupted"},
-                        source_station="SessionManager",
+                        source="SessionManager",
                         session_id=connection_id
                     )
                     
@@ -1886,7 +1888,7 @@ class TurnDetectorStation(Station):
                     yield EventChunk(
                         type=ChunkType.EVENT_TURN_END,
                         event_data={"silence_duration": self.silence_threshold},
-                        source_station=self.name,
+                        source=self.name,
                         session_id=chunk.session_id
                     )
                     self._silence_start = None

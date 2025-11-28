@@ -53,7 +53,7 @@ class MockAgentStation(Station):
             # Emit AGENT_START
             yield EventChunk(
                 type=ChunkType.EVENT_AGENT_START,
-                source_station=self.name,
+                source=self.name,
                 session_id=chunk.session_id
             )
             
@@ -71,7 +71,7 @@ class MockAgentStation(Station):
             # Emit AGENT_STOP
             yield EventChunk(
                 type=ChunkType.EVENT_AGENT_STOP,
-                source_station=self.name,
+                source=self.name,
                 session_id=chunk.session_id
             )
             
@@ -103,7 +103,7 @@ class MockTTSStation(Station):
             # Emit BOT_STARTED_SPEAKING
             yield EventChunk(
                 type=ChunkType.EVENT_BOT_STARTED_SPEAKING,
-                source_station=self.name,
+                source=self.name,
                 session_id=chunk.session_id
             )
             
@@ -121,7 +121,7 @@ class MockTTSStation(Station):
             # Emit BOT_STOPPED_SPEAKING
             yield EventChunk(
                 type=ChunkType.EVENT_BOT_STOPPED_SPEAKING,
-                source_station=self.name,
+                source=self.name,
                 session_id=chunk.session_id
             )
             

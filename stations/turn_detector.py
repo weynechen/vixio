@@ -161,7 +161,7 @@ class TurnDetectorStation(Station):
                         yield EventChunk(
                             type=ChunkType.EVENT_TURN_END,
                             event_data={"silence_duration": self.silence_threshold},
-                            source_station=self.name,
+                            source=self.name,
                             session_id=chunk.session_id,
                             turn_id=waiting_turn_id
                         )

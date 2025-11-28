@@ -210,17 +210,17 @@ class TestEventChunk:
         event = EventChunk(
             type=ChunkType.EVENT_VAD_START,
             event_data={"confidence": 0.95},
-            source_station="VADStation"
+            source="VADStation"
         )
         assert event.type == ChunkType.EVENT_VAD_START
         assert event.event_data["confidence"] == 0.95
-        assert event.source_station == "VADStation"
+        assert event.source == "VADStation"
     
     def test_event_chunk_str(self):
         """Test event chunk string representation"""
         event = EventChunk(
             type=ChunkType.EVENT_TURN_END,
-            source_station="TurnDetector",
+            source="TurnDetector",
             session_id="session_123"
         )
         str_repr = str(event)

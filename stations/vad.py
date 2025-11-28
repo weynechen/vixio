@@ -99,7 +99,7 @@ class VADStation(Station):
             yield EventChunk(
                 type=ChunkType.EVENT_VAD_START,
                 event_data={"has_voice": True},
-                source_station=self.name,
+                source=self.name,
                 session_id=chunk.session_id,
                 turn_id=chunk.turn_id
             )
@@ -113,7 +113,7 @@ class VADStation(Station):
             yield EventChunk(
                 type=ChunkType.EVENT_VAD_END,
                 event_data={"has_voice": False},
-                source_station=self.name,
+                source=self.name,
                 session_id=chunk.session_id,
                 turn_id=chunk.turn_id
             )

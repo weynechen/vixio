@@ -63,7 +63,7 @@ class TTSStation(Station):
                     yield EventChunk(
                         type=ChunkType.EVENT_TTS_STOP,
                         event_data={"reason": "user_interrupt"},
-                        source_station=self.name,
+                        source=self.name,
                         session_id=chunk.session_id,
                         turn_id=chunk.turn_id
                     )
@@ -83,7 +83,7 @@ class TTSStation(Station):
                     yield EventChunk(
                         type=ChunkType.EVENT_TTS_STOP,
                         event_data={"reason": "agent_complete"},
-                        source_station=self.name,
+                        source=self.name,
                         session_id=chunk.session_id,
                         turn_id=chunk.turn_id
                     )
@@ -123,7 +123,7 @@ class TTSStation(Station):
                 yield EventChunk(
                     type=ChunkType.EVENT_TTS_START,
                     event_data={"text_length": len(text)},
-                    source_station=self.name,
+                    source=self.name,
                     session_id=chunk.session_id,
                     turn_id=chunk.turn_id
                 )
@@ -133,7 +133,7 @@ class TTSStation(Station):
             yield EventChunk(
                 type=ChunkType.EVENT_TTS_SENTENCE_START,
                 event_data={"text": text},
-                source_station=self.name,
+                source=self.name,
                 session_id=chunk.session_id,
                 turn_id=chunk.turn_id
             )
@@ -188,7 +188,7 @@ class TTSStation(Station):
                 yield EventChunk(
                     type=ChunkType.EVENT_ERROR,
                     event_data={"error": str(e), "source": "TTS"},
-                    source_station=self.name,
+                    source=self.name,
                     session_id=chunk.session_id,
                     turn_id=chunk.turn_id
                 )
@@ -198,7 +198,7 @@ class TTSStation(Station):
                     yield EventChunk(
                         type=ChunkType.EVENT_TTS_STOP,
                         event_data={"reason": "error"},
-                        source_station=self.name,
+                        source=self.name,
                         session_id=chunk.session_id,
                         turn_id=chunk.turn_id
                     )

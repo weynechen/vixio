@@ -218,7 +218,7 @@ class SessionManager:
                         type=ChunkType.CONTROL_INTERRUPT,
                         command="interrupt",
                         params={"reason": interrupt.reason, "interrupt_source": interrupt.source},
-                        source="SessionManager",  # Use 'source' not 'source_station'
+                        source="SessionManager", 
                         session_id=connection_id,
                         turn_id=new_turn
                     )
@@ -243,7 +243,7 @@ class SessionManager:
                     stop_event = EventChunk(
                         type=ChunkType.EVENT_TTS_STOP,
                         event_data={"reason": "interrupted"},
-                        source_station="SessionManager",
+                        source="SessionManager",
                         session_id=connection_id
                     )
                     
@@ -251,7 +251,7 @@ class SessionManager:
                     state_event = EventChunk(
                         type=ChunkType.EVENT_STATE_LISTENING,
                         event_data={"reason": "interrupted"},
-                        source_station="SessionManager",
+                        source="SessionManager",
                         session_id=connection_id
                     )
                     

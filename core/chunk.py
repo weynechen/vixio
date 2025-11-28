@@ -267,19 +267,20 @@ class EventChunk(Chunk):
     
     Attributes:
         event_data: Any - Event-specific data
-        source_station: Optional[str] - Which station generated this event
         data: Optional - Additional event payload
+    
+    Note:
+        Use the inherited 'source' field to specify which station generated this event
     """
     type: ChunkType = ChunkType.EVENT_VAD_START
     event_data: Any = None
-    source_station: Optional[str] = None
     
     def __str__(self) -> str:
         session_short = self.session_id[:8] if self.session_id else 'N/A'
         event_name = self.type.value.split('.')[-1]
-        source = f" from {self.source_station}" if self.source_station else ""
+        source_info = f" from {self.source}" if self.source else ""
         data_str = f", data={self.event_data}" if self.event_data else ""
-        return f"EventChunk({event_name}{source}{data_str}, session={session_short})"
+        return f"EventChunk({event_name}{source_info}{data_str}, session={session_short})"
 
 
 # ============ Type Guards ============

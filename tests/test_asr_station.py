@@ -96,7 +96,7 @@ async def test_asr_transcribes_on_turn_end(asr_station, mock_asr):
     turn_end = EventChunk(
         type=ChunkType.EVENT_TURN_END,
         event_data={"silence_duration": 0.8},
-        source_station="TurnDetector",
+        source="TurnDetector",
         session_id=session_id
     )
     
@@ -135,7 +135,7 @@ async def test_asr_clears_buffer_after_transcription(asr_station, mock_asr):
     turn_end = EventChunk(
         type=ChunkType.EVENT_TURN_END,
         event_data={},
-        source_station="TurnDetector",
+        source="TurnDetector",
         session_id=session_id
     )
     async for _ in asr_station.process_chunk(turn_end):
@@ -148,7 +148,7 @@ async def test_asr_clears_buffer_after_transcription(asr_station, mock_asr):
     turn_end2 = EventChunk(
         type=ChunkType.EVENT_TURN_END,
         event_data={},
-        source_station="TurnDetector",
+        source="TurnDetector",
         session_id=session_id
     )
     
@@ -185,7 +185,7 @@ async def test_asr_handles_empty_transcription(asr_station, mock_asr):
     turn_end = EventChunk(
         type=ChunkType.EVENT_TURN_END,
         event_data={},
-        source_station="TurnDetector",
+        source="TurnDetector",
         session_id=session_id
     )
     
@@ -234,7 +234,7 @@ async def test_asr_resets_on_interrupt(asr_station, mock_asr):
     turn_end = EventChunk(
         type=ChunkType.EVENT_TURN_END,
         event_data={},
-        source_station="TurnDetector",
+        source="TurnDetector",
         session_id=session_id
     )
     
