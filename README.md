@@ -11,6 +11,21 @@
   - **Signal Chunk（消息）**: Control/Event，立即透传并触发工站状态变化
 - **Transport（传输层）**: 流水线的输入输出接口，完全解耦传输细节
 
+### Pipeline
+线性异步队列链：队列 ->station process -> 队列 -> station proecess -> output
+
+每个station 有一个 task和一个queue。 station process 出来的chunk放入到queue中。
+
+主task从最后一个queue中取出chunk给到output。
+
+注意： 不适合多分钟的情况。
+
+### ControlBus
+
+### Station
+
+### Chunk
+
 
 ## 项目状态
 

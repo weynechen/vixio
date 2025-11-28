@@ -2,7 +2,7 @@
 Chunk data structures - carriers for both data and signals in the pipeline
 
 Design principle:
-- Data chunks (AUDIO/TEXT/VIDEO): Products to be transformed by stations
+- Data chunks (AUDIO/TEXT/VIDEO): Core content to be transformed by stations
 - Signal chunks (CONTROL/EVENT): Messages to passthrough + trigger station state changes
 """
 
@@ -13,9 +13,9 @@ import time
 
 
 class ChunkType(str, Enum):
-    """Chunk types - divided into Data (products) and Signals (messages)"""
+    """Chunk types - divided into Data (core content) and Signals (messages)"""
     
-    # ============ Data Chunks (Products - to be processed/transformed) ============
+    # ============ Data Chunks (Core content - to be processed/transformed) ============
     # Audio data - raw material for ASR
     AUDIO_RAW = "audio.raw"           # PCM audio (16-bit signed, little-endian)
     
@@ -85,7 +85,7 @@ class Chunk:
     Base chunk - carrier for both data and signals in the pipeline.
     
     Design principle:
-    - Data chunks (AUDIO/TEXT/VIDEO): Products to be transformed by stations
+    - Data chunks (AUDIO/TEXT/VIDEO): Core content to be transformed by stations
     - Signal chunks (CONTROL/EVENT): Messages to passthrough + trigger station state changes
     
     Attributes:
@@ -108,7 +108,7 @@ class Chunk:
     sequence: int = 0  # Sequence number within the turn
     
     def is_data(self) -> bool:
-        """Check if this is a data chunk (product)"""
+        """Check if this is a data chunk (core content)"""
         return self.type.value.startswith(("audio.", "text", "vision."))
     
     def is_signal(self) -> bool:

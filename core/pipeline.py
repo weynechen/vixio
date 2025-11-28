@@ -141,6 +141,7 @@ class Pipeline:
             try:
                 while self._running:
                     try:
+                        # get chunk from output queue
                         chunk = await asyncio.wait_for(self.queues[-1].get(), timeout=0.1)
                         
                         # None is used as end-of-stream marker, stop when received
@@ -213,7 +214,6 @@ class Pipeline:
         self.logger.debug(f"[{self.name}] Starting station {station.name} (index {index})")
         
         try:
-            # Use station.process() instead of process_chunk() to enable turn management
             async for output_chunk in station.process(self._queue_iterator(input_queue)):
                 await output_queue.put(output_chunk)
             
