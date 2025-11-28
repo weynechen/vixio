@@ -6,16 +6,64 @@ Output: TEXT_DELTA (streaming, source="agent") + EVENT_AGENT_START/STOP
 
 Note: Agent is the central processing node. All text must go through Agent,
 even if it's just a passthrough (echo agent) or translation agent.
+
+Refactored with middleware pattern for clean separation of concerns.
 """
 
 import asyncio
 from typing import AsyncIterator, Optional
 from core.station import Station
-from core.chunk import Chunk, ChunkType, TextChunk, TextDeltaChunk, EventChunk, is_text_chunk
+from core.chunk import Chunk, ChunkType, TextDeltaChunk, is_text_chunk
+from core.middleware import with_middlewares
+from stations.middlewares import (
+    SignalHandlerMiddleware,
+    InputValidatorMiddleware,
+    EventEmitterMiddleware,
+    TimeoutHandlerMiddleware,
+    InterruptDetectorMiddleware,
+    LatencyMonitorMiddleware,
+    ErrorHandlerMiddleware
+)
 from providers.agent import AgentProvider
-from utils import get_latency_monitor
 
 
+@with_middlewares(
+    # Handle signals (CONTROL_INTERRUPT, etc.)
+    SignalHandlerMiddleware(
+        on_interrupt=lambda: None,  # Will be set in __init__
+        cancel_streaming=False  # Handled by agent stream closure
+    ),
+    # Validate input (only non-empty TEXT chunks)
+    InputValidatorMiddleware(
+        allowed_types=[ChunkType.TEXT],
+        check_empty=True,
+        passthrough_on_invalid=True
+    ),
+    # Emit AGENT_START/STOP events
+    EventEmitterMiddleware(
+        start_event=ChunkType.EVENT_AGENT_START,
+        stop_event=ChunkType.EVENT_AGENT_STOP,
+        emit_on_interrupt=True
+    ),
+    # Monitor timeout
+    TimeoutHandlerMiddleware(
+        timeout_seconds=30.0,  # Will be overridden in __init__
+        emit_timeout_event=True,
+        send_interrupt_signal=True
+    ),
+    # Detect interrupts (turn ID changes)
+    InterruptDetectorMiddleware(check_interval=5),
+    # Monitor TTFT (Time To First Token)
+    LatencyMonitorMiddleware(
+        record_first_token=True,
+        metric_name="agent_first_token"
+    ),
+    # Handle errors
+    ErrorHandlerMiddleware(
+        emit_error_event=True,
+        suppress_errors=False
+    )
+)
 class AgentStation(Station):
     """
     Agent workstation: Processes text through LLM agent.
@@ -42,12 +90,43 @@ class AgentStation(Station):
         """
         super().__init__(name=name)
         self.agent = agent_provider
+        self._streaming_generator: Optional[AsyncIterator] = None
         self.timeout_seconds = timeout_seconds
-        self._is_thinking = False
-        self._streaming_task: Optional[asyncio.Task] = None
+    
+    def _configure_middlewares_hook(self, middlewares: list) -> None:
+        """
+        Hook called when middlewares are attached.
         
-        # Latency monitoring
-        self._latency_monitor = get_latency_monitor()
+        Allows customizing middleware settings after attachment.
+        """
+        # Find TimeoutHandlerMiddleware and update timeout
+        for middleware in middlewares:
+            if middleware.__class__.__name__ == 'TimeoutHandlerMiddleware':
+                middleware.timeout_seconds = self.timeout_seconds
+            elif middleware.__class__.__name__ == 'SignalHandlerMiddleware':
+                # Set interrupt callback to reset agent conversation
+                middleware.on_interrupt = self._handle_interrupt
+    
+    async def _handle_interrupt(self) -> None:
+        """
+        Handle interrupt signal.
+        
+        Called by SignalHandlerMiddleware when CONTROL_INTERRUPT received.
+        """
+        # Close ongoing streaming generator
+        if self._streaming_generator is not None:
+            try:
+                await self._streaming_generator.aclose()
+                self.logger.info("Closed Agent streaming generator")
+            except Exception as e:
+                self.logger.warning(f"Error closing Agent stream: {e}")
+            finally:
+                self._streaming_generator = None
+        
+        # Reset conversation
+        if self.agent.is_initialized():
+            await self.agent.reset_conversation()
+            self.logger.info("Agent conversation reset")
     
     async def cleanup(self) -> None:
         """
@@ -64,211 +143,59 @@ class AgentStation(Station):
     
     async def process_chunk(self, chunk: Chunk) -> AsyncIterator[Chunk]:
         """
-        Process chunk through Agent.
+        Process chunk through Agent - CORE LOGIC ONLY.
         
-        Logic:
-        - On TEXT: Send to agent, stream TEXT_DELTA responses
-        - Emit EVENT_AGENT_START before first response
-        - Emit EVENT_AGENT_STOP after last response
-        - On CONTROL_INTERRUPT: Reset conversation
+        All cross-cutting concerns (signal handling, validation, events, timeout,
+        interrupt detection, latency monitoring, error handling) are handled by
+        middlewares via the @with_middlewares decorator.
+        
+        This method now contains ONLY the core business logic:
+        - Extract text from chunk
+        - Check agent initialization
+        - Stream agent response as TEXT_DELTA chunks
+        
+        Note: Middlewares handle the rest automatically in the correct order.
         """
-        # Handle signals
-        if chunk.is_signal():
-            # Reset conversation on interrupt
-            if chunk.type == ChunkType.CONTROL_INTERRUPT:
-                # Close ongoing streaming generator immediately to stop OpenAI API calls
-                if self._streaming_task is not None:
-                    try:
-                        await self._streaming_task.aclose()
-                        self.logger.info("Closed ongoing Agent streaming generator")
-                    except Exception as e:
-                        self.logger.warning(f"Error closing Agent stream: {e}")
-                    finally:
-                        self._streaming_task = None
-                
-                # Reset conversation
-                if self.agent.is_initialized():
-                    await self.agent.reset_conversation()
-                    self.logger.info("Agent conversation reset")
-                self._is_thinking = False
-            
-            # Passthrough signals
-            yield chunk
-            return
-        
-        # Process text chunks
-        if is_text_chunk(chunk):
-            # Extract text content
-            if hasattr(chunk, 'content'):
-                text = chunk.content
-            else:
-                text = str(chunk.data) if chunk.data else ""
-            
-            if not text or not text.strip():
-                self.logger.debug("Skipping empty text for Agent")
-                yield chunk  # Passthrough
-                return
-            
-            # Check if agent is initialized
-            if not self.agent.is_initialized():
-                self.logger.error("Agent not initialized, cannot process text")
-                yield EventChunk(
-                    type=ChunkType.EVENT_ERROR,
-                    event_data={"error": "Agent not initialized", "source": "Agent"},
-                    source=self.name,
-                    session_id=chunk.session_id
-                )
-                yield chunk  # Passthrough
-                return
-            
-            self.logger.info(f"Agent processing: '{text[:50]}...' (chunk.turn_id={chunk.turn_id}, self.current_turn_id={self.current_turn_id})")
-            
-            # Passthrough input TEXT first for immediate client feedback
-            # This allows ASR results to be sent immediately before Agent processing
-            yield chunk
-            
-            # Emit AGENT_START event
-            yield EventChunk(
-                type=ChunkType.EVENT_AGENT_START,
-                event_data={"input_text": text[:100]},
-                source=self.name,
-                session_id=chunk.session_id
-            )
-            self._is_thinking = True
-            
-            # Stream agent response with timeout
-            try:
-                delta_count = 0
-                start_time = asyncio.get_event_loop().time()
-                first_token_recorded = False
-                interrupted = False
-                
-                # Store the generator so we can close it on interrupt
-                agent_stream = self.agent.chat(text)
-                self._streaming_task = agent_stream  # Store reference for cancellation
-                
-                try:
-                    async for delta in agent_stream:
-                        # Check if interrupted (turn_id changed)
-                        if self.control_bus:
-                            current_turn = self.control_bus.get_current_turn_id()
-                            if current_turn > self.current_turn_id:
-                                self.logger.info(f"Agent interrupted: turn {self.current_turn_id} -> {current_turn}")
-                                interrupted = True
-                                break
-                        
-                        # Check timeout
-                        if self.timeout_seconds:
-                            elapsed = asyncio.get_event_loop().time() - start_time
-                            if elapsed > self.timeout_seconds:
-                                self.logger.warning(f"Agent processing timeout after {elapsed:.1f}s")
-                                
-                                # Send interrupt signal via ControlBus
-                                if self.control_bus:
-                                    await self.control_bus.send_interrupt(
-                                        source=self.name,
-                                        reason="agent_timeout",
-                                        metadata={
-                                            "timeout_seconds": self.timeout_seconds,
-                                            "elapsed_seconds": elapsed
-                                        }
-                                    )
-                                
-                                # Emit timeout event
-                                yield EventChunk(
-                                    type=ChunkType.EVENT_TIMEOUT,
-                                    event_data={
-                                        "source": "Agent",
-                                        "timeout_seconds": self.timeout_seconds,
-                                        "elapsed_seconds": elapsed
-                                    },
-                                    source=self.name,
-                                    session_id=chunk.session_id
-                                )
-                                
-                                interrupted = True
-                                break
-                        
-                        if delta:
-                            delta_count += 1
-                            
-                            # Record T3: agent_first_token (TTFT - Time To First Token)
-                            if not first_token_recorded:
-                                self._latency_monitor.record(
-                                    chunk.session_id,
-                                    chunk.turn_id,
-                                    "agent_first_token"
-                                )
-                                first_token_recorded = True
-                                self.logger.debug("Recorded agent first token (TTFT)")
-                            
-                            yield TextDeltaChunk(
-                                type=ChunkType.TEXT_DELTA,
-                                delta=delta,
-                                source="agent",  # Mark as agent output
-                                session_id=chunk.session_id,
-                                turn_id=chunk.turn_id
-                            )
-                    
-                    self.logger.debug(f"Agent generated {delta_count} text deltas (interrupted={interrupted})")
-                
-                finally:
-                    # Ensure the generator is properly closed to terminate OpenAI stream
-                    await agent_stream.aclose()
-                    self._streaming_task = None
-                    self.logger.debug("Agent stream closed")
-                
-                # Emit AGENT_STOP event
-                yield EventChunk(
-                    type=ChunkType.EVENT_AGENT_STOP,
-                    event_data={"delta_count": delta_count, "interrupted": interrupted},
-                    source=self.name,
-                    session_id=chunk.session_id
-                )
-                self._is_thinking = False
-            
-            except asyncio.CancelledError:
-                # Stream was cancelled (from external CONTROL_INTERRUPT)
-                self.logger.info("Agent streaming was cancelled")
-                self._streaming_task = None
-                self._is_thinking = False
-                raise  # Re-raise to properly propagate cancellation
-            
-            except asyncio.TimeoutError:
-                self.logger.error(f"Agent processing timed out after {self.timeout_seconds}s")
-                
-                # Send interrupt signal
-                if self.control_bus:
-                    await self.control_bus.send_interrupt(
-                        source=self.name,
-                        reason="agent_timeout",
-                        metadata={"timeout_seconds": self.timeout_seconds}
-                    )
-                
-                # Emit timeout event
-                yield EventChunk(
-                    type=ChunkType.EVENT_TIMEOUT,
-                    event_data={"source": "Agent", "timeout_seconds": self.timeout_seconds},
-                    source=self.name,
-                    session_id=chunk.session_id
-                )
-                
-                self._streaming_task = None
-                self._is_thinking = False
-            
-            except Exception as e:
-                self.logger.error(f"Agent processing failed: {e}", exc_info=True)
-                
-                # Emit error event
-                yield EventChunk(
-                    type=ChunkType.EVENT_ERROR,
-                    event_data={"error": str(e), "source": "Agent"},
-                    source=self.name,
-                    session_id=chunk.session_id
-                )
-                
-                self._streaming_task = None
-                self._is_thinking = False
+        # Extract text content
+        if hasattr(chunk, 'content'):
+            text = chunk.content
         else:
-            # Passthrough non-text data
-            yield chunk
+            text = str(chunk.data) if chunk.data else ""
+        
+        # Check if agent is initialized
+        if not self.agent.is_initialized():
+            self.logger.error("Agent not initialized, cannot process text")
+            # ErrorHandlerMiddleware will catch and emit error event
+            raise RuntimeError("Agent not initialized")
+        
+        self.logger.info(
+            f"Agent processing: '{text[:50]}...' "
+            f"(turn_id={chunk.turn_id})"
+        )
+        
+        # Passthrough input TEXT first for immediate client feedback
+        yield chunk
+        
+        # Stream agent response - CORE BUSINESS LOGIC
+        # Store generator reference for cleanup on interrupt
+        agent_stream = self.agent.chat(text)
+        self._streaming_generator = agent_stream
+        
+        try:
+            async for delta in agent_stream:
+                if delta:
+                    # Yield text delta
+                    # Note: LatencyMonitorMiddleware automatically records first token
+                    yield TextDeltaChunk(
+                        type=ChunkType.TEXT_DELTA,
+                        delta=delta,
+                        source="agent",  # Mark as agent output
+                        session_id=chunk.session_id,
+                        turn_id=chunk.turn_id
+                    )
+        
+        finally:
+            # Ensure generator is properly closed
+            await agent_stream.aclose()
+            self._streaming_generator = None
+            self.logger.debug("Agent stream closed")
