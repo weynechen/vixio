@@ -3,13 +3,16 @@ SentenceSplitterStation - Split streaming text into sentences
 
 Input: TEXT_DELTA
 Output: TEXT (complete sentences)
+
+Refactored with middleware pattern for clean separation of concerns.
 """
 
 import re
 from typing import AsyncIterator, List
 from core.station import Station
-from core.chunk import Chunk, ChunkType, TextChunk, TextDeltaChunk
-from utils import get_latency_monitor
+from core.chunk import Chunk, ChunkType, TextChunk
+from core.middleware import with_middlewares
+from stations.middlewares import SignalHandlerMiddleware, LatencyMonitorMiddleware, ErrorHandlerMiddleware
 
 
 class SentenceSplitter:
@@ -95,6 +98,23 @@ class SentenceSplitter:
         self.buffer = ""
 
 
+@with_middlewares(
+    # Handle signals (CONTROL_INTERRUPT - reset buffer)
+    SignalHandlerMiddleware(
+        on_interrupt=lambda: None,  # Will be set in __init__
+        cancel_streaming=False
+    ),
+    # Monitor first sentence latency
+    LatencyMonitorMiddleware(
+        record_first_token=True,
+        metric_name="first_sentence_complete"
+    ),
+    # Handle errors
+    ErrorHandlerMiddleware(
+        emit_error_event=True,
+        suppress_errors=False
+    )
+)
 class SentenceSplitterStation(Station):
     """
     Sentence splitter: Splits streaming text into complete sentences.
@@ -121,48 +141,55 @@ class SentenceSplitterStation(Station):
         super().__init__(name=name)
         self.min_sentence_length = min_sentence_length
         self._splitter = SentenceSplitter(min_sentence_length)
-        
-        # Latency monitoring
-        self._latency_monitor = get_latency_monitor()
-        self._first_sentence_recorded = {}
+    
+    def _configure_middlewares_hook(self, middlewares: list) -> None:
+        """Hook to configure middlewares."""
+        for middleware in middlewares:
+            if middleware.__class__.__name__ == 'SignalHandlerMiddleware':
+                middleware.on_interrupt = self._handle_interrupt
+    
+    async def _handle_interrupt(self) -> None:
+        """Handle interrupt signal - reset splitter."""
+        self._splitter.reset()
+        self.logger.debug("Sentence splitter reset")
     
     async def process_chunk(self, chunk: Chunk) -> AsyncIterator[Chunk]:
         """
-        Process chunk through sentence splitter.
+        Process chunk through sentence splitter - CORE LOGIC ONLY.
         
-        Logic:
-        - On TEXT_DELTA: Add to buffer, yield complete sentences as TEXT
-        - On EVENT_AGENT_STOP: Flush remaining buffer
-        - On CONTROL_INTERRUPT: Reset buffer
-        - Passthrough all other chunks
+        Middlewares handle: signal processing (CONTROL_INTERRUPT), latency monitoring, error handling.
+        
+        Core logic:
+        - Accumulate TEXT_DELTA chunks and split into sentences
+        - On EVENT_AGENT_STOP: Flush remaining buffer as final sentence
+        - Passthrough all chunks
+        
+        Note: SignalHandlerMiddleware handles CONTROL_INTERRUPT (resets splitter via _handle_interrupt)
+        Note: LatencyMonitorMiddleware automatically records first sentence output
         """
-        # Handle signals
-        if chunk.is_signal():
-            # Flush buffer when agent stops
-            if chunk.type == ChunkType.EVENT_AGENT_STOP:
-                remaining = self._splitter.flush()
-                if remaining:
-                    self.logger.info(f"Flushing final sentence: '{remaining[:50]}...'")
-                    yield TextChunk(
-                        type=ChunkType.TEXT,
-                        content=remaining,
-                        source="agent",  # Final sentence from agent
-                        session_id=chunk.session_id,
-                        turn_id=chunk.turn_id  # Inherit turn_id from event
-                    )
+        # Handle EVENT_AGENT_STOP signal (flush remaining text)
+        if chunk.type == ChunkType.EVENT_AGENT_STOP:
+            remaining = self._splitter.flush()
+            if remaining:
+                self.logger.info(f"Flushing final sentence: '{remaining[:50]}...'")
+                yield TextChunk(
+                    type=ChunkType.TEXT,
+                    content=remaining,
+                    source="agent",
+                    session_id=chunk.session_id,
+                    turn_id=chunk.turn_id
+                )
             
-            # Reset on interrupt
-            elif chunk.type == ChunkType.CONTROL_INTERRUPT:
-                self._splitter.reset()
-                # Clear first sentence tracking for this session
-                self._first_sentence_recorded.clear()
-                self.logger.debug("Sentence splitter reset")
-            
-            # Passthrough signals
+            # Passthrough signal
             yield chunk
             return
         
-        # Process TEXT_DELTA chunks
+        # Handle other signals (passthrough)
+        if chunk.is_signal():
+            yield chunk
+            return
+        
+        # Process TEXT_DELTA chunks from agent
         if chunk.type == ChunkType.TEXT_DELTA:
             delta = chunk.delta if hasattr(chunk, 'delta') else str(chunk.data)
             
@@ -171,24 +198,14 @@ class SentenceSplitterStation(Station):
                 sentences = self._splitter.add_chunk(delta)
                 
                 # Yield each complete sentence as TEXT chunk
-                for i, sentence in enumerate(sentences):
+                # Note: LatencyMonitorMiddleware records first sentence automatically
+                for sentence in sentences:
                     self.logger.info(f"Complete sentence: '{sentence[:50]}...'")
-                    
-                    # Record T4: first_sentence_complete (only for first sentence per turn)
-                    session_turn_key = f"{chunk.session_id}_{chunk.turn_id}"
-                    if session_turn_key not in self._first_sentence_recorded:
-                        self._latency_monitor.record(
-                            chunk.session_id,
-                            chunk.turn_id,
-                            "first_sentence_complete"
-                        )
-                        self._first_sentence_recorded[session_turn_key] = True
-                        self.logger.debug("Recorded first sentence complete")
                     
                     yield TextChunk(
                         type=ChunkType.TEXT,
                         content=sentence,
-                        source=chunk.source,  # Preserve source (e.g., "agent")
+                        source=chunk.source,
                         session_id=chunk.session_id,
                         turn_id=chunk.turn_id
                     )

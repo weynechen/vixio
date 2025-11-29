@@ -6,14 +6,33 @@ Output: AUDIO_RAW (passthrough) + EVENT_VAD_START/END
 
 Note: This station expects PCM audio data. Transport layers are responsible
 for format conversion (e.g., Opus -> PCM) before chunks enter the pipeline.
+
+Refactored with middleware pattern for clean separation of concerns.
 """
 
 from typing import AsyncIterator
 from core.station import Station
-from core.chunk import Chunk, ChunkType, AudioChunk, EventChunk, is_audio_chunk
+from core.chunk import Chunk, ChunkType, EventChunk, is_audio_chunk
+from core.middleware import with_middlewares
+from stations.middlewares import (
+    SignalHandlerMiddleware,
+    ErrorHandlerMiddleware
+)
 from providers.vad import VADProvider, VADEvent
 
 
+@with_middlewares(
+    # Handle signals (CONTROL_INTERRUPT - reset VAD state)
+    SignalHandlerMiddleware(
+        on_interrupt=lambda: None,  # Will be set in __init__
+        cancel_streaming=False
+    ),
+    # Handle errors
+    ErrorHandlerMiddleware(
+        emit_error_event=True,
+        suppress_errors=False
+    )
+)
 class VADStation(Station):
     """
     VAD workstation: Detects voice activity in PCM audio stream.
@@ -37,6 +56,31 @@ class VADStation(Station):
         self.vad = vad_provider
         self._is_speaking = False
     
+    def _configure_middlewares_hook(self, middlewares: list) -> None:
+        """
+        Hook called when middlewares are attached.
+        
+        Allows customizing middleware settings after attachment.
+        """
+        # Set interrupt callback to reset VAD state
+        for middleware in middlewares:
+            if middleware.__class__.__name__ == 'SignalHandlerMiddleware':
+                middleware.on_interrupt = self._handle_interrupt
+    
+    async def _handle_interrupt(self) -> None:
+        """
+        Handle interrupt signal.
+        
+        Called by SignalHandlerMiddleware when CONTROL_INTERRUPT received.
+        """
+        # Reset VAD state on interrupt
+        if self._is_speaking:
+            # Send END event if VAD was active
+            await self.vad.detect(b'', VADEvent.END)
+        self._is_speaking = False
+        await self.vad.reset()
+        self.logger.debug("VAD state reset by interrupt")
+    
     async def cleanup(self) -> None:
         """
         Cleanup VAD resources.
@@ -52,29 +96,19 @@ class VADStation(Station):
     
     async def process_chunk(self, chunk: Chunk) -> AsyncIterator[Chunk]:
         """
-        Process chunk through VAD.
+        Process chunk through VAD - CORE LOGIC ONLY.
         
-        For audio chunks:
-        - Detect voice activity
-        - Send VAD events (START/CHUNK/END) to provider
-        - Emit VAD events on state change
-        - Passthrough audio chunk
+        Middlewares handle: signal processing (CONTROL_INTERRUPT), error handling.
         
-        For signal chunks:
-        - Handle CONTROL_INTERRUPT to reset state
-        - Passthrough signal
+        Core logic:
+        - Detect voice activity in AUDIO_RAW chunks
+        - Emit EVENT_VAD_START/END on state change
+        - Passthrough all chunks
+        
+        Note: SignalHandlerMiddleware handles CONTROL_INTERRUPT (resets VAD via _handle_interrupt)
         """
-        # Handle signals
+        # Handle signals (passthrough)
         if chunk.is_signal():
-            if chunk.type == ChunkType.CONTROL_INTERRUPT:
-                # Reset VAD state on interrupt
-                if self._is_speaking:
-                    # Send END event if VAD was active
-                    await self.vad.detect(b'', VADEvent.END)
-                self._is_speaking = False
-                await self.vad.reset()
-                self.logger.debug("VAD state reset by interrupt")
-            # Always passthrough signals
             yield chunk
             return
         
@@ -83,15 +117,13 @@ class VADStation(Station):
             yield chunk
             return
         
-        # Prepare audio data
+        # Detect voice activity
         audio_data = chunk.data if isinstance(chunk.data, bytes) else b''
-        
-        # Detect voice activity with appropriate event
         has_voice = await self.vad.detect(audio_data, VADEvent.CHUNK)
         
         # Emit VAD events on state change
         if has_voice and not self._is_speaking:
-            # Voice activity started: send START event
+            # Voice activity started
             await self.vad.detect(b'', VADEvent.START)
             self._is_speaking = True
             
@@ -105,7 +137,7 @@ class VADStation(Station):
             )
         
         elif not has_voice and self._is_speaking:
-            # Voice activity ended: send END event
+            # Voice activity ended
             await self.vad.detect(b'', VADEvent.END)
             self._is_speaking = False
             

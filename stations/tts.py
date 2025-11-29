@@ -6,15 +6,50 @@ Output: AUDIO_RAW (streaming) + EVENT_TTS_START/STOP
 
 Note: This station only processes TEXT chunks with source="agent".
 Use SentenceSplitterStation before this to convert TEXT_DELTA to TEXT.
+
+Refactored with middleware pattern for clean separation of concerns.
 """
 
 from typing import AsyncIterator
 from core.station import Station
-from core.chunk import Chunk, ChunkType, AudioChunk, EventChunk, is_text_chunk
+from core.chunk import Chunk, ChunkType, AudioChunk, EventChunk
+from core.middleware import with_middlewares
+from stations.middlewares import (
+    MultiSignalHandlerMiddleware,
+    InputValidatorMiddleware,
+    InterruptDetectorMiddleware,
+    LatencyMonitorMiddleware,
+    ErrorHandlerMiddleware
+)
 from providers.tts import TTSProvider
-from utils import get_latency_monitor
 
 
+@with_middlewares(
+    # Handle multiple signals (CONTROL_INTERRUPT, EVENT_AGENT_STOP)
+    MultiSignalHandlerMiddleware(
+        signal_handlers={},  # Will be configured in __init__
+        passthrough_signals=True
+    ),
+    # Validate input (only TEXT from agent, non-empty)
+    InputValidatorMiddleware(
+        allowed_types=[ChunkType.TEXT],
+        check_empty=True,
+        required_source="agent",
+        passthrough_on_invalid=True
+    ),
+    # Detect interrupts during synthesis (turn ID changes)
+    InterruptDetectorMiddleware(check_interval=5),
+    # Monitor first audio latency
+    LatencyMonitorMiddleware(
+        record_first_token=True,
+        metric_name="tts_first_audio_ready"
+    ),
+    # Handle errors
+    ErrorHandlerMiddleware(
+        emit_error_event=True,
+        suppress_errors=False
+    )
+)
 class TTSStation(Station):
     """
     TTS workstation: Synthesizes text to audio.
@@ -37,177 +72,127 @@ class TTSStation(Station):
         super().__init__(name=name)
         self.tts = tts_provider
         self._is_speaking = False
-        
-        # Latency monitoring
-        self._latency_monitor = get_latency_monitor()
-        self._first_audio_recorded = {}
     
-    async def process_chunk(self, chunk: Chunk) -> AsyncIterator[Chunk]:
+    def _configure_middlewares_hook(self, middlewares: list) -> None:
         """
-        Process chunk through TTS.
+        Hook called when middlewares are attached.
         
-        Logic:
-        - On TEXT: Synthesize to audio, yield AUDIO_RAW chunks
-        - On TEXT_DELTA: Passthrough (let SentenceSplitter handle it)
-        - Emit EVENT_TTS_START before first audio
-        - Emit EVENT_TTS_STOP after last audio
-        - On CONTROL_INTERRUPT: Cancel synthesis
+        Configure signal handlers for TTS-specific signals.
         """
-        # Handle signals
-        if chunk.is_signal():
-            # Stop speaking on interrupt
-            if chunk.type == ChunkType.CONTROL_INTERRUPT:
-                if self._is_speaking:
-                    self.tts.cancel()
-                    
-                    yield EventChunk(
-                        type=ChunkType.EVENT_TTS_STOP,
-                        event_data={"reason": "user_interrupt"},
-                        source=self.name,
-                        session_id=chunk.session_id,
-                        turn_id=chunk.turn_id
-                    )
-                    
-                    self._is_speaking = False
-                    # Clear first audio tracking
-                    self._first_audio_recorded.clear()
-                    self.logger.info("TTS cancelled by interrupt")
-                    
-                    # Note: Don't mark turn completed on interrupt
-                    # Interrupt handler already started a new turn
-            
-            # Stop speaking when Agent completes (last sentence done)
-            elif chunk.type == ChunkType.EVENT_AGENT_STOP:
-                if self._is_speaking:
-                    self.logger.info("TTS session complete (agent stopped)")
-                    yield EventChunk(
-                        type=ChunkType.EVENT_TTS_STOP,
-                        event_data={"reason": "agent_complete"},
-                        source=self.name,
-                        session_id=chunk.session_id,
-                        turn_id=chunk.turn_id
-                    )
-                    self._is_speaking = False
-                    
-                    # Note: Turn increment moved to Transport
-                    # Transport will increment after all audio frames are sent to device
-            
-            # Passthrough signals
-            yield chunk
-            return
+        for middleware in middlewares:
+            if middleware.__class__.__name__ == 'MultiSignalHandlerMiddleware':
+                # Configure signal handlers
+                middleware.signal_handlers = {
+                    ChunkType.CONTROL_INTERRUPT: self._handle_interrupt,
+                    ChunkType.EVENT_AGENT_STOP: self._handle_agent_stop
+                }
+    
+    async def _handle_interrupt(self, chunk: Chunk) -> AsyncIterator[Chunk]:
+        """
+        Handle CONTROL_INTERRUPT signal.
         
-        # Only process TEXT chunks from Agent (complete sentences)
-        # Check both type and source
-        if chunk.type == ChunkType.TEXT:
-            # Check if source is "agent"
-            if chunk.source != "agent":
-                self.logger.debug(f"Skipping TEXT from source='{chunk.source}' (not agent)")
-                yield chunk  # Passthrough
-                return
+        Cancel TTS synthesis and emit TTS_STOP event.
+        """
+        if self._is_speaking:
+            self.tts.cancel()
             
-            # Extract text content
-            if hasattr(chunk, 'content'):
-                text = chunk.content
-            else:
-                text = str(chunk.data) if chunk.data else ""
-            
-            if not text or not text.strip():
-                self.logger.debug("Skipping empty text for TTS")
-                yield chunk  # Passthrough
-                return
-            
-            self.logger.info(f"TTS synthesizing: '{text[:50]}...'")
-            
-            # Emit TTS start event (first time only)
-            if not self._is_speaking:
-                yield EventChunk(
-                    type=ChunkType.EVENT_TTS_START,
-                    event_data={"text_length": len(text)},
-                    source=self.name,
-                    session_id=chunk.session_id,
-                    turn_id=chunk.turn_id
-                )
-                self._is_speaking = True
-            
-            # Emit sentence start event with text (for LLM output display on client)
             yield EventChunk(
-                type=ChunkType.EVENT_TTS_SENTENCE_START,
-                event_data={"text": text},
+                type=ChunkType.EVENT_TTS_STOP,
+                event_data={"reason": "user_interrupt"},
                 source=self.name,
                 session_id=chunk.session_id,
                 turn_id=chunk.turn_id
             )
             
-            # Synthesize text to audio (streaming)
-            try:
-                audio_count = 0
-                async for audio_data in self.tts.synthesize(text):
-                    # Check if interrupted (turn_id changed)
-                    if self.control_bus:
-                        current_turn = self.control_bus.get_current_turn_id()
-                        if current_turn > self.current_turn_id:
-                            self.logger.info(f"TTS interrupted: turn {self.current_turn_id} -> {current_turn}")
-                            # Cancel TTS provider to stop immediately
-                            self.tts.cancel()
-                            break
-                    
-                    if audio_data:
-                        audio_count += 1
-                        
-                        # Record T5: tts_first_audio_ready (only for first audio per turn)
-                        session_turn_key = f"{chunk.session_id}_{chunk.turn_id}"
-                        if session_turn_key not in self._first_audio_recorded:
-                            self._latency_monitor.record(
-                                chunk.session_id,
-                                chunk.turn_id,
-                                "tts_first_audio_ready"
-                            )
-                            self._first_audio_recorded[session_turn_key] = True
-                            self.logger.debug("Recorded TTS first audio ready")
-                        
-                        # TTS provider returns PCM audio (complete sentence now)
-                        yield AudioChunk(
-                            type=ChunkType.AUDIO_RAW,
-                            data=audio_data,
-                            sample_rate=16000,
-                            channels=1,
-                            source=self.name,  # Mark as from TTS station for flow control
-                            session_id=chunk.session_id,
-                            turn_id=chunk.turn_id
-                        )
-                
-                self.logger.debug(f"TTS generated {audio_count} audio chunks (sentences)")
-                
-                # Note: TTS STOP event will be sent when receiving EVENT_AGENT_STOP
-                # This ensures STOP is only sent after the last sentence
+            self._is_speaking = False
+            self.logger.info("TTS cancelled by interrupt")
+    
+    async def _handle_agent_stop(self, chunk: Chunk) -> AsyncIterator[Chunk]:
+        """
+        Handle EVENT_AGENT_STOP signal.
+        
+        Emit TTS_STOP event to mark end of turn.
+        """
+        if self._is_speaking:
+            yield EventChunk(
+                type=ChunkType.EVENT_TTS_STOP,
+                event_data={"reason": "agent_complete"},
+                source=self.name,
+                session_id=chunk.session_id,
+                turn_id=chunk.turn_id
+            )
             
-            except Exception as e:
-                self.logger.error(f"TTS synthesis failed: {e}", exc_info=True)
+            self._is_speaking = False
+            self.logger.info("TTS session complete (agent stopped)")
+    
+    async def process_chunk(self, chunk: Chunk) -> AsyncIterator[Chunk]:
+        """
+        Process chunk through TTS - CORE LOGIC ONLY.
+        
+        Middlewares handle:
+        - MultiSignalHandlerMiddleware: handles CONTROL_INTERRUPT, EVENT_AGENT_STOP
+        - InputValidatorMiddleware: validates TEXT from agent, non-empty
+        - InterruptDetectorMiddleware: detects turn_id changes during synthesis
+        - LatencyMonitorMiddleware: records first audio
+        - ErrorHandlerMiddleware: handles exceptions
+        
+        Core logic:
+        - Synthesize text to audio
+        - Emit TTS events (START, SENTENCE_START)
+        - Stream audio chunks
+        
+        Note: All signal handling is done by MultiSignalHandlerMiddleware
+        """
+        # Handle other signals (passthrough)
+        if chunk.is_signal():
+            yield chunk
+            return
+        
+        # Data processing - CORE BUSINESS LOGIC
+        text = chunk.content if hasattr(chunk, 'content') else str(chunk.data)
+        
+        self.logger.info(f"TTS synthesizing: '{text[:50]}...'")
+        
+        # Emit TTS START event (first time only)
+        if not self._is_speaking:
+            yield EventChunk(
+                type=ChunkType.EVENT_TTS_START,
+                event_data={"text_length": len(text)},
+                source=self.name,
+                session_id=chunk.session_id,
+                turn_id=chunk.turn_id
+            )
+            self._is_speaking = True
+        
+        # Emit SENTENCE_START event (for client display)
+        yield EventChunk(
+            type=ChunkType.EVENT_TTS_SENTENCE_START,
+            event_data={"text": text},
+            source=self.name,
+            session_id=chunk.session_id,
+            turn_id=chunk.turn_id
+        )
+        
+        # Synthesize text to audio
+        # Note: InterruptDetectorMiddleware detects turn_id changes
+        # Note: LatencyMonitorMiddleware records first audio automatically
+        # Note: ErrorHandlerMiddleware catches exceptions
+        audio_count = 0
+        async for audio_data in self.tts.synthesize(text):
+            if audio_data:
+                audio_count += 1
                 
-                # Emit error event
-                yield EventChunk(
-                    type=ChunkType.EVENT_ERROR,
-                    event_data={"error": str(e), "source": "TTS"},
+                yield AudioChunk(
+                    type=ChunkType.AUDIO_RAW,
+                    data=audio_data,
+                    sample_rate=16000,
+                    channels=1,
                     source=self.name,
                     session_id=chunk.session_id,
                     turn_id=chunk.turn_id
                 )
-                
-                # Send TTS stop on error
-                if self._is_speaking:
-                    yield EventChunk(
-                        type=ChunkType.EVENT_TTS_STOP,
-                        event_data={"reason": "error"},
-                        source=self.name,
-                        session_id=chunk.session_id,
-                        turn_id=chunk.turn_id
-                    )
-                    self._is_speaking = False
-                    
-                    # Note: Turn increment moved to Transport (will happen after queue drains)
-            
-            # Passthrough original text chunk
-            yield chunk
-        else:
-            # Passthrough non-text data
-            yield chunk
+        
+        self.logger.debug(f"TTS generated {audio_count} audio chunks")
+        
+        # Passthrough original text chunk
+        yield chunk

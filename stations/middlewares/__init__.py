@@ -12,6 +12,7 @@ Provides reusable middleware for common processing patterns:
 """
 
 from stations.middlewares.signal_handler import SignalHandlerMiddleware
+from stations.middlewares.multi_signal_handler import MultiSignalHandlerMiddleware
 from stations.middlewares.input_validator import InputValidatorMiddleware
 from stations.middlewares.event_emitter import EventEmitterMiddleware
 from stations.middlewares.timeout_handler import TimeoutHandlerMiddleware
@@ -21,6 +22,7 @@ from stations.middlewares.error_handler import ErrorHandlerMiddleware
 
 __all__ = [
     'SignalHandlerMiddleware',
+    'MultiSignalHandlerMiddleware',
     'InputValidatorMiddleware',
     'EventEmitterMiddleware',
     'TimeoutHandlerMiddleware',

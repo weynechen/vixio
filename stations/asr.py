@@ -6,15 +6,39 @@ Output: TEXT_DELTA (transcription result, source="asr")
 
 Note: Outputs TEXT_DELTA for consistency with streaming scenarios.
 Use TextAggregatorStation after this to aggregate for Agent.
+
+Refactored with middleware pattern for clean separation of concerns.
 """
 
 from typing import AsyncIterator, List
 from core.station import Station
 from core.chunk import Chunk, ChunkType, TextDeltaChunk, EventChunk, is_audio_chunk
+from core.middleware import with_middlewares
+from stations.middlewares import (
+    SignalHandlerMiddleware,
+    LatencyMonitorMiddleware,
+    ErrorHandlerMiddleware
+)
 from providers.asr import ASRProvider
-from utils import get_latency_monitor
 
 
+@with_middlewares(
+    # Handle signals (CONTROL_INTERRUPT - clear buffer)
+    SignalHandlerMiddleware(
+        on_interrupt=lambda: None,  # Will be set in __init__
+        cancel_streaming=False
+    ),
+    # Monitor ASR completion latency
+    LatencyMonitorMiddleware(
+        record_first_token=True,
+        metric_name="asr_complete"
+    ),
+    # Handle errors
+    ErrorHandlerMiddleware(
+        emit_error_event=True,
+        suppress_errors=False
+    )
+)
 class ASRStation(Station):
     """
     ASR workstation: Transcribes audio to text.
@@ -37,9 +61,31 @@ class ASRStation(Station):
         super().__init__(name=name)
         self.asr = asr_provider
         self._audio_buffer: List[bytes] = []
+    
+    def _configure_middlewares_hook(self, middlewares: list) -> None:
+        """
+        Hook called when middlewares are attached.
         
-        # Latency monitoring
-        self._latency_monitor = get_latency_monitor()
+        Allows customizing middleware settings after attachment.
+        """
+        # Set interrupt callback to clear audio buffer
+        for middleware in middlewares:
+            if middleware.__class__.__name__ == 'SignalHandlerMiddleware':
+                middleware.on_interrupt = self._handle_interrupt
+    
+    async def _handle_interrupt(self) -> None:
+        """
+        Handle interrupt signal.
+        
+        Called by SignalHandlerMiddleware when CONTROL_INTERRUPT received.
+        """
+        # Clear audio buffer
+        if self._audio_buffer:
+            self.logger.debug(f"Clearing {len(self._audio_buffer)} buffered audio chunks")
+            self._audio_buffer.clear()
+        
+        # Reset ASR provider
+        self.asr.reset()
     
     async def cleanup(self) -> None:
         """
@@ -60,89 +106,78 @@ class ASRStation(Station):
     
     async def process_chunk(self, chunk: Chunk) -> AsyncIterator[Chunk]:
         """
-        Process chunk through ASR.
+        Process chunk through ASR - CORE LOGIC ONLY.
         
-        Logic:
+        Middlewares handle: signal processing (CONTROL_INTERRUPT), latency monitoring, error handling.
+        
+        Core logic:
         - Collect AUDIO_RAW chunks into buffer
         - On EVENT_TURN_END: Transcribe buffered audio, yield TEXT_DELTA (source="asr"), clear buffer
-        - On CONTROL_INTERRUPT: Clear buffer
+        - Passthrough all other chunks
+        
+        Note: SignalHandlerMiddleware handles CONTROL_INTERRUPT (clears buffer via _handle_interrupt)
         """
-        # Handle signals
-        if chunk.is_signal():
+        # Handle EVENT_TURN_END signal (trigger transcription)
+        if chunk.type == ChunkType.EVENT_TURN_END:
             # Passthrough signal first (important for downstream)
             yield chunk
             
-            # Then process side effects
-            # Transcribe when turn ends
-            if chunk.type == ChunkType.EVENT_TURN_END:
-                if self._audio_buffer:
-                    self.logger.info(f"Transcribing {len(self._audio_buffer)} audio chunks...")
+            # Transcribe buffered audio
+            if self._audio_buffer:
+                self.logger.info(f"Transcribing {len(self._audio_buffer)} audio chunks...")
+                
+                text = await self.asr.transcribe(self._audio_buffer)
+                
+                if text:
+                    self.logger.info(f"ASR result: '{text}'")
                     
-                    try:
-                        text = await self.asr.transcribe(self._audio_buffer)
-                        
-                        if text:
-                            self.logger.info(f"ASR result: '{text}'")
-                            
-                            # Record T2: asr_complete (ASR transcription done)
-                            self._latency_monitor.record(
-                                chunk.session_id,
-                                chunk.turn_id,
-                                "asr_complete"
-                            )
-                            
-                            # Output as TEXT_DELTA with source="asr"
-                            yield TextDeltaChunk(
-                                type=ChunkType.TEXT_DELTA,
-                                delta=text,
-                                source="asr",  # Mark as ASR output
-                                session_id=chunk.session_id,
-                                turn_id=chunk.turn_id
-                            )
-                            
-                            # Emit TEXT_COMPLETE event to signal aggregator
-                            yield EventChunk(
-                                type=ChunkType.EVENT_TEXT_COMPLETE,
-                                event_data={"source": "asr", "text_length": len(text)},
-                                source=self.name,
-                                session_id=chunk.session_id,
-                                turn_id=chunk.turn_id
-                            )
-                        else:
-                            self.logger.warning("ASR returned empty text")
-                            # Still emit complete event even if text is empty
-                            yield EventChunk(
-                                type=ChunkType.EVENT_TEXT_COMPLETE,
-                                event_data={"source": "asr", "text_length": 0},
-                                source=self.name,
-                                session_id=chunk.session_id
-                            )
+                    # Output as TEXT_DELTA with source="asr"
+                    # Note: LatencyMonitorMiddleware automatically records this output
+                    yield TextDeltaChunk(
+                        type=ChunkType.TEXT_DELTA,
+                        delta=text,
+                        source="asr",
+                        session_id=chunk.session_id,
+                        turn_id=chunk.turn_id
+                    )
                     
-                    except Exception as e:
-                        self.logger.error(f"ASR transcription failed: {e}", exc_info=True)
-                    
-                    finally:
-                        # Clear buffer regardless of success/failure
-                        self._audio_buffer.clear()
+                    # Emit TEXT_COMPLETE event to signal aggregator
+                    yield EventChunk(
+                        type=ChunkType.EVENT_TEXT_COMPLETE,
+                        event_data={"source": "asr", "text_length": len(text)},
+                        source=self.name,
+                        session_id=chunk.session_id,
+                        turn_id=chunk.turn_id
+                    )
                 else:
-                    self.logger.warning("EVENT_TURN_END received but no audio in buffer")
-            
-            # Clear buffer on interrupt
-            elif chunk.type == ChunkType.CONTROL_INTERRUPT:
-                if self._audio_buffer:
-                    self.logger.debug(f"Clearing {len(self._audio_buffer)} buffered audio chunks")
-                    self._audio_buffer.clear()
-                self.asr.reset()
+                    self.logger.warning("ASR returned empty text")
+                    # Still emit complete event even if text is empty
+                    yield EventChunk(
+                        type=ChunkType.EVENT_TEXT_COMPLETE,
+                        event_data={"source": "asr", "text_length": 0},
+                        source=self.name,
+                        session_id=chunk.session_id
+                    )
+                
+                # Clear buffer
+                self._audio_buffer.clear()
+            else:
+                self.logger.warning("EVENT_TURN_END received but no audio in buffer")
             
             return
         
-        # Collect audio for later transcription
+        # Handle other signals (passthrough)
+        if chunk.is_signal():
+            yield chunk
+            return
+        
+        # Collect AUDIO_RAW chunks
         if is_audio_chunk(chunk) and chunk.type == ChunkType.AUDIO_RAW:
             if chunk.data:
                 self._audio_buffer.append(chunk.data)
                 self.logger.debug(f"Buffered audio chunk, total: {len(self._audio_buffer)}")
             
-            # Passthrough audio for downstream (e.g., echo)
+            # Passthrough audio for downstream
             yield chunk
         else:
             # Passthrough other data types

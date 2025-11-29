@@ -48,37 +48,32 @@ class SignalHandlerMiddleware(Middleware):
             next_handler: Next handler in chain
             
         Yields:
-            Signal chunk (passed through) and any additional chunks
+            Signal chunk (passed through) and any additional chunks from core logic
         """
-        # Handle signals
-        if chunk.is_signal():
-            # Handle interrupt signal
-            if chunk.type == ChunkType.CONTROL_INTERRUPT:
-                self.logger.info("Received CONTROL_INTERRUPT signal")
-                
-                # Cancel active streaming if enabled
-                if self.cancel_streaming and self._streaming_task is not None:
-                    try:
-                        self._streaming_task.cancel()
-                        self.logger.info("Cancelled active streaming task")
-                    except Exception as e:
-                        self.logger.warning(f"Error cancelling stream: {e}")
-                    finally:
-                        self._streaming_task = None
-                
-                # Call interrupt callback if provided
-                if self.on_interrupt:
-                    try:
-                        await self.on_interrupt()
-                        self.logger.debug("Interrupt callback executed")
-                    except Exception as e:
-                        self.logger.error(f"Error in interrupt callback: {e}")
+        # Handle CONTROL_INTERRUPT signal
+        if chunk.is_signal() and chunk.type == ChunkType.CONTROL_INTERRUPT:
+            self.logger.info("Received CONTROL_INTERRUPT signal")
             
-            # Always passthrough signal
-            yield chunk
-            return
+            # Cancel active streaming if enabled
+            if self.cancel_streaming and self._streaming_task is not None:
+                try:
+                    self._streaming_task.cancel()
+                    self.logger.info("Cancelled active streaming task")
+                except Exception as e:
+                    self.logger.warning(f"Error cancelling stream: {e}")
+                finally:
+                    self._streaming_task = None
+            
+            # Call interrupt callback if provided
+            if self.on_interrupt:
+                try:
+                    await self.on_interrupt()
+                    self.logger.debug("Interrupt callback executed")
+                except Exception as e:
+                    self.logger.error(f"Error in interrupt callback: {e}")
         
-        # Non-signal chunks go through the chain
+        # Always pass through to next handler (for all chunks, including signals)
+        # This allows core logic to handle signals like EVENT_TURN_END
         async for result in next_handler(chunk):
             yield result
     
