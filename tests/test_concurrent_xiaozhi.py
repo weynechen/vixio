@@ -14,8 +14,6 @@ import time
 from pathlib import Path
 from typing import Optional
 import wave
-from concurrent.futures import ProcessPoolExecutor
-import multiprocessing
 
 import websockets
 from loguru import logger
@@ -438,28 +436,32 @@ async def load_audio_files_from_directory(audio_dir: Path) -> dict[str, list[byt
     logger.success(f"Loaded {len(audio_dict)} audio files successfully")
     return audio_dict
 
+audio_text_dict = {
+    "test1.wav":"介绍一下你自己",
+    "test2.wav":"天空为什么是蓝色的？地球为什么那么圆？",
+    "test3.wav":"帮我算一下一道数学题，一加1等于几呀，2加2等于几呀？3加3等于几呀？",
+    "test4.wav":"中国的首都是哪里，法国的首都是哪里，美国的首都是哪里？"
+}
 
-def run_concurrent_test(
+
+async def run_concurrent_test(
     server_url: str,
     num_clients: int,
     audio_files: dict[str, list[bytes]],
-    interrupt_probability: float = 0.0,
-    disconnect_probability: float = 0.0,
+    interrupt_probability: float = 0.1,
+    disconnect_probability: float = 0.05,
 ):
     """
-    Run concurrent client test using process pool.
-    
-    Each client runs in an independent process to avoid asyncio scheduling issues.
-    This ensures truly parallel execution and accurate timing.
+    Run concurrent client test.
     
     Args:
         server_url: Server WebSocket URL
         num_clients: Number of concurrent clients
         audio_files: Dictionary of audio filename -> Opus frames
-        interrupt_probability: Probability of interruption (default: 0.0)
-        disconnect_probability: Probability of random disconnect (default: 0.0)
+        interrupt_probability: Probability of interruption
+        disconnect_probability: Probability of random disconnect
     """
-    logger.info(f"Starting concurrent test with {num_clients} clients (using process pool)")
+    logger.info(f"Starting concurrent test with {num_clients} clients")
     logger.info(f"Available audio files: {len(audio_files)}")
     logger.info(f"Interrupt probability: {interrupt_probability}")
     logger.info(f"Disconnect probability: {disconnect_probability}")
@@ -468,46 +470,38 @@ def run_concurrent_test(
     # Get list of audio files for random assignment
     audio_list = list(audio_files.items())  # [(filename, opus_frames), ...]
     
-    # Prepare client parameters for each process
-    client_params_list = []
+    # Create clients with sequentially assigned audio
+    clients = []
     for i in range(num_clients):
-        # Randomly select an audio file
-        audio_name, test_audio_opus = random.choice(audio_list)
+        # Select audio file in sequence
+        audio_name, test_audio_opus = audio_list[i % len(audio_list)]
         
-        params = {
-            "client_id": str(i),
-            "server_url": server_url,
-            "test_audio_opus": test_audio_opus,
-            "interrupt_probability": interrupt_probability,
-            "disconnect_probability": disconnect_probability,
-        }
-        client_params_list.append(params)
+        client = ConcurrentTestClient(
+            client_id=str(i),
+            server_url=server_url,
+            test_audio_opus=test_audio_opus,
+            interrupt_probability=interrupt_probability,
+            disconnect_probability=disconnect_probability,
+        )
+        clients.append(client)
         
-        logger.info(f"Client-{i}: assigned audio '{audio_name}' ({len(test_audio_opus)} frames)")
+        logger.info(f"Client-{i}: assigned audio '{audio_text_dict[audio_name]}' ({len(test_audio_opus)} frames)")
     
     logger.info("=" * 60)
-    logger.info(f"Spawning {num_clients} independent processes...")
     
-    # Run all clients in parallel processes
+    # Run all clients concurrently
     start_time = time.time()
-    
-    with ProcessPoolExecutor(max_workers=num_clients) as executor:
-        # Submit all tasks
-        futures = [executor.submit(run_client_in_process, params) for params in client_params_list]
-        
-        # Wait for all to complete and collect results
-        results = [future.result() for future in futures]
-    
+    tasks = [client.run_full_test_cycle() for client in clients]
+    await asyncio.gather(*tasks)
     duration = time.time() - start_time
     
-    # Collect statistics from results
+    # Collect statistics
     logger.info("=" * 60)
-    logger.info("All processes completed!")
+    logger.info("Test completed!")
     logger.info(f"Total duration: {duration:.2f}s")
-    logger.info(f"Average time per client: {duration/num_clients:.2f}s")
     logger.info("")
     
-    # Aggregate stats from all processes
+    # Aggregate stats
     total_stats = {
         "connections": 0,
         "disconnections": 0,
@@ -523,16 +517,11 @@ def run_concurrent_test(
         "total_audio_chunks_played": 0,
     }
     
-    for stats in results:
-        if "error" in stats:
-            logger.error(f"Client-{stats.get('client_id', '?')} had error: {stats['error']}")
-            total_stats["errors"] += 1
-            continue
-            
+    for client in clients:
+        stats = client.get_stats()
         for key in total_stats:
             if key == "total_audio_chunks_played":
-                if "player" in stats:
-                    total_stats[key] += stats["player"].get("audio_chunks", 0)
+                total_stats[key] += stats["player"]["audio_chunks"]
             elif key in stats:
                 total_stats[key] += stats[key]
     
@@ -554,22 +543,15 @@ def run_concurrent_test(
     
     # Print individual client stats
     logger.info("Individual Client Statistics:")
-    for i, stats in enumerate(results):
-        client_id = str(i)
-        if "error" in stats:
-            logger.error(f"  Client-{client_id}: ERROR - {stats['error']}")
-            continue
-        
-        # Get audio frames info from params
-        expected_frames = len(client_params_list[i]["test_audio_opus"])
-        
+    for client in clients:
+        stats = client.get_stats()
         logger.info(
-            f"  Client-{client_id}: "
-            f"sent={stats.get('messages_sent', 0)}, "
-            f"recv={stats.get('messages_received', 0)}, "
-            f"audio_frames={stats.get('audio_frames_sent', 0)}/{expected_frames}, "
-            f"interrupts={stats.get('interruptions', 0)}, "
-            f"errors={stats.get('errors', 0)}"
+            f"  Client-{client.client_id}: "
+            f"sent={stats['messages_sent']}, "
+            f"recv={stats['messages_received']}, "
+            f"audio_frames={stats['audio_frames_sent']}, "
+            f"interrupts={stats['interruptions']}, "
+            f"errors={stats['errors']}"
         )
     
     logger.info("=" * 60)
@@ -583,84 +565,8 @@ from utils.network import get_local_ip
 ip_address = get_local_ip()
 server_url = f"ws://{ip_address}:8000/xiaozhi/v1/"
 
-
-def run_client_in_process(client_params: dict) -> dict:
-    """
-    Run a single client in an independent process.
-    
-    This function is executed in a separate process to avoid asyncio scheduling issues.
-    Each process has its own event loop and runs independently.
-    
-    Args:
-        client_params: Dictionary with client configuration
-            - client_id: str
-            - server_url: str
-            - test_audio_opus: list[bytes]
-            - interrupt_probability: float
-            - disconnect_probability: float
-            
-    Returns:
-        Dictionary with client statistics
-    """
-    # Configure simple logger for this process (avoid extra field issues)
-    from loguru import logger as process_logger
-    process_logger.remove()  # Remove default handler
-    process_logger.add(
-        sys.stderr,
-        format="<green>{time:HH:mm:ss.SSS}</green> | <level>{level: <8}</level> | <cyan>Process-{process.id}</cyan> | <level>{message}</level>",
-        level="INFO"
-    )
-    
-    # Extract parameters
-    client_id = client_params["client_id"]
-    server_url = client_params["server_url"]
-    test_audio_opus = client_params["test_audio_opus"]
-    interrupt_prob = client_params.get("interrupt_probability", 0.0)
-    disconnect_prob = client_params.get("disconnect_probability", 0.0)
-    
-    process_logger.info(f"Starting client in independent process (PID={multiprocessing.current_process().pid})")
-    process_logger.info(f"Audio frames: {len(test_audio_opus)}")
-    
-    # Create new event loop for this process
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    
-    try:
-        # Create client
-        client = ConcurrentTestClient(
-            client_id=client_id,
-            server_url=server_url,
-            test_audio_opus=test_audio_opus,
-            interrupt_probability=interrupt_prob,
-            disconnect_probability=disconnect_prob,
-        )
-        
-        # Run test cycle
-        loop.run_until_complete(client.run_full_test_cycle())
-        
-        # Get stats
-        stats = client.get_stats()
-        process_logger.success(f"Client completed successfully")
-        process_logger.info(f"Stats: sent={stats['audio_frames_sent']}/{len(test_audio_opus)} frames")
-        
-        return stats
-        
-    except Exception as e:
-        process_logger.error(f"Client error: {e}")
-        import traceback
-        traceback.print_exc()
-        return {
-            "client_id": client_id,
-            "error": str(e),
-            "connections": 0,
-            "audio_frames_sent": 0,
-        }
-    finally:
-        loop.close()
-
-
-def main():
-    """Main function (synchronous, uses process pool for concurrency)."""
+async def main():
+    """Main function."""
     import argparse
     
     # Parse arguments
@@ -734,11 +640,10 @@ def main():
     
     try:
         # Load all test audio files from directory
-        # Load audio files (using asyncio.run for this async operation)
-        audio_files = asyncio.run(load_audio_files_from_directory(audio_dir))
+        audio_files = await load_audio_files_from_directory(audio_dir)
         
         # Run concurrent test
-        run_concurrent_test(
+        await run_concurrent_test(
             server_url=args.url,
             num_clients=args.clients,
             audio_files=audio_files,
@@ -757,7 +662,5 @@ def main():
 
 
 if __name__ == "__main__":
-    # Set multiprocessing start method to 'spawn' for better compatibility
-    multiprocessing.set_start_method('spawn', force=True)
-    main()
+    asyncio.run(main())
 
