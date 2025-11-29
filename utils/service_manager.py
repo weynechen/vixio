@@ -86,7 +86,7 @@ class ServiceManager:
             
             if provider_name in self.SERVICE_MAP:
                 service_dir, port, display_name, extra_args = self.SERVICE_MAP[provider_name]
-                service_path = self.project_root / "micro_services" / service_dir
+                service_path = self.project_root / "inference" / service_dir
                 
                 if not service_path.exists():
                     logger.warning(f"Service directory not found: {service_path} (skipping)")

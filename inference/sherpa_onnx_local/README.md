@@ -26,7 +26,7 @@ dependencies = [
 ### 安装依赖
 
 ```bash
-cd micro_services/sherpa_onnx_local
+cd inference/sherpa_onnx_local
 uv sync
 ```
 
@@ -58,7 +58,7 @@ models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/
 ### 1. 编译Proto
 
 ```bash
-cd micro_services/sherpa_onnx_local
+cd inference/sherpa_onnx_local
 ./compile_proto.sh
 ```
 
@@ -77,7 +77,7 @@ uv run python server.py --port 50052 \
 
 ```bash
 # 测试客户端
-cd micro_services/sherpa_onnx_local
+cd inference/sherpa_onnx_local
 uv run python client.py
 ```
 
@@ -146,7 +146,7 @@ message DestroySessionRequest {
 cd /path/to/vixio
 
 docker build -t vixio-sherpa-asr:latest \
-    -f micro_services/sherpa_onnx_local/Dockerfile .
+    -f inference/sherpa_onnx_local/Dockerfile .
 ```
 
 ### 运行
@@ -224,14 +224,14 @@ ls -lh models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/
 ### 1. 虚拟环境
 
 ```bash
-cd micro_services/sherpa_onnx_local
+cd inference/sherpa_onnx_local
 uv sync  # 创建独立的 .venv/
 ```
 
 ### 2. 测试
 
 ```bash
-cd micro_services/sherpa_onnx_local
+cd inference/sherpa_onnx_local
 uv run pytest tests/
 ```
 

@@ -9,7 +9,7 @@ import uuid
 from typing import Dict, Any
 from providers.vad import VADProvider, VADEvent
 from providers.registry import register_provider
-from micro_services.silero_vad.client import VADServiceClient
+from inference.silero_vad.client import VADServiceClient
 
 
 @register_provider("silero-vad-grpc")

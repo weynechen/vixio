@@ -9,7 +9,7 @@
 ## 目录结构
 
 ```
-micro_services/
+inference/
 ├── silero_vad/              # Silero VAD微服务
 │   ├── pyproject.toml      # ✨ 独立依赖管理
 │   ├── vad.proto           # Proto定义
@@ -97,15 +97,15 @@ cd /path/to/vixio
 
 ```bash
 # 安装Silero VAD依赖
-cd micro_services/silero_vad
+cd inference/silero_vad
 uv sync
 
 # 安装Sherpa ONNX ASR依赖
-cd micro_services/sherpa_onnx_local
+cd inference/sherpa_onnx_local
 uv sync
 
 # 安装Kokoro TTS依赖
-cd micro_services/kokoro
+cd inference/kokoro
 uv sync
 ```
 
@@ -159,8 +159,8 @@ kubectl apply -f k8s/silero-vad-service.yaml
 
 1. **创建目录**
 ```bash
-mkdir -p micro_services/webrtc_vad
-cd micro_services/webrtc_vad
+mkdir -p inference/webrtc_vad
+cd inference/webrtc_vad
 ```
 
 2. **创建Proto** (`vad.proto`)
@@ -205,7 +205,7 @@ class VADServiceClient:
 
 6. **创建Provider** (`providers/webrtc_vad/grpc_provider.py`)
 ```python
-from micro_services.webrtc_vad.client import VADServiceClient
+from inference.webrtc_vad.client import VADServiceClient
 
 @register_provider("webrtc-vad-grpc")
 class LocalWebRTCVADProvider(VADProvider):
@@ -222,7 +222,7 @@ providers/                      # Provider接口（应用层）
   └── silero_vad/
       └── grpc_provider.py     # LocalSileroVADProvider
             ↓ 使用
-micro_services/                 # gRPC微服务（基础设施层）
+inference/                 # gRPC微服务（基础设施层）
   └── silero_vad/              # 完全自包含
       ├── vad.proto           # Proto定义（自己的）
       ├── server.py           # 服务端（独立进程）
@@ -230,8 +230,8 @@ micro_services/                 # gRPC微服务（基础设施层）
 ```
 
 **依赖关系**：
-- `providers/` → `micro_services/` (导入client)
-- `micro_services/` ✗ `providers/` (不依赖)
+- `providers/` → `inference/` (导入client)
+- `inference/` ✗ `providers/` (不依赖)
 - 应用层只看到 `providers/`
 
 ## 参考文档

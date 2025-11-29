@@ -21,7 +21,7 @@ if str(_project_root) not in sys.path:
     sys.path.insert(0, str(_project_root))
 
 from providers.vad import VADEvent
-from micro_services.silero_vad.client import VADServiceClient
+from inference.silero_vad.client import VADServiceClient
 from loguru import logger
 
 

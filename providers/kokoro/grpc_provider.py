@@ -10,7 +10,7 @@ from typing import Dict, Any, AsyncGenerator
 import numpy as np
 from providers.tts import TTSProvider
 from providers.registry import register_provider
-from micro_services.kokoro.client import TTSServiceClient
+from inference.kokoro.client import TTSServiceClient
 
 
 @register_provider("kokoro-tts-grpc")

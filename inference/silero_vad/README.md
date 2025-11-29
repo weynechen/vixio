@@ -17,7 +17,7 @@
 ### 安装依赖
 
 ```bash
-cd /path/to/vixio/micro_services/silero_vad
+cd /path/to/vixio/inference/silero_vad
 
 # 安装依赖
 uv sync
@@ -44,7 +44,7 @@ dependencies = [
 ### 1. 编译Proto
 
 ```bash
-cd /path/to/vixio/micro_services/silero_vad
+cd /path/to/vixio/inference/silero_vad
 ./compile_proto.sh
 ```
 
@@ -140,7 +140,7 @@ cd /path/to/vixio
 
 # 构建（使用服务独立的依赖）
 docker build -t vixio-silero-vad:latest \
-    -f micro_services/silero_vad/Dockerfile .
+    -f inference/silero_vad/Dockerfile .
 
 # 运行
 docker run -p 50051:50051 vixio-silero-vad:latest
@@ -183,7 +183,7 @@ kubectl logs -l app=silero-vad-service -f
 
 ```bash
 # 检查当前依赖
-cd micro_services/silero_vad
+cd inference/silero_vad
 uv pip list
 
 # 重新安装依赖
@@ -198,7 +198,7 @@ uv run python -c "import torch; print(torch.__version__)"
 
 ```bash
 # 检查依赖是否完整
-cd micro_services/silero_vad
+cd inference/silero_vad
 uv run python -c "import torch, silero_vad, grpc; print('OK')"
 
 # 查看日志
@@ -209,7 +209,7 @@ tail -f ../../logs/silero_vad.log
 
 ```bash
 # 重新编译proto
-cd micro_services/silero_vad
+cd inference/silero_vad
 ./compile_proto.sh
 
 # 检查生成的文件
@@ -223,7 +223,7 @@ ls -la vad_pb2*.py
 每个服务使用uv创建独立的虚拟环境：
 
 ```bash
-cd micro_services/silero_vad
+cd inference/silero_vad
 uv sync  # 创建 .venv/
 ```
 
@@ -232,7 +232,7 @@ uv sync  # 创建 .venv/
 使用lock文件确保可重复构建：
 
 ```bash
-cd micro_services/silero_vad
+cd inference/silero_vad
 uv lock  # 生成 uv.lock
 ```
 
@@ -243,7 +243,7 @@ uv lock  # 生成 uv.lock
 在服务目录内运行测试：
 
 ```bash
-cd micro_services/silero_vad
+cd inference/silero_vad
 uv run pytest tests/
 ```
 

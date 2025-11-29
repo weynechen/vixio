@@ -16,7 +16,7 @@ import sys
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from micro_services.sherpa_onnx_local.client import ASRServiceClient
+from inference.sherpa_onnx_local.client import ASRServiceClient
 
 
 async def main():

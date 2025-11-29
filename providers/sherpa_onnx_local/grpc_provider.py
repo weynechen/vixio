@@ -9,7 +9,7 @@ import uuid
 from typing import Dict, Any
 from providers.asr import ASRProvider
 from providers.registry import register_provider
-from micro_services.sherpa_onnx_local.client import ASRServiceClient
+from inference.sherpa_onnx_local.client import ASRServiceClient
 
 
 @register_provider("sherpa-onnx-asr-grpc")

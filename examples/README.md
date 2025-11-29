@@ -293,9 +293,9 @@ uv sync
 
 ## 📚 相关文档
 
-- [微服务架构](../micro_services/README.md) - 微服务设计和实现
+- [微服务架构](../inference/README.md) - 微服务设计和实现
 - [Provider 系统](../providers/README.md) - Provider 注册和使用
-- [独立依赖管理](../micro_services/DEPENDENCIES.md) - 依赖隔离说明
+- [独立依赖管理](../inference/DEPENDENCIES.md) - 依赖隔离说明
 
 ## 💡 最佳实践
 

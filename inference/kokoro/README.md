@@ -41,7 +41,7 @@ pip install "kokoro>=0.8.1" "misaki[zh]>=0.8.1"
 ### 1. 编译Proto
 
 ```bash
-cd /path/to/vixio/micro_services/kokoro
+cd /path/to/vixio/inference/kokoro
 ./compile_proto.sh
 ```
 
@@ -176,7 +176,7 @@ await tts_provider.cleanup()
 
 ```bash
 # 构建镜像
-docker build -t vixio-kokoro-tts -f micro_services/kokoro/Dockerfile .
+docker build -t vixio-kokoro-tts -f inference/kokoro/Dockerfile .
 
 # 运行容器
 docker run -p 50053:50053 vixio-kokoro-tts
