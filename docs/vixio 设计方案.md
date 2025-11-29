@@ -1358,7 +1358,7 @@ def create_voice_pipeline(config):
         AgentStation(agent_provider),       # Generate response (streaming)
         
         # Stage 4: Text to speech
-        SentenceSplitterStation(),          # Split into sentences
+        SentenceAggregatorStation(),          # Split into sentences
         TTSStation(tts_provider),           # Synthesize speech
     ], name="VoiceConversation")
 
@@ -1974,9 +1974,9 @@ class TextAggregatorStation(Station):
             yield chunk
 ```
 
-### SentenceSplitterStation - 分句处理
+### SentenceAggregatorStation - 分句处理
 ```python
-class SentenceSplitterStation(Station):
+class SentenceAggregatorStation(Station):
     """
     Sentence splitter: Splits streaming text into sentences.
     
@@ -1988,7 +1988,7 @@ class SentenceSplitterStation(Station):
     """
     
     def __init__(self, sentence_endings: str = ".!?。!?"):
-        super().__init__("SentenceSplitter")
+        super().__init__("SentenceAggregator")
         self.endings = set(sentence_endings)
         self._buffer = ""
     
@@ -2229,7 +2229,7 @@ pipeline = Pipeline([
     TurnDetectorStation(),     # Detect turn end
     ASRStation(),              # Audio -> Text
     AgentStation(),            # Text -> Response
-    SentenceSplitterStation(), # Split sentences for TTS
+    SentenceAggregatorStation(), # Split sentences for TTS
     TTSStation(),              # Text -> Audio
 ])
 ```
@@ -2266,7 +2266,7 @@ pipeline = Pipeline([
     AgentStation(),            # Processes TEXT from both ASR and VisionProcessor
     
     # Output
-    SentenceSplitterStation(),
+    SentenceAggregatorStation(),
     TTSStation(),
 ])
 
@@ -2494,8 +2494,8 @@ vixio/
     agent.py                   # AgentStation - Agent conversation
     tts.py                     # TTSStation - Text to Speech
     text_aggregator.py         # TextAggregatorStation - Aggregate TEXT_DELTA to TEXT
-    sentence_splitter.py       # SentenceSplitterStation - Split sentences (alias: splitter.py)
-    splitter.py                # Alias for sentence_splitter.py
+    sentence_aggregator.py       # SentenceAggregatorStation - Split sentences (alias: splitter.py)
+    splitter.py                # Alias for sentence_aggregator.py
     
     # Vision processing stations
     vision.py                  # VisionProcessorStation - Vision frame processing
@@ -2603,7 +2603,7 @@ from stations.vad import VADStation
 from stations.turn_detector import TurnDetectorStation
 from stations.asr import ASRStation
 from stations.agent import AgentStation
-from stations.splitter import SentenceSplitterStation
+from stations.splitter import SentenceAggregatorStation
 from stations.tts import TTSStation
 from stations.logger import LoggerStation
 from providers.silero_vad.provider import SileroVADProvider
@@ -2666,7 +2666,7 @@ async def main():
             ASRStation(asr_provider),                 # Audio -> Text
             
             # Stage 3: Speech synthesis (Note: Agent removed, direct TTS)
-            SentenceSplitterStation(),                # Split into sentences
+            SentenceAggregatorStation(),                # Split into sentences
             TTSStation(tts_provider),                 # Text -> Audio (streaming)
             
             # Optional: Add logger for debugging
@@ -2905,7 +2905,7 @@ async def main():
             stations.append(ASRStation(providers["asr"]))
         
         if config["pipeline"].get("tts"):
-            stations.append(SentenceSplitterStation())
+            stations.append(SentenceAggregatorStation())
             stations.append(TTSStation(providers["tts"]))
         
         return Pipeline(stations, name="ConfiguredPipeline")
@@ -3065,7 +3065,7 @@ Output Buffer (输出缓存):
 **可选**：VisionProcessorStation 用于多模态场景，如果暂时不需要可跳过
 
 ### 阶段 4：辅助 Stations（2-3 天）
-- [ ] 实现 `SentenceSplitterStation`
+- [ ] 实现 `SentenceAggregatorStation`
 - [ ] 实现 `LoggerStation`
 - [ ] 实现 `FilterStation`
 - [ ] 实现 `PassthroughStation`

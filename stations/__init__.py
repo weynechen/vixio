@@ -7,7 +7,7 @@ from stations.turn_detector import TurnDetectorStation
 from stations.asr import ASRStation
 from stations.text_aggregator import TextAggregatorStation
 from stations.agent import AgentStation
-from stations.sentence_splitter import SentenceSplitterStation
+from stations.sentence_aggregator import SentenceAggregatorStation
 from stations.tts import TTSStation
 
 # Import will be added as stations are implemented
@@ -20,7 +20,7 @@ __all__ = [
     "ASRStation",
     "TextAggregatorStation",
     "AgentStation",
-    "SentenceSplitterStation",
+    "SentenceAggregatorStation",
     "TTSStation",
 ]
 

@@ -107,7 +107,7 @@ class VADServiceServicer(vad_pb2_grpc.VADServiceServicer):
         onnx_wrapper = load_silero_vad(onnx=True)
         
         # Recreate session with GPU support if available
-        # Priority: CUDA > CPU (similar to pipecat)
+        # Priority: CUDA > CPU 
         available_providers = onnxruntime.get_available_providers()
         logger.info(f"Available ONNX providers: {available_providers}")
         

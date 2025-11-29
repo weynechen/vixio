@@ -1,18 +1,18 @@
 """
-Unit tests for SentenceSplitterStation
+Unit tests for SentenceAggregatorStation
 """
 
 import pytest
 from core.chunk import Chunk, ChunkType, TextChunk, TextDeltaChunk, EventChunk, ControlChunk
-from stations.sentence_splitter import SentenceSplitterStation, SentenceSplitter
+from stations.sentence_aggregator import SentenceAggregatorStation, SentenceAggregator
 
 
-class TestSentenceSplitter:
-    """Test the SentenceSplitter utility class"""
+class TestSentenceAggregator:
+    """Test the SentenceAggregator utility class"""
     
     def test_split_single_sentence(self):
         """Test splitting a single complete sentence"""
-        splitter = SentenceSplitter(min_sentence_length=5)
+        splitter = SentenceAggregator(min_sentence_length=5)
         
         # Add chunks that form a sentence
         result1 = splitter.add_chunk("Hello")
@@ -27,7 +27,7 @@ class TestSentenceSplitter:
     
     def test_split_chinese_sentence(self):
         """Test splitting Chinese sentences"""
-        splitter = SentenceSplitter(min_sentence_length=5)
+        splitter = SentenceAggregator(min_sentence_length=5)
         
         result = splitter.add_chunk("你好世界。这是测试。")
         assert len(result) == 2
@@ -36,7 +36,7 @@ class TestSentenceSplitter:
     
     def test_split_multiple_punctuation(self):
         """Test different sentence endings"""
-        splitter = SentenceSplitter(min_sentence_length=5)
+        splitter = SentenceAggregator(min_sentence_length=5)
         
         # Exclamation mark
         result1 = splitter.add_chunk("Great!")
@@ -54,7 +54,7 @@ class TestSentenceSplitter:
     
     def test_min_sentence_length(self):
         """Test minimum sentence length filtering"""
-        splitter = SentenceSplitter(min_sentence_length=10)
+        splitter = SentenceAggregator(min_sentence_length=10)
         
         # Too short - should not yield
         result = splitter.add_chunk("Hi.")
@@ -67,7 +67,7 @@ class TestSentenceSplitter:
     
     def test_flush(self):
         """Test flushing remaining buffer"""
-        splitter = SentenceSplitter(min_sentence_length=5)
+        splitter = SentenceAggregator(min_sentence_length=5)
         
         splitter.add_chunk("Hello world")
         remaining = splitter.flush()
@@ -78,7 +78,7 @@ class TestSentenceSplitter:
     
     def test_reset(self):
         """Test resetting buffer"""
-        splitter = SentenceSplitter(min_sentence_length=5)
+        splitter = SentenceAggregator(min_sentence_length=5)
         
         splitter.add_chunk("Hello world")
         assert splitter.buffer == "Hello world"
@@ -87,13 +87,13 @@ class TestSentenceSplitter:
         assert splitter.buffer == ""
 
 
-class TestSentenceSplitterStation:
-    """Test the SentenceSplitterStation"""
+class TestSentenceAggregatorStation:
+    """Test the SentenceAggregatorStation"""
     
     @pytest.fixture
     def splitter_station(self):
-        """Create SentenceSplitterStation"""
-        return SentenceSplitterStation(min_sentence_length=5)
+        """Create SentenceAggregatorStation"""
+        return SentenceAggregatorStation(min_sentence_length=5)
     
     @pytest.mark.asyncio
     async def test_split_text_delta_to_sentences(self, splitter_station):

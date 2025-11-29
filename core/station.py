@@ -228,7 +228,7 @@ class BufferStation(Station):
     - Has internal buffer
     - Processing usually instantaneous
     
-    Use cases: TextAggregator, SentenceSplitter
+    Use cases: TextAggregator, SentenceAggregator
     
     Default middlewares (auto-applied via decorator):
     - InputValidatorMiddleware: Validate input types (subclass specifies allowed_types)

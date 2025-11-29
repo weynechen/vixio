@@ -10,7 +10,7 @@
 
 **Pipeline 流程**：
 ```
-Audio Input → VAD → TurnDetector → ASR → TextAggregator → Agent → SentenceSplitter → TTS → Audio Output
+Audio Input → VAD → TurnDetector → ASR → TextAggregator → Agent → SentenceAggregator → TTS → Audio Output
 ```
 
 **特性**：

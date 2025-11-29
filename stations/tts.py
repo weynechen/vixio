@@ -5,7 +5,7 @@ Input: TEXT (complete sentences, source="agent")
 Output: AUDIO_RAW (streaming) + EVENT_TTS_START/STOP
 
 Note: This station only processes TEXT chunks with source="agent".
-Use SentenceSplitterStation before this to convert TEXT_DELTA to TEXT.
+Use SentenceAggregatorStation before this to convert TEXT_DELTA to TEXT.
 
 Refactored with middleware pattern for clean separation of concerns.
 """
@@ -49,7 +49,7 @@ class TTSStation(StreamStation):
     Output: AUDIO_RAW (streaming) + EVENT_TTS_START/STOP
     
     Note: Only processes TEXT chunks with source="agent".
-    Use SentenceSplitterStation to convert TEXT_DELTA to TEXT.
+    Use SentenceAggregatorStation to convert TEXT_DELTA to TEXT.
     """
     
     # StreamStation configuration

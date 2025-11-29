@@ -1,5 +1,5 @@
 """
-SentenceSplitterStation - Split streaming text into sentences
+SentenceAggregatorStation - aggregate streaming text into sentences
 
 Input: TEXT_DELTA
 Output: TEXT (complete sentences)
@@ -15,9 +15,9 @@ from core.middleware import with_middlewares
 from stations.middlewares import LatencyMonitorMiddleware
 
 
-class SentenceSplitter:
+class SentenceAggregator:
     """
-    Split streaming text into sentences for real-time processing.
+    aggregate streaming text into sentences for real-time processing.
     
     Supports Chinese and English sentence boundaries.
     """
@@ -37,7 +37,7 @@ class SentenceSplitter:
     
     def __init__(self, min_sentence_length: int = 5):
         """
-        Initialize sentence splitter.
+        Initialize sentence aggregator.
         
         Args:
             min_sentence_length: Minimum characters to consider a valid sentence
@@ -99,7 +99,7 @@ class SentenceSplitter:
 
 
 @with_middlewares(
-    # Monitor first sentence latency (custom for SentenceSplitter)
+    # Monitor first sentence latency (custom for SentenceAggregator)
     LatencyMonitorMiddleware(
         record_first_token=True,
         metric_name="first_sentence_complete"
@@ -109,9 +109,9 @@ class SentenceSplitter:
     # - SignalHandlerMiddleware (handles CONTROL_INTERRUPT)
     # - ErrorHandlerMiddleware (error handling)
 )
-class SentenceSplitterStation(BufferStation):
+class SentenceAggregatorStation(BufferStation):
     """
-    Sentence splitter: Splits streaming text into complete sentences.
+    sentence aggregator: aggregates streaming text into complete sentences.
     
     Input: TEXT_DELTA (streaming)
     Output: TEXT (complete sentences)
@@ -123,7 +123,7 @@ class SentenceSplitterStation(BufferStation):
     # BufferStation configuration
     ALLOWED_INPUT_TYPES = [ChunkType.TEXT_DELTA]
     """
-    Sentence splitter: Splits streaming text into complete sentences.
+    sentence aggregator: aggregates streaming text into complete sentences.
     
     Input: TEXT_DELTA (streaming)
     Output: TEXT (complete sentences)
@@ -135,10 +135,10 @@ class SentenceSplitterStation(BufferStation):
     def __init__(
         self,
         min_sentence_length: int = 5,
-        name: str = "SentenceSplitter"
+        name: str = "SentenceAggregator"
     ):
         """
-        Initialize sentence splitter station.
+        Initialize sentence aggregator station.
         
         Args:
             min_sentence_length: Minimum sentence length
@@ -146,7 +146,7 @@ class SentenceSplitterStation(BufferStation):
         """
         super().__init__(name=name)
         self.min_sentence_length = min_sentence_length
-        self._splitter = SentenceSplitter(min_sentence_length)
+        self._aggregator = SentenceAggregator(min_sentence_length)
         
     def _configure_middlewares_hook(self, middlewares: list) -> None:
         """Hook to configure middlewares."""
@@ -155,27 +155,27 @@ class SentenceSplitterStation(BufferStation):
                 middleware.on_interrupt = self._handle_interrupt
     
     async def _handle_interrupt(self) -> None:
-        """Handle interrupt signal - reset splitter."""
-        self._splitter.reset()
-        self.logger.debug("Sentence splitter reset")
+        """Handle interrupt signal - reset aggregator."""
+        self._aggregator.reset()
+        self.logger.debug("sentence aggregator reset")
     
     async def process_chunk(self, chunk: Chunk) -> AsyncIterator[Chunk]:
         """
-        Process chunk through sentence splitter - CORE LOGIC ONLY.
+        Process chunk through sentence aggregator - CORE LOGIC ONLY.
         
         Middlewares handle: signal processing (CONTROL_INTERRUPT), latency monitoring, error handling.
         
         Core logic:
-        - Accumulate TEXT_DELTA chunks and split into sentences
+        - Accumulate TEXT_DELTA chunks and aggregate into sentences
         - On EVENT_AGENT_STOP: Flush remaining buffer as final sentence
         - Passthrough all chunks
         
-        Note: SignalHandlerMiddleware handles CONTROL_INTERRUPT (resets splitter via _handle_interrupt)
+        Note: SignalHandlerMiddleware handles CONTROL_INTERRUPT (resets aggregator via _handle_interrupt)
         Note: LatencyMonitorMiddleware automatically records first sentence output
         """
         # Handle EVENT_AGENT_STOP signal (flush remaining text)
         if chunk.type == ChunkType.EVENT_AGENT_STOP:
-            remaining = self._splitter.flush()
+            remaining = self._aggregator.flush()
             if remaining:
                 self.logger.info(f"Flushing final sentence: '{remaining[:50]}...'")
                 yield TextChunk(
@@ -201,8 +201,8 @@ class SentenceSplitterStation(BufferStation):
             delta = chunk.data if isinstance(chunk.data, str) else (str(chunk.data) if chunk.data else "")
             
             if delta and chunk.source == "agent":
-                # Add delta to splitter and get complete sentences
-                sentences = self._splitter.add_chunk(delta)
+                # Add delta to aggregator and get complete sentences
+                sentences = self._aggregator.add_chunk(delta)
                 
                 # Yield each complete sentence as TEXT chunk
                 # Note: LatencyMonitorMiddleware records first sentence automatically

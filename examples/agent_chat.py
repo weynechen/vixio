@@ -39,7 +39,7 @@ from stations import (
     ASRStation,
     TextAggregatorStation,
     AgentStation,
-    SentenceSplitterStation,
+    SentenceAggregatorStation,
     TTSStation
 )
 from providers.factory import ProviderFactory
@@ -93,7 +93,7 @@ async def main():
     3. TurnDetector waits for silence
     4. ASR transcribes to text
     5. Agent processes text and generates response (streaming)
-    6. SentenceSplitter splits streaming text into sentences
+    6. SentenceAggregator splits streaming text into sentences
     7. TTS synthesizes each sentence to audio
     8. Audio sent back to client via WebSocket
     """
@@ -263,7 +263,7 @@ async def main():
         stations.append(AgentStation(agent_provider))
         
         # Stage 4: Sentence splitting for streaming TTS
-        stations.append(SentenceSplitterStation(min_sentence_length=5))
+        stations.append(SentenceAggregatorStation(min_sentence_length=5))
         
         # Stage 5: Speech synthesis
         stations.append(TTSStation(tts_provider))
@@ -310,7 +310,7 @@ async def main():
     pipeline_stages = ["VAD", "TurnDetector"]
     if has_asr:
         pipeline_stages.extend(["ASR", "TextAggregator"])
-    pipeline_stages.extend(["Agent", "SentenceSplitter", "TTS"])
+    pipeline_stages.extend(["Agent", "SentenceAggregator", "TTS"])
     logger.info(f"Pipeline: {' -> '.join(pipeline_stages)}")
     logger.info("=" * 70)
     
