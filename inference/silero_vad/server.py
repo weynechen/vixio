@@ -453,7 +453,6 @@ def main():
     parser.add_argument('--log-level', default='INFO', help='Log level')  # Changed to DEBUG for troubleshooting
     args = parser.parse_args()
     
-    args.log_level = 'DEBUG' # for debug use
 
     # Configure logging
     logger.remove()
