@@ -845,7 +845,7 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
             if content:
                 return TextChunk(
                     type=ChunkType.TEXT,
-                    content=content,
+                    data=content,  # ← Use data instead of content
                     session_id=session_id,
                     turn_id=turn_id
                 )

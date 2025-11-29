@@ -5,13 +5,13 @@ Handles exceptions during processing and emits error events.
 """
 
 from typing import AsyncIterator, Optional, Callable, Awaitable
-from core.middleware import Middleware, NextHandler
+from core.middleware import UniversalMiddleware, NextHandler
 from core.chunk import Chunk, ChunkType, EventChunk
 
 
-class ErrorHandlerMiddleware(Middleware):
+class ErrorHandlerMiddleware(UniversalMiddleware):
     """
-    Handles errors during processing.
+    Handles errors during both data and signal processing.
     
     Catches exceptions and:
     - Emits error events
@@ -41,9 +41,9 @@ class ErrorHandlerMiddleware(Middleware):
         self.suppress_errors = suppress_errors
         self.on_error = on_error
     
-    async def process(self, chunk: Chunk, next_handler: NextHandler) -> AsyncIterator[Chunk]:
+    async def _handle_error(self, chunk: Chunk, next_handler: NextHandler) -> AsyncIterator[Chunk]:
         """
-        Process with error handling.
+        Common error handling logic for both data and signal chunks.
         
         Args:
             chunk: Input chunk
@@ -83,4 +83,32 @@ class ErrorHandlerMiddleware(Middleware):
             # Re-raise unless suppressed
             if not self.suppress_errors:
                 raise
+    
+    async def process_data(self, chunk: Chunk, next_handler: NextHandler) -> AsyncIterator[Chunk]:
+        """
+        Process data chunk with error handling.
+        
+        Args:
+            chunk: Data chunk
+            next_handler: Next handler in chain
+            
+        Yields:
+            Processed chunks or error event
+        """
+        async for result in self._handle_error(chunk, next_handler):
+            yield result
+    
+    async def process_signal(self, chunk: Chunk, next_handler: NextHandler) -> AsyncIterator[Chunk]:
+        """
+        Process signal chunk with error handling.
+        
+        Args:
+            chunk: Signal chunk
+            next_handler: Next handler in chain
+            
+        Yields:
+            Processed chunks or error event
+        """
+        async for result in self._handle_error(chunk, next_handler):
+            yield result
 

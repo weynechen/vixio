@@ -68,6 +68,9 @@ class ASRServiceServicer(asr_pb2_grpc.ASRServiceServicer):
         self._sessions: Dict[str, SessionState] = {}
         self._sessions_lock = threading.Lock()
         
+        # Inference lock (protect shared recognizer from concurrent access)
+        self._inference_lock = asyncio.Lock()
+        
         # Service stats
         self._total_requests = 0
         self._total_chunks = 0
@@ -144,15 +147,27 @@ class ASRServiceServicer(asr_pb2_grpc.ASRServiceServicer):
             # Convert to float32 normalized to [-1, 1]
             audio_float = audio_array.astype(np.float32) / 32768.0
             
-            # Create offline stream
-            stream = self._recognizer.create_stream()
-            stream.accept_waveform(16000, audio_float)
-            
-            # Decode offline (one-shot)
-            self._recognizer.decode_stream(stream)
-            
-            # Get result
-            result = stream.result.text.strip()
+            # Acquire inference lock to prevent concurrent access to shared recognizer
+            logger.debug(f"[{session_id}] Waiting for inference lock...")
+            start_wait = time.time()
+            async with self._inference_lock:
+                wait_time = time.time() - start_wait
+                if wait_time > 0.01:  # Log if waited > 10ms
+                    logger.debug(f"[{session_id}] Acquired lock after {wait_time*1000:.1f}ms wait")
+                
+                # Create offline stream
+                stream = self._recognizer.create_stream()
+                stream.accept_waveform(16000, audio_float)
+                
+                # Decode offline (one-shot)
+                inference_start = time.time()
+                self._recognizer.decode_stream(stream)
+                inference_time = time.time() - inference_start
+                
+                # Get result
+                result = stream.result.text.strip()
+                
+                logger.debug(f"[{session_id}] Inference completed in {inference_time*1000:.1f}ms")
             
             # Update stats
             session.chunks_processed += len(audio_chunks)

@@ -32,7 +32,8 @@ class Pipeline:
         stations: List[Station],
         control_bus: Optional[ControlBus] = None,
         name: Optional[str] = None,
-        queue_size: int = 100
+        queue_size: int = 100,
+        session_id: Optional[str] = None
     ):
         """
         Initialize pipeline.
@@ -42,9 +43,11 @@ class Pipeline:
             control_bus: ControlBus for interrupt handling (optional)
             name: Pipeline name for logging
             queue_size: Maximum size for inter-station queues
+            session_id: Session ID for logging (optional, can be set later)
         """
         self.stations = stations
         self._control_bus = control_bus
+        self._session_id = session_id
         self.name = name or "Pipeline"
         self.queue_size = queue_size
         self.logger = logger.bind(pipeline=self.name)
@@ -64,6 +67,10 @@ class Pipeline:
             # Pass ControlBus to all stations (if provided)
             if self._control_bus:
                 self._propagate_control_bus()
+            
+            # Pass session_id to all stations (if provided)
+            if self._session_id:
+                self._propagate_session_id()
     
     @property
     def control_bus(self) -> Optional[ControlBus]:
@@ -81,12 +88,38 @@ class Pipeline:
         if value:
             self._propagate_control_bus()
     
+    @property
+    def session_id(self) -> Optional[str]:
+        """Get session ID."""
+        return self._session_id
+    
+    @session_id.setter
+    def session_id(self, value: Optional[str]) -> None:
+        """
+        Set session ID and propagate to all stations.
+        
+        This automatically updates logger bindings for all stations in the pipeline.
+        """
+        self._session_id = value
+        if value:
+            self._propagate_session_id()
+            # Also update pipeline's own logger
+            session_id_short = value[:8] if len(value) > 8 else value
+            self.logger = logger.bind(pipeline=self.name, session_id=session_id_short)
+    
     def _propagate_control_bus(self) -> None:
         """Propagate control_bus to all stations."""
         if self._control_bus:
             for station in self.stations:
                 station.control_bus = self._control_bus
             self.logger.info(f"[{self.name}] ControlBus propagated to {len(self.stations)} stations")
+    
+    def _propagate_session_id(self) -> None:
+        """Propagate session_id to all stations."""
+        if self._session_id:
+            for station in self.stations:
+                station.set_session_id(self._session_id)
+            self.logger.debug(f"[{self.name}] Session ID propagated to {len(self.stations)} stations")
     
     async def run(self, input_stream: AsyncIterator[Chunk]) -> AsyncIterator[Chunk]:
         """

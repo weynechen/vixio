@@ -52,6 +52,9 @@ def configure_logger(
     # Remove default handler
     logger.remove()
     
+    # Configure default extra (session_id will be set later per-station)
+    logger.configure(extra={"session_id": "--------"})
+    
     # Set levels (use default level if specific levels not provided)
     console_level = console_level or level
     file_level = file_level or level
@@ -61,6 +64,7 @@ def configure_logger(
         sys.stderr,
         format="<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | "
                "<level>{level: <8}</level> | "
+               "<yellow>[{extra[session_id]}]</yellow> | "
                "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> | "
                "<level>{message}</level>",
         level=console_level,
@@ -75,7 +79,7 @@ def configure_logger(
     log_file = log_path / "vixio_{time:YYYY-MM-DD}.log"
     logger.add(
         str(log_file),
-        format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function}:{line} | {message}",
+        format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | [{extra[session_id]}] | {name}:{function}:{line} | {message}",
         level=file_level,
         rotation=rotation,
         retention=retention,

@@ -169,15 +169,23 @@ class TextChunk(Chunk):
     Text data chunk - output from user or ASR, input for Agent
     
     Attributes:
-        content: str - The text content
-        data: Optional - Can store additional info (language, confidence, etc.)
+        data: str - Text content (unified with base Chunk.data)
     """
     type: ChunkType = ChunkType.TEXT
-    content: str = ""
+    # Note: data is inherited from Chunk base class (Any type)
+    # For TextChunk, data should be str
+    
+    def __post_init__(self):
+        """Ensure data is a string"""
+        if self.data is None:
+            self.data = ""
+        elif not isinstance(self.data, str):
+            self.data = str(self.data)
     
     def __str__(self) -> str:
         session_short = self.session_id[:8] if self.session_id else 'N/A'
-        content_preview = self.content[:50] + "..." if len(self.content) > 50 else self.content
+        text = self.data if isinstance(self.data, str) else str(self.data) if self.data else ""
+        content_preview = text[:50] + "..." if len(text) > 50 else text
         return f"TextChunk('{content_preview}', session={session_short})"
 
 
@@ -187,15 +195,23 @@ class TextDeltaChunk(Chunk):
     Text delta chunk - streaming fragment from Agent
     
     Attributes:
-        delta: str - Text fragment
-        data: Optional - Can store cumulative text
+        data: str - Text fragment (unified with base Chunk.data)
     """
     type: ChunkType = ChunkType.TEXT_DELTA
-    delta: str = ""
+    # Note: data is inherited from Chunk base class (Any type)
+    # For TextDeltaChunk, data should be str
+    
+    def __post_init__(self):
+        """Ensure data is a string"""
+        if self.data is None:
+            self.data = ""
+        elif not isinstance(self.data, str):
+            self.data = str(self.data)
     
     def __str__(self) -> str:
         session_short = self.session_id[:8] if self.session_id else 'N/A'
-        delta_preview = self.delta[:30] + "..." if len(self.delta) > 30 else self.delta
+        text = self.data if isinstance(self.data, str) else str(self.data) if self.data else ""
+        delta_preview = text[:30] + "..." if len(text) > 30 else text
         return f"TextDeltaChunk('{delta_preview}', session={session_short})"
 
 

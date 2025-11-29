@@ -89,6 +89,156 @@ class Middleware(ABC):
         pass
 
 
+class DataMiddleware(Middleware):
+    """
+    Data-only middleware - processes only Data chunks.
+    
+    Signal chunks are passed through unchanged to next handler.
+    Subclasses implement process_data() for data-specific logic.
+    
+    Use cases:
+    - Input validation (check data types, content)
+    - Latency monitoring (track data processing time)
+    - Timeout handling (abort long-running data processing)
+    - Interrupt detection (detect turn changes on data)
+    """
+    
+    async def process(self, chunk: Chunk, next_handler: NextHandler) -> AsyncIterator[Chunk]:
+        """
+        Route chunk based on type.
+        
+        Signal chunks: Pass through unchanged
+        Data chunks: Process with process_data()
+        """
+        if chunk.is_signal():
+            # Signals pass through unchanged
+            async for result in next_handler(chunk):
+                yield result
+            return
+        
+        # Data chunks - call subclass implementation
+        async for result in self.process_data(chunk, next_handler):
+            yield result
+    
+    @abstractmethod
+    async def process_data(self, chunk: Chunk, next_handler: NextHandler) -> AsyncIterator[Chunk]:
+        """
+        Process data chunk.
+        
+        Subclasses implement data-specific logic here.
+        
+        Args:
+            chunk: Data chunk (guaranteed to be data, not signal)
+            next_handler: Next handler in chain
+            
+        Yields:
+            Processed chunks
+        """
+        pass
+
+
+class SignalMiddleware(Middleware):
+    """
+    Signal-only middleware - processes only Signal chunks.
+    
+    Data chunks are passed through unchanged to next handler.
+    Subclasses implement process_signal() for signal-specific logic.
+    
+    Use cases:
+    - Signal routing (handle CONTROL_INTERRUPT)
+    - Multi-signal handling (route different signal types)
+    - Signal logging/monitoring
+    """
+    
+    async def process(self, chunk: Chunk, next_handler: NextHandler) -> AsyncIterator[Chunk]:
+        """
+        Route chunk based on type.
+        
+        Data chunks: Pass through unchanged
+        Signal chunks: Process with process_signal()
+        """
+        if not chunk.is_signal():
+            # Data passes through unchanged
+            async for result in next_handler(chunk):
+                yield result
+            return
+        
+        # Signal chunks - call subclass implementation
+        async for result in self.process_signal(chunk, next_handler):
+            yield result
+    
+    @abstractmethod
+    async def process_signal(self, chunk: Chunk, next_handler: NextHandler) -> AsyncIterator[Chunk]:
+        """
+        Process signal chunk.
+        
+        Subclasses implement signal-specific logic here.
+        
+        Args:
+            chunk: Signal chunk (guaranteed to be signal, not data)
+            next_handler: Next handler in chain
+            
+        Yields:
+            Processed chunks (typically yield chunk to pass signal through)
+        """
+        pass
+
+
+class UniversalMiddleware(Middleware):
+    """
+    Universal middleware - processes both Data and Signal chunks.
+    
+    Subclasses implement both process_data() and process_signal().
+    
+    Use cases:
+    - Event emission (emit events before/after any processing)
+    - Error handling (catch errors from both data and signal processing)
+    - Metrics collection (track all chunk types)
+    """
+    
+    async def process(self, chunk: Chunk, next_handler: NextHandler) -> AsyncIterator[Chunk]:
+        """
+        Route chunk to appropriate handler.
+        
+        Signal chunks: process_signal()
+        Data chunks: process_data()
+        """
+        if chunk.is_signal():
+            async for result in self.process_signal(chunk, next_handler):
+                yield result
+        else:
+            async for result in self.process_data(chunk, next_handler):
+                yield result
+    
+    @abstractmethod
+    async def process_data(self, chunk: Chunk, next_handler: NextHandler) -> AsyncIterator[Chunk]:
+        """
+        Process data chunk.
+        
+        Args:
+            chunk: Data chunk
+            next_handler: Next handler in chain
+            
+        Yields:
+            Processed chunks
+        """
+        pass
+    
+    @abstractmethod
+    async def process_signal(self, chunk: Chunk, next_handler: NextHandler) -> AsyncIterator[Chunk]:
+        """
+        Process signal chunk.
+        
+        Args:
+            chunk: Signal chunk
+            next_handler: Next handler in chain
+            
+        Yields:
+            Processed chunks
+        """
+        pass
+
+
 class MiddlewareChain:
     """
     Chains multiple middlewares together.
@@ -195,25 +345,87 @@ def _clone_middleware(middleware: Middleware) -> Middleware:
     return new_middleware
 
 
+def _create_default_middlewares(station_instance):
+    """
+    Create default middlewares based on station type.
+    
+    Args:
+        station_instance: The station instance
+        
+    Returns:
+        List of default middleware instances
+    """
+    from stations.middlewares.input_validator import InputValidatorMiddleware
+    from stations.middlewares.signal_handler import SignalHandlerMiddleware
+    from stations.middlewares.interrupt_detector import InterruptDetectorMiddleware
+    from stations.middlewares.latency_monitor import LatencyMonitorMiddleware
+    from stations.middlewares.error_handler import ErrorHandlerMiddleware
+    
+    # Import station types to check isinstance
+    # Use TYPE_CHECKING import to avoid circular imports
+    from core.station import StreamStation, BufferStation, DetectorStation
+    
+    default_middlewares = []
+    
+    # Common middlewares for all typed stations
+    if isinstance(station_instance, (StreamStation, BufferStation, DetectorStation)):
+        # 1. InputValidator - all stations validate input
+        if hasattr(station_instance, 'ALLOWED_INPUT_TYPES') and station_instance.ALLOWED_INPUT_TYPES:
+            default_middlewares.append(
+                InputValidatorMiddleware(
+                    allowed_types=station_instance.ALLOWED_INPUT_TYPES,
+                    check_empty=True,  # Always check for empty content
+                    passthrough_on_invalid=True
+                )
+            )
+        
+        # 2. SignalHandler - all stations handle signals
+        default_middlewares.append(SignalHandlerMiddleware())
+        
+        # 3. ErrorHandler - all stations handle errors
+        default_middlewares.append(ErrorHandlerMiddleware())
+    
+    # StreamStation-specific middlewares
+    if isinstance(station_instance, StreamStation):
+        # InterruptDetector - detect turn changes during streaming
+        if station_instance.enable_interrupt_detection:
+            default_middlewares.insert(-1, InterruptDetectorMiddleware())  # Insert before ErrorHandler
+        
+        # LatencyMonitor - monitor first output latency
+        if hasattr(station_instance, 'LATENCY_METRIC_NAME') and station_instance.LATENCY_METRIC_NAME:
+            default_middlewares.insert(-1, LatencyMonitorMiddleware(
+                metric_name=station_instance.LATENCY_METRIC_NAME
+            ))
+    
+    return default_middlewares
+
+
 def with_middlewares(*middlewares: Middleware):
     """
     Decorator to add middlewares to a station's process_chunk method.
     
+    Supports automatic default middlewares for StreamStation, BufferStation, DetectorStation:
+    - Default middlewares are applied based on station type
+    - Explicit middlewares (decorator arguments) are prepended (higher priority)
+    - Station subclasses can override _get_custom_middlewares() to add more
+    
     Usage:
         ```python
+        # StreamStation with automatic defaults + custom middlewares
         @with_middlewares(
-            SignalHandlerMiddleware(),
-            InputValidatorMiddleware(),
-            EventEmitterMiddleware("START", "STOP")
+            TimeoutHandlerMiddleware(30.0)  # Custom middleware
         )
-        class MyStation(Station):
+        class AgentStation(StreamStation):
+            ALLOWED_INPUT_TYPES = [ChunkType.TEXT]
+            LATENCY_METRIC_NAME = "agent_first_token"
+            
             async def process_chunk(self, chunk):
                 # Core logic only
                 yield processed_chunk
         ```
     
     Args:
-        *middlewares: Middleware instances to use as templates
+        *middlewares: Middleware instances to use as templates (prepended to defaults)
         
     Returns:
         Decorator function
@@ -233,14 +445,28 @@ def with_middlewares(*middlewares: Middleware):
         async def wrapped_process_chunk(self, chunk: Chunk) -> AsyncIterator[Chunk]:
             # Create instance-specific middlewares on first call
             if not hasattr(self, '_middlewares'):
-                # Clone middlewares for this instance (shallow copy to avoid logger issues)
-                self._middlewares = [_clone_middleware(m) for m in middlewares]
+                # 1. Get default middlewares from station type
+                default_middlewares = _create_default_middlewares(self)
                 
-                # Attach to station
+                # 2. Prepend explicit middlewares (decorator args) - higher priority
+                explicit_middlewares = list(middlewares)
+                
+                # 3. Allow station to add custom middlewares via hook
+                custom_middlewares = []
+                if hasattr(self, '_get_custom_middlewares'):
+                    custom_middlewares = self._get_custom_middlewares() or []
+                
+                # 4. Merge: explicit + custom + defaults
+                all_middleware_templates = explicit_middlewares + custom_middlewares + default_middlewares
+                
+                # 5. Clone middlewares for this instance
+                self._middlewares = [_clone_middleware(m) for m in all_middleware_templates]
+                
+                # 6. Attach to station
                 for middleware in self._middlewares:
                     middleware.attach(self)
                 
-                # Call configuration hook if exists
+                # 7. Call configuration hook if exists
                 if hasattr(self, '_configure_middlewares_hook'):
                     self._configure_middlewares_hook(self._middlewares)
             

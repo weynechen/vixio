@@ -1,10 +1,10 @@
 [project]
 name = "vixio-silero-vad-service"
-version = "1.0.0"
-description = "Silero VAD gRPC microservice for Vixio"
+version = "2.0.0"
+description = "Silero VAD gRPC microservice for Vixio (ONNX-based for concurrent state isolation)"
 requires-python = ">=3.10"
 dependencies = [
-    "torch>=2.0.0",
+    "onnxruntime-gpu>=1.16.0",
     "numpy>=1.24.0",
     "grpcio>=1.60.0",
     "grpcio-tools>=1.60.0",

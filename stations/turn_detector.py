@@ -11,12 +11,12 @@ Session's interrupt handler injects CONTROL_INTERRUPT into pipeline.
 import asyncio
 import time
 from typing import AsyncIterator, Optional
-from core.station import Station
+from core.station import DetectorStation
 from core.chunk import Chunk, ChunkType, EventChunk, ControlChunk
 from utils import get_latency_monitor
 
 
-class TurnDetectorStation(Station):
+class TurnDetectorStation(DetectorStation):
     """
     Turn detector: Detects when user finishes speaking and handles interrupts.
     
@@ -35,7 +35,20 @@ class TurnDetectorStation(Station):
     - Session's interrupt handler increments turn_id for all interrupts
     - TTS station increments turn_id when bot finishes speaking
     - This ensures turn_id changes immediately and consistently on completion/interrupt
+    
+    Note: This station doesn't use middlewares due to its complex state machine logic,
+    async timers, and conditional branching. It inherits DetectorStation for classification
+    but implements its own process_chunk without middleware decoration.
     """
+    
+    # DetectorStation configuration
+    # TurnDetector processes VAD/BOT events, not audio data
+    ALLOWED_INPUT_TYPES = [
+        ChunkType.EVENT_VAD_START,
+        ChunkType.EVENT_VAD_END,
+        ChunkType.EVENT_BOT_STARTED_SPEAKING,
+        ChunkType.EVENT_BOT_STOPPED_SPEAKING
+    ]
     
     def __init__(
         self,

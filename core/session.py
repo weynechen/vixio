@@ -134,6 +134,7 @@ class SessionManager:
         else:
             pipeline = self.pipeline_factory()
         pipeline.control_bus = control_bus
+        pipeline.session_id = connection_id  # Set session_id (auto-propagates to all stations)
         self._pipelines[connection_id] = pipeline
         
         self.logger.debug(f"Created pipeline for connection {connection_id[:8]}: {pipeline}")

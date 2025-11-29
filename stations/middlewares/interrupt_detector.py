@@ -5,13 +5,15 @@ Detects interrupts during processing (turn ID changes).
 """
 
 from typing import AsyncIterator
-from core.middleware import Middleware, NextHandler
+from core.middleware import DataMiddleware, NextHandler
 from core.chunk import Chunk
 
 
-class InterruptDetectorMiddleware(Middleware):
+class InterruptDetectorMiddleware(DataMiddleware):
     """
-    Detects interrupts during streaming processing.
+    Detects interrupts during data streaming processing.
+    
+    Signal chunks are passed through unchanged.
     
     Monitors turn ID changes via control bus and stops processing
     when a new turn is detected (indicating user interruption).
@@ -29,12 +31,12 @@ class InterruptDetectorMiddleware(Middleware):
         self.check_interval = check_interval
         self._chunk_count = 0
     
-    async def process(self, chunk: Chunk, next_handler: NextHandler) -> AsyncIterator[Chunk]:
+    async def process_data(self, chunk: Chunk, next_handler: NextHandler) -> AsyncIterator[Chunk]:
         """
-        Process with interrupt detection.
+        Process data chunk with interrupt detection.
         
         Args:
-            chunk: Input chunk
+            chunk: Data chunk (not signal)
             next_handler: Next handler in chain
             
         Yields:

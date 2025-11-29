@@ -11,29 +11,19 @@ Refactored with middleware pattern for clean separation of concerns.
 """
 
 from typing import AsyncIterator
-from core.station import Station
+from core.station import DetectorStation
 from core.chunk import Chunk, ChunkType, EventChunk, is_audio_chunk
 from core.middleware import with_middlewares
-from stations.middlewares import (
-    SignalHandlerMiddleware,
-    ErrorHandlerMiddleware
-)
 from providers.vad import VADProvider, VADEvent
 
 
 @with_middlewares(
-    # Handle signals (CONTROL_INTERRUPT - reset VAD state)
-    SignalHandlerMiddleware(
-        on_interrupt=lambda: None,  # Will be set in __init__
-        cancel_streaming=False
-    ),
-    # Handle errors
-    ErrorHandlerMiddleware(
-        emit_error_event=True,
-        suppress_errors=False
-    )
+    # Note: DetectorStation base class automatically provides:
+    # - InputValidatorMiddleware (validates ALLOWED_INPUT_TYPES)
+    # - SignalHandlerMiddleware (handles CONTROL_INTERRUPT)
+    # - ErrorHandlerMiddleware (error handling)
 )
-class VADStation(Station):
+class VADStation(DetectorStation):
     """
     VAD workstation: Detects voice activity in PCM audio stream.
     
@@ -43,6 +33,9 @@ class VADStation(Station):
     Note: Expects PCM audio data. Transport layers handle format conversion.
     Turn management is handled by TTS/TurnDetector stations (increment on completion/interrupt).
     """
+    
+    # DetectorStation configuration
+    ALLOWED_INPUT_TYPES = [ChunkType.AUDIO_RAW]
     
     def __init__(self, vad_provider: VADProvider, name: str = "VAD"):
         """

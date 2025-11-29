@@ -6,15 +6,17 @@ Handles signal chunks (CONTROL_INTERRUPT, etc.) and triggers appropriate actions
 
 import asyncio
 from typing import AsyncIterator, Callable, Optional, Awaitable
-from core.middleware import Middleware, NextHandler
+from core.middleware import SignalMiddleware, NextHandler
 from core.chunk import Chunk, ChunkType
 
 
-class SignalHandlerMiddleware(Middleware):
+class SignalHandlerMiddleware(SignalMiddleware):
     """
     Handles signal chunks and triggers callbacks.
     
-    Signals are passed through immediately, but also trigger side effects like:
+    Data chunks are passed through unchanged.
+    
+    Signals trigger side effects like:
     - Resetting state on CONTROL_INTERRUPT
     - Closing streaming tasks
     - Cleaning up resources
@@ -39,19 +41,19 @@ class SignalHandlerMiddleware(Middleware):
         self.cancel_streaming = cancel_streaming
         self._streaming_task: Optional[asyncio.Task] = None
     
-    async def process(self, chunk: Chunk, next_handler: NextHandler) -> AsyncIterator[Chunk]:
+    async def process_signal(self, chunk: Chunk, next_handler: NextHandler) -> AsyncIterator[Chunk]:
         """
-        Process signals and passthrough.
+        Process signal chunk and passthrough.
         
         Args:
-            chunk: Input chunk
+            chunk: Signal chunk (not data)
             next_handler: Next handler in chain
             
         Yields:
             Signal chunk (passed through) and any additional chunks from core logic
         """
         # Handle CONTROL_INTERRUPT signal
-        if chunk.is_signal() and chunk.type == ChunkType.CONTROL_INTERRUPT:
+        if chunk.type == ChunkType.CONTROL_INTERRUPT:
             self.logger.info("Received CONTROL_INTERRUPT signal")
             
             # Cancel active streaming if enabled

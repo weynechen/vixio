@@ -6,15 +6,17 @@ Handles processing timeouts and emits timeout events.
 
 import asyncio
 from typing import AsyncIterator, Optional
-from core.middleware import Middleware, NextHandler
+from core.middleware import DataMiddleware, NextHandler
 from core.chunk import Chunk, ChunkType, EventChunk
 
 
-class TimeoutHandlerMiddleware(Middleware):
+class TimeoutHandlerMiddleware(DataMiddleware):
     """
-    Handles processing timeouts.
+    Handles data processing timeouts.
     
-    Monitors processing time and:
+    Signal chunks are passed through unchanged.
+    
+    Monitors data processing time and:
     - Interrupts processing if timeout exceeded
     - Emits timeout event
     - Sends interrupt signal via control bus
@@ -41,12 +43,12 @@ class TimeoutHandlerMiddleware(Middleware):
         self.emit_timeout_event = emit_timeout_event
         self.send_interrupt_signal = send_interrupt_signal
     
-    async def process(self, chunk: Chunk, next_handler: NextHandler) -> AsyncIterator[Chunk]:
+    async def process_data(self, chunk: Chunk, next_handler: NextHandler) -> AsyncIterator[Chunk]:
         """
-        Process with timeout monitoring.
+        Process data chunk with timeout monitoring.
         
         Args:
-            chunk: Input chunk
+            chunk: Data chunk (not signal)
             next_handler: Next handler in chain
             
         Yields:

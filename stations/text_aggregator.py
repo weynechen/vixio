@@ -13,25 +13,32 @@ Refactored with middleware pattern for clean separation of concerns.
 """
 
 from typing import AsyncIterator
-from core.station import Station
+from core.station import BufferStation
 from core.chunk import Chunk, ChunkType, TextChunk
 from core.middleware import with_middlewares
-from stations.middlewares import SignalHandlerMiddleware, ErrorHandlerMiddleware
 
 
 @with_middlewares(
-    # Handle signals (CONTROL_INTERRUPT - clear buffer)
-    SignalHandlerMiddleware(
-        on_interrupt=lambda: None,  # Will be set in __init__
-        cancel_streaming=False
-    ),
-    # Handle errors
-    ErrorHandlerMiddleware(
-        emit_error_event=True,
-        suppress_errors=False
-    )
+    # Note: BufferStation base class automatically provides:
+    # - InputValidatorMiddleware (validates ALLOWED_INPUT_TYPES)
+    # - SignalHandlerMiddleware (handles CONTROL_INTERRUPT)
+    # - ErrorHandlerMiddleware (error handling)
 )
-class TextAggregatorStation(Station):
+class TextAggregatorStation(BufferStation):
+    """
+    Text aggregator: Aggregates TEXT_DELTA into complete TEXT.
+    
+    Input: TEXT_DELTA (streaming)
+    Output: TEXT (complete aggregated text)
+    
+    Workflow:
+    1. Accumulate TEXT_DELTA chunks
+    2. On EVENT_TEXT_COMPLETE: Emit complete text as TEXT
+    3. Pass through all other chunks
+    """
+    
+    # BufferStation configuration
+    ALLOWED_INPUT_TYPES = [ChunkType.TEXT_DELTA]
     """
     Text aggregator: Aggregates TEXT_DELTA into complete TEXT.
     
@@ -87,9 +94,10 @@ class TextAggregatorStation(Station):
                 self.logger.info(f"Aggregated text: '{self._text_buffer[:50]}...'")
                 
                 # Emit complete text as TEXT for Agent
+            # Use data instead of content (step towards unified Chunk API)
                 yield TextChunk(
                     type=ChunkType.TEXT,
-                    content=self._text_buffer,
+                    data=self._text_buffer,  # ← Use data
                     source=self._source or "aggregator",
                     session_id=chunk.session_id,
                     turn_id=chunk.turn_id
@@ -99,8 +107,8 @@ class TextAggregatorStation(Station):
                 self._text_buffer = ""
                 self._source = ""
             else:
-                self.logger.debug("No text to aggregate")
-            
+                self.logger.debug("No text to aggregate - buffer is empty, not emitting TEXT chunk")
+        
             # Passthrough signal
             yield chunk
             return
@@ -112,7 +120,8 @@ class TextAggregatorStation(Station):
         
         # Accumulate TEXT_DELTA chunks
         if chunk.type == ChunkType.TEXT_DELTA:
-            delta = chunk.delta if hasattr(chunk, 'delta') else str(chunk.data or "")
+            # Extract text from data attribute (unified API)
+            delta = chunk.data if isinstance(chunk.data, str) else (str(chunk.data) if chunk.data else "")
             
             if delta:
                 self._text_buffer += delta

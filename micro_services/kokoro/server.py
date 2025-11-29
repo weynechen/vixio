@@ -59,6 +59,9 @@ class TTSServiceServicer(tts_pb2_grpc.TTSServiceServicer):
         self._sessions: Dict[str, SessionState] = {}
         self._sessions_lock = threading.Lock()
         
+        # Inference lock (protect shared model from concurrent access)
+        self._inference_lock = asyncio.Lock()
+        
         # Service stats
         self._total_requests = 0
         
@@ -120,27 +123,39 @@ class TTSServiceServicer(tts_pb2_grpc.TTSServiceServicer):
         logger.info(f"[{session_id}] Synthesizing text: {text[:50]}...")
         
         try:
-            # Create pipeline for this synthesis
-            # Use 'z' for Chinese (zh), 'a' for English (en)
-            lang_code = 'z' if session.lang == 'zh' else 'a'
-            pipeline = KPipeline(
-                lang_code=lang_code,
-                repo_id=self._repo_id,
-                model=self._model
-            )
-            
-            # HACK: Mitigate rushing caused by lack of training data beyond ~100 tokens
-            def speed_callable(len_ps):
-                speed = session.speed * 0.8
-                if len_ps <= 83:
-                    speed = session.speed
-                elif len_ps < 183:
-                    speed = session.speed * (1 - (len_ps - 83) / 500)
-                return speed * 1.1
-            
-            # Generate audio
-            generator = pipeline(text, voice=session.voice, speed=speed_callable)
-            result = next(generator)
+            # Acquire inference lock to prevent concurrent access to shared model
+            logger.debug(f"[{session_id}] Waiting for inference lock...")
+            start_wait = time.time()
+            async with self._inference_lock:
+                wait_time = time.time() - start_wait
+                if wait_time > 0.01:  # Log if waited > 10ms
+                    logger.debug(f"[{session_id}] Acquired lock after {wait_time*1000:.1f}ms wait")
+                
+                # Create pipeline for this synthesis
+                # Use 'z' for Chinese (zh), 'a' for English (en)
+                lang_code = 'z' if session.lang == 'zh' else 'a'
+                pipeline = KPipeline(
+                    lang_code=lang_code,
+                    repo_id=self._repo_id,
+                    model=self._model
+                )
+                
+                # HACK: Mitigate rushing caused by lack of training data beyond ~100 tokens
+                def speed_callable(len_ps):
+                    speed = session.speed * 0.8
+                    if len_ps <= 83:
+                        speed = session.speed
+                    elif len_ps < 183:
+                        speed = session.speed * (1 - (len_ps - 83) / 500)
+                    return speed * 1.1
+                
+                # Generate audio
+                inference_start = time.time()
+                generator = pipeline(text, voice=session.voice, speed=speed_callable)
+                result = next(generator)
+                inference_time = time.time() - inference_start
+                
+                logger.debug(f"[{session_id}] Inference completed in {inference_time*1000:.1f}ms")
             
             # Get audio data (PyTorch Tensor -> NumPy array)
             audio_data = result.audio

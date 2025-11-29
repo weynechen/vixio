@@ -19,9 +19,10 @@ dev:
       provider: silero-vad-grpc
       config:
         service_url: "localhost:50051"
-        threshold: 0.5
-        threshold_low: 0.2
-        frame_window_threshold: 3
+        # Optimized for handling sentence pauses (300-800ms):
+        threshold: 0.35              # Lower = more sensitive (detect weak voice during pauses)
+        threshold_low: 0.15          # Lower = wider hysteresis range
+        frame_window_threshold: 8    # Higher = need more silent frames to confirm end (was 3)
     
     # ASR Provider (Local gRPC)
     asr:
@@ -75,9 +76,10 @@ docker:
       provider: silero-vad-grpc
       config:
         service_url: "silero-vad-service:50051"
-        threshold: 0.5
-        threshold_low: 0.2
-        frame_window_threshold: 3
+        # Optimized for handling sentence pauses (300-800ms):
+        threshold: 0.35              # Lower = more sensitive (detect weak voice during pauses)
+        threshold_low: 0.15          # Lower = wider hysteresis range
+        frame_window_threshold: 8    # Higher = need more silent frames to confirm end (was 3)
     
     # ASR Provider (Local gRPC via Docker DNS)
     asr:
@@ -121,9 +123,10 @@ k8s:
       provider: silero-vad-grpc
       config:
         service_url: "silero-vad-service:50051"
-        threshold: 0.5
-        threshold_low: 0.2
-        frame_window_threshold: 3
+        # Optimized for handling sentence pauses (300-800ms):
+        threshold: 0.35              # Lower = more sensitive (detect weak voice during pauses)
+        threshold_low: 0.15          # Lower = wider hysteresis range
+        frame_window_threshold: 8    # Higher = need more silent frames to confirm end (was 3)
     
     # ASR Provider (Local gRPC via K8s Service)
     asr:

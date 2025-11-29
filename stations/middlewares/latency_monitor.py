@@ -5,14 +5,16 @@ Monitors and records latency metrics (TTFT, etc.).
 """
 
 from typing import AsyncIterator
-from core.middleware import Middleware, NextHandler
+from core.middleware import DataMiddleware, NextHandler
 from core.chunk import Chunk
 from utils import get_latency_monitor
 
 
-class LatencyMonitorMiddleware(Middleware):
+class LatencyMonitorMiddleware(DataMiddleware):
     """
-    Monitors latency metrics during processing.
+    Monitors latency metrics during data processing.
+    
+    Signal chunks are passed through unchanged.
     
     Records:
     - TTFT (Time To First Token): Time until first output chunk
@@ -39,12 +41,12 @@ class LatencyMonitorMiddleware(Middleware):
         self.metric_name = metric_name
         self._latency_monitor = get_latency_monitor()
     
-    async def process(self, chunk: Chunk, next_handler: NextHandler) -> AsyncIterator[Chunk]:
+    async def process_data(self, chunk: Chunk, next_handler: NextHandler) -> AsyncIterator[Chunk]:
         """
-        Process with latency monitoring.
+        Process data chunk with latency monitoring.
         
         Args:
-            chunk: Input chunk
+            chunk: Data chunk (not signal)
             next_handler: Next handler in chain
             
         Yields:

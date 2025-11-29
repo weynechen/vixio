@@ -11,35 +11,34 @@ Refactored with middleware pattern for clean separation of concerns.
 """
 
 from typing import AsyncIterator, List
-from core.station import Station
+from core.station import StreamStation
 from core.chunk import Chunk, ChunkType, TextDeltaChunk, EventChunk, is_audio_chunk
 from core.middleware import with_middlewares
-from stations.middlewares import (
-    SignalHandlerMiddleware,
-    LatencyMonitorMiddleware,
-    ErrorHandlerMiddleware
-)
 from providers.asr import ASRProvider
 
 
 @with_middlewares(
-    # Handle signals (CONTROL_INTERRUPT - clear buffer)
-    SignalHandlerMiddleware(
-        on_interrupt=lambda: None,  # Will be set in __init__
-        cancel_streaming=False
-    ),
-    # Monitor ASR completion latency
-    LatencyMonitorMiddleware(
-        record_first_token=True,
-        metric_name="asr_complete"
-    ),
-    # Handle errors
-    ErrorHandlerMiddleware(
-        emit_error_event=True,
-        suppress_errors=False
-    )
+    # Note: StreamStation base class automatically provides:
+    # - InputValidatorMiddleware (validates ALLOWED_INPUT_TYPES)
+    # - SignalHandlerMiddleware (handles CONTROL_INTERRUPT)
+    # - InterruptDetectorMiddleware (detects turn_id changes)
+    # - LatencyMonitorMiddleware (uses LATENCY_METRIC_NAME)
+    # - ErrorHandlerMiddleware (error handling)
 )
-class ASRStation(Station):
+class ASRStation(StreamStation):
+    """
+    ASR workstation: Transcribes audio to text.
+    
+    Input: AUDIO_RAW (collect), EVENT_TURN_END (trigger)
+    Output: TEXT_DELTA (transcription result, source="asr")
+    
+    Note: Outputs TEXT_DELTA to maintain consistency with streaming ASR.
+    Use TextAggregatorStation to aggregate before Agent.
+    """
+    
+    # StreamStation configuration
+    ALLOWED_INPUT_TYPES = [ChunkType.AUDIO_RAW]
+    LATENCY_METRIC_NAME = "asr_complete"
     """
     ASR workstation: Transcribes audio to text.
     
@@ -58,10 +57,13 @@ class ASRStation(Station):
             asr_provider: ASR provider instance
             name: Station name
         """
-        super().__init__(name=name)
+        super().__init__(
+            name=name,
+            enable_interrupt_detection=False  # ASR doesn't need interrupt detection during processing
+        )
         self.asr = asr_provider
         self._audio_buffer: List[bytes] = []
-    
+        
     def _configure_middlewares_hook(self, middlewares: list) -> None:
         """
         Hook called when middlewares are attached.
@@ -85,7 +87,7 @@ class ASRStation(Station):
             self._audio_buffer.clear()
         
         # Reset ASR provider
-        self.asr.reset()
+        await self.asr.reset()  # ← Fixed: added await
     
     async def cleanup(self) -> None:
         """
@@ -132,11 +134,11 @@ class ASRStation(Station):
                     self.logger.info(f"ASR result: '{text}'")
                     
                     # Output as TEXT_DELTA with source="asr"
-                    # Note: LatencyMonitorMiddleware automatically records this output
+            # Note: LatencyMonitorMiddleware automatically records this output
                     yield TextDeltaChunk(
                         type=ChunkType.TEXT_DELTA,
-                        delta=text,
-                        source="asr",
+                data=text,  # ← Use data instead of delta
+                source="asr",
                         session_id=chunk.session_id,
                         turn_id=chunk.turn_id
                     )
@@ -158,8 +160,8 @@ class ASRStation(Station):
                         source=self.name,
                         session_id=chunk.session_id
                     )
-                
-                # Clear buffer
+            
+        # Clear buffer
                 self._audio_buffer.clear()
             else:
                 self.logger.warning("EVENT_TURN_END received but no audio in buffer")

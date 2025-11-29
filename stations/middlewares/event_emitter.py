@@ -5,13 +5,13 @@ Emits events before/after processing (START, STOP, etc.).
 """
 
 from typing import AsyncIterator, Optional, Dict, Any
-from core.middleware import Middleware, NextHandler
+from core.middleware import UniversalMiddleware, NextHandler
 from core.chunk import Chunk, ChunkType, EventChunk
 
 
-class EventEmitterMiddleware(Middleware):
+class EventEmitterMiddleware(UniversalMiddleware):
     """
-    Emits events before and after processing.
+    Emits events before and after processing both data and signal chunks.
     
     Automatically emits:
     - START event before processing
@@ -46,12 +46,12 @@ class EventEmitterMiddleware(Middleware):
         self.stop_data = stop_data or {}
         self.emit_on_interrupt = emit_on_interrupt
     
-    async def process(self, chunk: Chunk, next_handler: NextHandler) -> AsyncIterator[Chunk]:
+    async def _emit_events(self, chunk: Chunk, next_handler: NextHandler) -> AsyncIterator[Chunk]:
         """
-        Emit events around processing.
+        Common event emission logic for both data and signal chunks.
         
         Args:
-            chunk: Input chunk
+            chunk: Input chunk (data or signal)
             next_handler: Next handler in chain
             
         Yields:
@@ -108,4 +108,32 @@ class EventEmitterMiddleware(Middleware):
                 f"Emitted {self.stop_event.name} event "
                 f"(count={output_count}, interrupted={interrupted})"
             )
+    
+    async def process_data(self, chunk: Chunk, next_handler: NextHandler) -> AsyncIterator[Chunk]:
+        """
+        Process data chunk with event emission.
+        
+        Args:
+            chunk: Data chunk
+            next_handler: Next handler in chain
+            
+        Yields:
+            START event, processed chunks, STOP event
+        """
+        async for result in self._emit_events(chunk, next_handler):
+            yield result
+    
+    async def process_signal(self, chunk: Chunk, next_handler: NextHandler) -> AsyncIterator[Chunk]:
+        """
+        Process signal chunk with event emission.
+        
+        Args:
+            chunk: Signal chunk
+            next_handler: Next handler in chain
+            
+        Yields:
+            START event, processed chunks, STOP event
+        """
+        async for result in self._emit_events(chunk, next_handler):
+            yield result
 

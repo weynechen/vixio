@@ -5,13 +5,15 @@ Validates and filters input chunks before processing.
 """
 
 from typing import AsyncIterator, Callable, Optional
-from core.middleware import Middleware, NextHandler
+from core.middleware import DataMiddleware, NextHandler
 from core.chunk import Chunk, ChunkType, is_text_chunk
 
 
-class InputValidatorMiddleware(Middleware):
+class InputValidatorMiddleware(DataMiddleware):
     """
-    Validates input chunks and filters invalid ones.
+    Validates input data chunks and filters invalid ones.
+    
+    Signal chunks are passed through unchanged.
     
     Can validate:
     - Chunk type (e.g., only TEXT chunks)
@@ -47,17 +49,35 @@ class InputValidatorMiddleware(Middleware):
         self.custom_validator = custom_validator
         self.passthrough_on_invalid = passthrough_on_invalid
     
-    async def process(self, chunk: Chunk, next_handler: NextHandler) -> AsyncIterator[Chunk]:
+    async def process_data(self, chunk: Chunk, next_handler: NextHandler) -> AsyncIterator[Chunk]:
         """
-        Validate input and forward to next handler if valid.
+        Validate data chunk and forward to next handler if valid.
         
         Args:
-            chunk: Input chunk
+            chunk: Data chunk (not signal)
             next_handler: Next handler in chain
             
         Yields:
             Validated chunks or passthrough on invalid
         """
+        
+        # ⚠️ IMPORTANT: Check empty content FIRST, before type checking!
+        # Empty content should ALWAYS be dropped, regardless of type matching.
+        # This prevents empty text from bypassing validation via passthrough_on_invalid.
+        if self.check_empty and is_text_chunk(chunk):
+            # Extract text from unified data attribute
+            text = chunk.data if isinstance(chunk.data, str) else (str(chunk.data) if chunk.data else "")
+            
+            self.logger.debug(f"[InputValidator] Text chunk detected, extracted text: {repr(text)[:100]}")
+            
+            if not text or not text.strip():
+                self.logger.warning(f"[InputValidator] ❌ DROPPING empty text chunk: {chunk}")
+                # ⚠️ Do NOT passthrough - discard completely
+                # Empty content is invalid data, not just "wrong type for this station"
+                return
+            else:
+                self.logger.debug(f"[InputValidator] ✅ Text chunk has content, continuing validation")
+        
         # Check chunk type
         if self.allowed_types and chunk.type not in self.allowed_types:
             self.logger.debug(f"Chunk type {chunk.type} not in allowed types, skipping")
@@ -71,20 +91,6 @@ class InputValidatorMiddleware(Middleware):
                 self.logger.debug(
                     f"Chunk source '{chunk.source}' != required '{self.required_source}', skipping"
                 )
-                if self.passthrough_on_invalid:
-                    yield chunk
-                return
-        
-        # Check empty content for text chunks
-        if self.check_empty and is_text_chunk(chunk):
-            # Extract text content
-            if hasattr(chunk, 'content'):
-                text = chunk.content
-            else:
-                text = str(chunk.data) if chunk.data else ""
-            
-            if not text or not text.strip():
-                self.logger.debug("Empty text content, skipping")
                 if self.passthrough_on_invalid:
                     yield chunk
                 return

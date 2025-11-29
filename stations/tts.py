@@ -11,15 +11,12 @@ Refactored with middleware pattern for clean separation of concerns.
 """
 
 from typing import AsyncIterator
-from core.station import Station
+from core.station import StreamStation
 from core.chunk import Chunk, ChunkType, AudioChunk, EventChunk
 from core.middleware import with_middlewares
 from stations.middlewares import (
     MultiSignalHandlerMiddleware,
-    InputValidatorMiddleware,
-    InterruptDetectorMiddleware,
-    LatencyMonitorMiddleware,
-    ErrorHandlerMiddleware
+    InputValidatorMiddleware
 )
 from providers.tts import TTSProvider
 
@@ -27,30 +24,24 @@ from providers.tts import TTSProvider
 @with_middlewares(
     # Handle multiple signals (CONTROL_INTERRUPT, EVENT_AGENT_STOP)
     MultiSignalHandlerMiddleware(
-        signal_handlers={},  # Will be configured in __init__
+        signal_handlers={},  # Will be configured in _configure_middlewares_hook
         passthrough_signals=True
     ),
     # Validate input (only TEXT from agent, non-empty)
+    # Note: Overrides default InputValidator to add required_source="agent"
     InputValidatorMiddleware(
         allowed_types=[ChunkType.TEXT],
         check_empty=True,
         required_source="agent",
         passthrough_on_invalid=True
-    ),
-    # Detect interrupts during synthesis (turn ID changes)
-    InterruptDetectorMiddleware(check_interval=5),
-    # Monitor first audio latency
-    LatencyMonitorMiddleware(
-        record_first_token=True,
-        metric_name="tts_first_audio_ready"
-    ),
-    # Handle errors
-    ErrorHandlerMiddleware(
-        emit_error_event=True,
-        suppress_errors=False
     )
+    # Note: StreamStation base class automatically provides:
+    # - SignalHandlerMiddleware (handles CONTROL_INTERRUPT)
+    # - InterruptDetectorMiddleware (detects turn_id changes)
+    # - LatencyMonitorMiddleware (uses LATENCY_METRIC_NAME)
+    # - ErrorHandlerMiddleware (error handling)
 )
-class TTSStation(Station):
+class TTSStation(StreamStation):
     """
     TTS workstation: Synthesizes text to audio.
     
@@ -61,6 +52,10 @@ class TTSStation(Station):
     Use SentenceSplitterStation to convert TEXT_DELTA to TEXT.
     """
     
+    # StreamStation configuration
+    ALLOWED_INPUT_TYPES = [ChunkType.TEXT]
+    LATENCY_METRIC_NAME = "tts_first_audio_ready"
+    
     def __init__(self, tts_provider: TTSProvider, name: str = "TTS"):
         """
         Initialize TTS station.
@@ -69,7 +64,10 @@ class TTSStation(Station):
             tts_provider: TTS provider instance
             name: Station name
         """
-        super().__init__(name=name)
+        super().__init__(
+            name=name,
+            enable_interrupt_detection=True  # TTS needs interrupt detection during synthesis
+        )
         self.tts = tts_provider
         self._is_speaking = False
     
@@ -106,7 +104,7 @@ class TTSStation(Station):
             
             self._is_speaking = False
             self.logger.info("TTS cancelled by interrupt")
-    
+            
     async def _handle_agent_stop(self, chunk: Chunk) -> AsyncIterator[Chunk]:
         """
         Handle EVENT_AGENT_STOP signal.
@@ -124,7 +122,7 @@ class TTSStation(Station):
             
             self._is_speaking = False
             self.logger.info("TTS session complete (agent stopped)")
-    
+            
     async def process_chunk(self, chunk: Chunk) -> AsyncIterator[Chunk]:
         """
         Process chunk through TTS - CORE LOGIC ONLY.
@@ -149,7 +147,8 @@ class TTSStation(Station):
             return
         
         # Data processing - CORE BUSINESS LOGIC
-        text = chunk.content if hasattr(chunk, 'content') else str(chunk.data)
+        # Extract text from data attribute (unified API)
+        text = chunk.data if isinstance(chunk.data, str) else (str(chunk.data) if chunk.data else "")
         
         self.logger.info(f"TTS synthesizing: '{text[:50]}...'")
         

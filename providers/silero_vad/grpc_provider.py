@@ -39,9 +39,9 @@ class LocalSileroVADProvider(VADProvider):
     def __init__(
         self,
         service_url: str,
-        threshold: float = 0.5,
-        threshold_low: float = 0.2,
-        frame_window_threshold: int = 3
+        threshold: float = 0.35,        # Optimized: more sensitive to detect weak voice
+        threshold_low: float = 0.15,    # Optimized: wider hysteresis range
+        frame_window_threshold: int = 8  # Optimized: need more frames to confirm silence
     ):
         """
         Initialize Local Silero VAD provider.
@@ -89,18 +89,18 @@ class LocalSileroVADProvider(VADProvider):
             },
             "threshold": {
                 "type": "float",
-                "default": 0.5,
-                "description": "Voice detection threshold (0.0-1.0)"
+                "default": 0.35,
+                "description": "Voice detection threshold (0.0-1.0). Lower = more sensitive. Optimized for sentence pauses."
             },
             "threshold_low": {
                 "type": "float",
-                "default": 0.2,
-                "description": "Lower threshold for hysteresis"
+                "default": 0.15,
+                "description": "Lower threshold for hysteresis. Wider range prevents flickering during pauses."
             },
             "frame_window_threshold": {
                 "type": "int",
-                "default": 3,
-                "description": "Minimum frames to confirm voice"
+                "default": 8,
+                "description": "Minimum frames to confirm voice/silence. Higher = more tolerant of pauses (was 3)."
             }
         }
     

@@ -12,59 +12,37 @@ Refactored with middleware pattern for clean separation of concerns.
 
 import asyncio
 from typing import AsyncIterator, Optional
-from core.station import Station
+from core.station import StreamStation
 from core.chunk import Chunk, ChunkType, TextDeltaChunk, is_text_chunk
 from core.middleware import with_middlewares
 from stations.middlewares import (
-    SignalHandlerMiddleware,
-    InputValidatorMiddleware,
     EventEmitterMiddleware,
-    TimeoutHandlerMiddleware,
-    InterruptDetectorMiddleware,
-    LatencyMonitorMiddleware,
-    ErrorHandlerMiddleware
+    TimeoutHandlerMiddleware
 )
 from providers.agent import AgentProvider
 
 
 @with_middlewares(
-    # Handle signals (CONTROL_INTERRUPT, etc.)
-    SignalHandlerMiddleware(
-        on_interrupt=lambda: None,  # Will be set in __init__
-        cancel_streaming=False  # Handled by agent stream closure
-    ),
-    # Validate input (only non-empty TEXT chunks)
-    InputValidatorMiddleware(
-        allowed_types=[ChunkType.TEXT],
-        check_empty=True,
-        passthrough_on_invalid=True
-    ),
     # Emit AGENT_START/STOP events
     EventEmitterMiddleware(
         start_event=ChunkType.EVENT_AGENT_START,
         stop_event=ChunkType.EVENT_AGENT_STOP,
         emit_on_interrupt=True
     ),
-    # Monitor timeout
+    # Monitor timeout (custom configuration for Agent)
     TimeoutHandlerMiddleware(
         timeout_seconds=30.0,  # Will be overridden in __init__
         emit_timeout_event=True,
         send_interrupt_signal=True
-    ),
-    # Detect interrupts (turn ID changes)
-    InterruptDetectorMiddleware(check_interval=5),
-    # Monitor TTFT (Time To First Token)
-    LatencyMonitorMiddleware(
-        record_first_token=True,
-        metric_name="agent_first_token"
-    ),
-    # Handle errors
-    ErrorHandlerMiddleware(
-        emit_error_event=True,
-        suppress_errors=False
     )
+    # Note: StreamStation base class automatically provides:
+    # - InputValidatorMiddleware (validates ALLOWED_INPUT_TYPES)
+    # - SignalHandlerMiddleware (handles CONTROL_INTERRUPT)
+    # - InterruptDetectorMiddleware (detects turn_id changes)
+    # - LatencyMonitorMiddleware (uses LATENCY_METRIC_NAME)
+    # - ErrorHandlerMiddleware (error handling)
 )
-class AgentStation(Station):
+class AgentStation(StreamStation):
     """
     Agent workstation: Processes text through LLM agent.
     
@@ -73,6 +51,10 @@ class AgentStation(Station):
     
     Note: All TEXT_DELTA output has source="agent" to distinguish from ASR output.
     """
+    
+    # StreamStation configuration
+    ALLOWED_INPUT_TYPES = [ChunkType.TEXT]
+    LATENCY_METRIC_NAME = "agent_first_token"
     
     def __init__(
         self,
@@ -88,10 +70,13 @@ class AgentStation(Station):
             timeout_seconds: Timeout for agent processing (default: 30s, None = no timeout)
             name: Station name
         """
-        super().__init__(name=name)
+        super().__init__(
+            name=name,
+            timeout_seconds=timeout_seconds,
+            enable_interrupt_detection=True
+        )
         self.agent = agent_provider
         self._streaming_generator: Optional[AsyncIterator] = None
-        self.timeout_seconds = timeout_seconds
     
     def _configure_middlewares_hook(self, middlewares: list) -> None:
         """
@@ -156,11 +141,17 @@ class AgentStation(Station):
         
         Note: Middlewares handle the rest automatically in the correct order.
         """
-        # Extract text content
-        if hasattr(chunk, 'content'):
-            text = chunk.content
-        else:
-            text = str(chunk.data) if chunk.data else ""
+        
+        if chunk.is_signal():
+            # Passthrough signal without processing
+            yield chunk
+            return
+        
+        # Extract text content (unified using chunk.data)
+        text = chunk.data if isinstance(chunk.data, str) else (str(chunk.data) if chunk.data else "")
+        
+        # 🔍 DEBUG: Log extracted text
+        self.logger.info(f"[Agent] Extracted text: {repr(text)[:100]}")
         
         # Check if agent is initialized
         if not self.agent.is_initialized():
@@ -188,7 +179,7 @@ class AgentStation(Station):
                     # Note: LatencyMonitorMiddleware automatically records first token
                     yield TextDeltaChunk(
                         type=ChunkType.TEXT_DELTA,
-                        delta=delta,
+                        data=delta,  # ← Use data instead of delta
                         source="agent",  # Mark as agent output
                         session_id=chunk.session_id,
                         turn_id=chunk.turn_id

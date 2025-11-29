@@ -36,6 +36,7 @@ class Station(ABC):
             name: Station name for logging (defaults to class name)
         """
         self.name = name or self.__class__.__name__
+        self._session_id: Optional[str] = None
         self.logger = logger.bind(station=self.name)
         
         # Turn tracking
@@ -106,6 +107,22 @@ class Station(ABC):
         """
         return chunk.turn_id >= self.current_turn_id
     
+    def set_session_id(self, session_id: str) -> None:
+        """
+        Set session ID for this station and rebind logger.
+        
+        This method is called by Pipeline when session_id is set,
+        automatically updating the logger to include session_id.
+        
+        Args:
+            session_id: Session identifier (will be truncated to 8 chars for display)
+        """
+        self._session_id = session_id
+        # Truncate to 8 chars for readability
+        session_id_short = session_id[:8] if session_id and len(session_id) > 8 else (session_id or "--------")
+        # Rebind logger with session_id
+        self.logger = logger.bind(station=self.name, session_id=session_id_short)
+    
     @abstractmethod
     async def process_chunk(self, chunk: Chunk) -> AsyncIterator[Chunk]:
         """
@@ -148,3 +165,123 @@ class PassthroughStation(Station):
     async def process_chunk(self, chunk: Chunk) -> AsyncIterator[Chunk]:
         """Simply passthrough all chunks"""
         yield chunk
+
+
+class StreamStation(Station):
+    """
+    Stream processing station base class.
+    
+    Characteristics:
+    - One-to-one or one-to-many transformations
+    - May process for extended time (requires timeout, interrupt handling)
+    - Async streaming output
+    
+    Use cases: Agent, ASR, TTS
+    
+    Default middlewares (auto-applied via decorator):
+    - InputValidatorMiddleware: Validate input types (subclass specifies allowed_types)
+    - SignalHandlerMiddleware: Handle CONTROL_INTERRUPT
+    - InterruptDetectorMiddleware: Detect turn_id changes
+    - LatencyMonitorMiddleware: Monitor first output latency
+    - ErrorHandlerMiddleware: Error handling
+    
+    Subclasses should define:
+    - ALLOWED_INPUT_TYPES: List[ChunkType] - Allowed input chunk types
+    - LATENCY_METRIC_NAME: str - Latency metric name (default: station name)
+    """
+    
+    # Subclasses should override these
+    ALLOWED_INPUT_TYPES: list = []  # e.g., [ChunkType.TEXT]
+    LATENCY_METRIC_NAME: str = ""  # e.g., "agent_first_token"
+    
+    def __init__(
+        self,
+        timeout_seconds: Optional[float] = None,
+        enable_interrupt_detection: bool = True,
+        name: Optional[str] = None,
+        **kwargs
+    ):
+        """
+        Initialize stream station.
+        
+        Args:
+            timeout_seconds: Processing timeout in seconds (None = no timeout)
+            enable_interrupt_detection: Enable interrupt detection during streaming
+            name: Station name (defaults to class name)
+            **kwargs: Additional arguments for base Station
+        """
+        super().__init__(name=name, **kwargs)
+        self.timeout_seconds = timeout_seconds
+        self.enable_interrupt_detection = enable_interrupt_detection
+        
+        # Set latency metric name from class attribute if not overridden
+        if not self.LATENCY_METRIC_NAME:
+            self.LATENCY_METRIC_NAME = f"{self.name.lower()}_first_output"
+
+
+class BufferStation(Station):
+    """
+    Buffer/aggregation station base class.
+    
+    Characteristics:
+    - Collects data, outputs on specific signal trigger
+    - Has internal buffer
+    - Processing usually instantaneous
+    
+    Use cases: TextAggregator, SentenceSplitter
+    
+    Default middlewares (auto-applied via decorator):
+    - InputValidatorMiddleware: Validate input types (subclass specifies allowed_types)
+    - SignalHandlerMiddleware: Handle CONTROL_INTERRUPT (clear buffer)
+    - ErrorHandlerMiddleware: Error handling
+    
+    Subclasses should define:
+    - ALLOWED_INPUT_TYPES: List[ChunkType] - Allowed input chunk types
+    """
+    
+    # Subclasses should override these
+    ALLOWED_INPUT_TYPES: list = []  # e.g., [ChunkType.TEXT_DELTA]
+    
+    def __init__(self, name: Optional[str] = None, **kwargs):
+        """
+        Initialize buffer station.
+        
+        Args:
+            name: Station name (defaults to class name)
+            **kwargs: Additional arguments for base Station
+        """
+        super().__init__(name=name, **kwargs)
+
+
+class DetectorStation(Station):
+    """
+    Detector/event emitter station base class.
+    
+    Characteristics:
+    - State machine logic
+    - Detects pattern changes, emits events
+    - Passthrough data + emit events
+    
+    Use cases: VAD, TurnDetector
+    
+    Default middlewares (auto-applied via decorator):
+    - InputValidatorMiddleware: Validate input types (subclass specifies allowed_types)
+    - SignalHandlerMiddleware: Handle CONTROL_INTERRUPT
+    - ErrorHandlerMiddleware: Error handling
+    
+    Subclasses should define:
+    - ALLOWED_INPUT_TYPES: List[ChunkType] - Allowed input chunk types
+    """
+    
+    # Subclasses should override these
+    ALLOWED_INPUT_TYPES: list = []  # e.g., [ChunkType.AUDIO_RAW]
+    
+    def __init__(self, name: Optional[str] = None, **kwargs):
+        """
+        Initialize detector station.
+        
+        Args:
+            name: Station name (defaults to class name)
+            **kwargs: Additional arguments for base Station
+        """
+        super().__init__(name=name, **kwargs)

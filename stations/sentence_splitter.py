@@ -9,10 +9,10 @@ Refactored with middleware pattern for clean separation of concerns.
 
 import re
 from typing import AsyncIterator, List
-from core.station import Station
+from core.station import BufferStation
 from core.chunk import Chunk, ChunkType, TextChunk
 from core.middleware import with_middlewares
-from stations.middlewares import SignalHandlerMiddleware, LatencyMonitorMiddleware, ErrorHandlerMiddleware
+from stations.middlewares import LatencyMonitorMiddleware
 
 
 class SentenceSplitter:
@@ -99,23 +99,29 @@ class SentenceSplitter:
 
 
 @with_middlewares(
-    # Handle signals (CONTROL_INTERRUPT - reset buffer)
-    SignalHandlerMiddleware(
-        on_interrupt=lambda: None,  # Will be set in __init__
-        cancel_streaming=False
-    ),
-    # Monitor first sentence latency
+    # Monitor first sentence latency (custom for SentenceSplitter)
     LatencyMonitorMiddleware(
         record_first_token=True,
         metric_name="first_sentence_complete"
-    ),
-    # Handle errors
-    ErrorHandlerMiddleware(
-        emit_error_event=True,
-        suppress_errors=False
     )
+    # Note: BufferStation base class automatically provides:
+    # - InputValidatorMiddleware (validates ALLOWED_INPUT_TYPES)
+    # - SignalHandlerMiddleware (handles CONTROL_INTERRUPT)
+    # - ErrorHandlerMiddleware (error handling)
 )
-class SentenceSplitterStation(Station):
+class SentenceSplitterStation(BufferStation):
+    """
+    Sentence splitter: Splits streaming text into complete sentences.
+    
+    Input: TEXT_DELTA (streaming)
+    Output: TEXT (complete sentences)
+    
+    This station is useful for feeding complete sentences to TTS
+    instead of waiting for the entire response.
+    """
+    
+    # BufferStation configuration
+    ALLOWED_INPUT_TYPES = [ChunkType.TEXT_DELTA]
     """
     Sentence splitter: Splits streaming text into complete sentences.
     
@@ -141,7 +147,7 @@ class SentenceSplitterStation(Station):
         super().__init__(name=name)
         self.min_sentence_length = min_sentence_length
         self._splitter = SentenceSplitter(min_sentence_length)
-    
+        
     def _configure_middlewares_hook(self, middlewares: list) -> None:
         """Hook to configure middlewares."""
         for middleware in middlewares:
@@ -174,12 +180,12 @@ class SentenceSplitterStation(Station):
                 self.logger.info(f"Flushing final sentence: '{remaining[:50]}...'")
                 yield TextChunk(
                     type=ChunkType.TEXT,
-                    content=remaining,
-                    source="agent",
+                data=remaining,  # ← Use data instead of content
+                source="agent",
                     session_id=chunk.session_id,
-                    turn_id=chunk.turn_id
-                )
-            
+                turn_id=chunk.turn_id
+            )
+        
             # Passthrough signal
             yield chunk
             return
@@ -191,7 +197,8 @@ class SentenceSplitterStation(Station):
         
         # Process TEXT_DELTA chunks from agent
         if chunk.type == ChunkType.TEXT_DELTA:
-            delta = chunk.delta if hasattr(chunk, 'delta') else str(chunk.data)
+            # Extract text from data attribute (unified API)
+            delta = chunk.data if isinstance(chunk.data, str) else (str(chunk.data) if chunk.data else "")
             
             if delta and chunk.source == "agent":
                 # Add delta to splitter and get complete sentences
@@ -204,7 +211,7 @@ class SentenceSplitterStation(Station):
                     
                     yield TextChunk(
                         type=ChunkType.TEXT,
-                        content=sentence,
+                        data=sentence,  # ← Use data instead of content
                         source=chunk.source,
                         session_id=chunk.session_id,
                         turn_id=chunk.turn_id
