@@ -142,6 +142,45 @@ class Station(ABC):
             
         Yields:
             Output chunks (for signals, at minimum yield the signal itself to pass it through)
+        
+        Note for future refactoring:
+            If process_chunk becomes too complex with many if/elif branches for different chunk types,
+            consider introducing Strategy Pattern for chunk type dispatching:
+            
+            Example architecture:
+            - Middleware (current): Handles cross-cutting concerns (validation, monitoring, signals)
+            - Strategy Pattern (future): Handles business logic per chunk type
+            
+            Implementation approach:
+            ```
+            class Station:
+                def __init__(self):
+                    self._chunk_handlers = {}  # ChunkType -> handler mapping
+                
+                def register_handler(self, chunk_type, handler):
+                    self._chunk_handlers[chunk_type] = handler
+                
+                async def dispatch_to_handler(self, chunk):
+                    handler = self._chunk_handlers.get(chunk.type, self._default_handler)
+                    async for result in handler(chunk):
+                        yield result
+            
+            class ASRStation(StreamStation):
+                def _setup_handlers(self):
+                    self.register_handler(ChunkType.AUDIO_RAW, self._handle_audio)
+                    self.register_handler(ChunkType.EVENT_TURN_END, self._handle_turn_end)
+                
+                async def process_chunk(self, chunk):
+                    # Clean: delegate to registered handlers
+                    async for result in self.dispatch_to_handler(chunk):
+                        yield result
+            ```
+            
+            Benefits:
+            - Cleaner code: Each chunk type has its own handler method
+            - Better testability: Test handlers independently
+            - Easier maintenance: Add/modify handlers without touching main logic
+            - Clear structure: Handler registry shows all supported chunk types at a glance
         """
         pass
     

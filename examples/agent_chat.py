@@ -18,8 +18,20 @@ Logger Configuration:
     Logger is auto-configured on import with INFO level, logging to logs/ directory.
     To customize, call configure_logger() before other imports:
     
-    from utils import configure_logger
+    from utils.logger_config import configure_logger, reset_logger
+    
+    # Reset auto-configured logger first
+    reset_logger()
+    
+    # Option 1: Set DEBUG level for all components
     configure_logger(level="DEBUG", log_dir="my_logs")
+    
+    # Option 2: Enable DEBUG only for specific components
+    configure_logger(
+        level="INFO",  # Global level
+        debug_components=["LatencyMonitor"],  # Only this component outputs DEBUG
+        log_dir="logs"
+    )
 """
 
 import asyncio
@@ -112,7 +124,24 @@ async def main():
         default=None,
         help="Path to provider config file (default: config/providers.yaml)"
     )
+    parser.add_argument(
+        "--debug-components",
+        type=str,
+        nargs="*",
+        default=None,
+        help="Enable DEBUG logging for specific components (e.g., LatencyMonitor InputValidator)"
+    )
     args = parser.parse_args()
+    
+    # Configure logger with debug components if specified
+    if args.debug_components:
+        from utils.logger_config import reset_logger, configure_logger
+        reset_logger()
+        configure_logger(
+            level="INFO",
+            debug_components=args.debug_components
+        )
+        logger.info(f"Enabled DEBUG logging for: {', '.join(args.debug_components)}")
     
     logger.info("=== Voice Chat with AI Agent ===")
     logger.info(f"Environment: {args.env}")
