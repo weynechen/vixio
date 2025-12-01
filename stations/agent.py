@@ -60,7 +60,7 @@ class AgentStation(StreamStation):
         self,
         agent_provider: AgentProvider,
         timeout_seconds: Optional[float] = 30.0,
-        name: str = "Agent"
+        name: str = "agent"  # Lowercase for consistent source tracking
     ):
         """
         Initialize Agent station.
@@ -179,8 +179,8 @@ class AgentStation(StreamStation):
                     # Note: LatencyMonitorMiddleware automatically records first token
                     yield TextDeltaChunk(
                         type=ChunkType.TEXT_DELTA,
-                        data=delta,  # ← Use data instead of delta
-                        source="agent",  # Mark as agent output
+                        data=delta,
+                        source=self.name,  # Use station name for consistent source tracking
                         session_id=chunk.session_id,
                         turn_id=chunk.turn_id
                     )

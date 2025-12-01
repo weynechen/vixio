@@ -180,11 +180,11 @@ class SentenceAggregatorStation(BufferStation):
                 self.logger.info(f"Flushing final sentence: '{remaining[:50]}...'")
                 yield TextChunk(
                     type=ChunkType.TEXT,
-                data=remaining,  # ← Use data instead of content
-                source="agent",
+                    data=remaining,
+                    source=self.name,  # Use station name for source tracking
                     session_id=chunk.session_id,
-                turn_id=chunk.turn_id
-            )
+                    turn_id=chunk.turn_id
+                )
         
             # Passthrough signal
             yield chunk
@@ -195,7 +195,7 @@ class SentenceAggregatorStation(BufferStation):
             yield chunk
             return
         
-        # Process TEXT_DELTA chunks from agent
+        # Process TEXT_DELTA chunks (typically from agent)
         if chunk.type == ChunkType.TEXT_DELTA:
             # Extract text from data attribute (unified API)
             delta = chunk.data if isinstance(chunk.data, str) else (str(chunk.data) if chunk.data else "")
@@ -211,8 +211,8 @@ class SentenceAggregatorStation(BufferStation):
                     
                     yield TextChunk(
                         type=ChunkType.TEXT,
-                        data=sentence,  # ← Use data instead of content
-                        source=chunk.source,
+                        data=sentence,
+                        source=self.name,  # Use station name for source tracking
                         session_id=chunk.session_id,
                         turn_id=chunk.turn_id
                     )

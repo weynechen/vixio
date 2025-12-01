@@ -49,7 +49,7 @@ class ASRStation(StreamStation):
     Use TextAggregatorStation to aggregate before Agent.
     """
     
-    def __init__(self, asr_provider: ASRProvider, name: str = "ASR"):
+    def __init__(self, asr_provider: ASRProvider, name: str = "asr"):  # Lowercase for consistent source tracking
         """
         Initialize ASR station.
         
@@ -133,12 +133,12 @@ class ASRStation(StreamStation):
                 if text:
                     self.logger.info(f"ASR result: '{text}'")
                     
-                    # Output as TEXT_DELTA with source="asr"
+                    # Output as TEXT_DELTA with source=self.name for latency monitoring
             # Note: LatencyMonitorMiddleware automatically records this output
                     yield TextDeltaChunk(
                         type=ChunkType.TEXT_DELTA,
-                data=text,  # ← Use data instead of delta
-                source="asr",
+                        data=text,
+                        source=self.name,  # Use station name for consistent source tracking
                         session_id=chunk.session_id,
                         turn_id=chunk.turn_id
                     )
@@ -146,7 +146,7 @@ class ASRStation(StreamStation):
                     # Emit TEXT_COMPLETE event to signal aggregator
                     yield EventChunk(
                         type=ChunkType.EVENT_TEXT_COMPLETE,
-                        event_data={"source": "asr", "text_length": len(text)},
+                        event_data={"source": self.name, "text_length": len(text)},
                         source=self.name,
                         session_id=chunk.session_id,
                         turn_id=chunk.turn_id

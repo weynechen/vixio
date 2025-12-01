@@ -227,11 +227,13 @@ class StreamStation(Station):
     Subclasses should define:
     - ALLOWED_INPUT_TYPES: List[ChunkType] - Allowed input chunk types
     - LATENCY_METRIC_NAME: str - Latency metric name (default: station name)
+    - LATENCY_OUTPUT_TYPES: List[ChunkType] (optional) - Output types to monitor (default: all)
     """
     
     # Subclasses should override these
     ALLOWED_INPUT_TYPES: list = []  # e.g., [ChunkType.TEXT]
     LATENCY_METRIC_NAME: str = ""  # e.g., "agent_first_token"
+    LATENCY_OUTPUT_TYPES: list = None  # e.g., [ChunkType.AUDIO_RAW] (None = all types)
     
     def __init__(
         self,

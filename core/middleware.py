@@ -393,8 +393,14 @@ def _create_default_middlewares(station_instance):
         
         # LatencyMonitor - monitor first output latency
         if hasattr(station_instance, 'LATENCY_METRIC_NAME') and station_instance.LATENCY_METRIC_NAME:
+            # Check if station specifies which output types to monitor
+            output_types = None
+            if hasattr(station_instance, 'LATENCY_OUTPUT_TYPES'):
+                output_types = station_instance.LATENCY_OUTPUT_TYPES
+            
             default_middlewares.insert(-1, LatencyMonitorMiddleware(
-                metric_name=station_instance.LATENCY_METRIC_NAME
+                metric_name=station_instance.LATENCY_METRIC_NAME,
+                output_types=output_types
             ))
     
     return default_middlewares

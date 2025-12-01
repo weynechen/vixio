@@ -1,10 +1,10 @@
 """
 TTSStation - Text to Speech
 
-Input: TEXT (complete sentences, source="agent")
+Input: TEXT (complete sentences, source="SentenceAggregator")
 Output: AUDIO_RAW (streaming) + EVENT_TTS_START/STOP
 
-Note: This station only processes TEXT chunks with source="agent".
+Note: This station only processes TEXT chunks from SentenceAggregator.
 Use SentenceAggregatorStation before this to convert TEXT_DELTA to TEXT.
 
 Refactored with middleware pattern for clean separation of concerns.
@@ -27,12 +27,12 @@ from providers.tts import TTSProvider
         signal_handlers={},  # Will be configured in _configure_middlewares_hook
         passthrough_signals=True
     ),
-    # Validate input (only TEXT from agent, non-empty)
-    # Note: Overrides default InputValidator to add required_source="agent"
+    # Validate input (only TEXT from SentenceAggregator, non-empty)
+    # Note: Overrides default InputValidator to add required_source="SentenceAggregator"
     InputValidatorMiddleware(
         allowed_types=[ChunkType.TEXT],
         check_empty=True,
-        required_source="agent",
+        required_source="SentenceAggregator",
         passthrough_on_invalid=True
     )
     # Note: StreamStation base class automatically provides:
@@ -45,18 +45,19 @@ class TTSStation(StreamStation):
     """
     TTS workstation: Synthesizes text to audio.
     
-    Input: TEXT (complete sentences, source="agent")
+    Input: TEXT (complete sentences, source="SentenceAggregator")
     Output: AUDIO_RAW (streaming) + EVENT_TTS_START/STOP
     
-    Note: Only processes TEXT chunks with source="agent".
+    Note: Only processes TEXT chunks from SentenceAggregator.
     Use SentenceAggregatorStation to convert TEXT_DELTA to TEXT.
     """
     
     # StreamStation configuration
     ALLOWED_INPUT_TYPES = [ChunkType.TEXT]
     LATENCY_METRIC_NAME = "tts_first_audio_ready"
+    LATENCY_OUTPUT_TYPES = [ChunkType.AUDIO_RAW]  # Only monitor audio output, not events
     
-    def __init__(self, tts_provider: TTSProvider, name: str = "TTS"):
+    def __init__(self, tts_provider: TTSProvider, name: str = "tts"):  # Lowercase for consistent source tracking
         """
         Initialize TTS station.
         
@@ -191,7 +192,7 @@ class TTSStation(StreamStation):
                     turn_id=chunk.turn_id
                 )
         
-        self.logger.debug(f"TTS generated {audio_count} audio chunks")
+        self.logger.info(f"TTS generated {audio_count} audio chunks")
         
         # Passthrough original text chunk
         yield chunk

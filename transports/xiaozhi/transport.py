@@ -561,7 +561,7 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
         # Only apply to TTS audio output (source contains "TTS")
         if chunk.type == ChunkType.AUDIO_RAW:
             # Only send TTS audio to client, discard user input audio (prevent echo)
-            if chunk.data and "TTS" in chunk.source:
+            if chunk.data and "tts" in chunk.source.lower():
                 # Ensure sender task is running
                 await self._ensure_sender_task(session_id)
                 # Put chunk in queue (non-blocking, allows TTS to continue)
@@ -926,12 +926,12 @@ class XiaozhiTransport(TransportBase, TransportBufferMixin):
                     text=text_content,
                     session_id=chunk.session_id
                 )
-            # If source is "agent", it will be sent via TTS sentence_start event
+            # If source is "agent" or "SentenceAggregator", it will be sent via TTS sentence_start event
             # So we don't send it here separately
             # (TTS station will emit EVENT_TTS_SENTENCE_START with the text)
-            elif "agent" in chunk.source.lower():
+            elif "agent" in chunk.source.lower() or "sentenceaggregator" in chunk.source.lower():
                 # Skip sending - will be sent as TTS sentence_start
-                # self.logger.debug(f"Skipping TEXT from agent (will be sent via TTS event): {text_content[:50]}...")
+                # self.logger.debug(f"Skipping TEXT from {chunk.source} (will be sent via TTS event): {text_content[:50]}...")
                 return None
             
             # For other sources, log warning and skip
