@@ -82,11 +82,16 @@ def cleanup_microservices():
         _global_service_manager = None
 
 
+# Event to signal shutdown
+_shutdown_event = None
+
+
 def signal_handler(signum, frame):
     """Handle termination signals"""
-    logger.info(f"\n⚠️  Received signal {signum}, cleaning up...")
+    logger.info(f"\n⚠️  Received signal {signum}, shutting down gracefully...")
     cleanup_microservices()
-    sys.exit(0)
+    if _shutdown_event:
+        _shutdown_event.set()
 
 
 # Register cleanup handlers
@@ -363,9 +368,16 @@ async def main():
     await manager.start()
     
     # Step 6: Run until interrupted
+    global _shutdown_event
+    _shutdown_event = asyncio.Event()
+    
     try:
-        await asyncio.Event().wait()  # Wait forever
+        logger.info("Server running. Press Ctrl+C to stop.")
+        await _shutdown_event.wait()  # Wait for shutdown signal
+        logger.info("\nShutting down...")
     except KeyboardInterrupt:
+        logger.info("\nShutting down...")
+    except asyncio.CancelledError:
         logger.info("\nShutting down...")
     finally:
         # Stop main server
@@ -383,5 +395,7 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        logger.info("\nExiting...")
+        pass  # Silently handle Ctrl+C
+    except SystemExit:
+        pass  # Silently handle sys.exit()
 
