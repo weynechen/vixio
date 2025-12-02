@@ -82,7 +82,8 @@ class Station(ABC):
                     yield output_chunk
             except Exception as e:
                 chunk_type = "signal" if chunk.is_signal() else "data"
-                self.logger.error(f"[{self.name}] Error processing {chunk_type} {chunk}: {e}", exc_info=True)
+                chunk_str = str(chunk).replace('{', '{{').replace('}', '}}')  # Escape braces for loguru
+                self.logger.error(f"[{self.name}] Error processing {chunk_type} {chunk_str}: {e}", exc_info=True)
     
     async def reset_state(self) -> None:
         """

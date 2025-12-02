@@ -257,7 +257,9 @@ class Pipeline:
             self.logger.info(f"[{self.name}] Station {station.name} cancelled")
             raise
         except Exception as e:
-            self.logger.error(f"[{self.name}] Error in station {station.name}: {e}", exc_info=True)
+            import traceback
+            self.logger.error(f"[{self.name}] Error in station {station.name}: {e}")
+            self.logger.error(f"[{self.name}] Full traceback:\n{traceback.format_exc()}")
             # Still signal downstream
             await output_queue.put(None)
         finally:

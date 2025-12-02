@@ -19,8 +19,9 @@ from core.chunk import (
 )
 from core.station import Station, PassthroughStation
 from core.pipeline import Pipeline
-from core.transport import TransportBase, TransportBufferMixin
+from core.transport import TransportBase
 from core.session import SessionManager
+from core.protocol import ProtocolBase
 
 __all__ = [
     # Chunk types
@@ -43,7 +44,7 @@ __all__ = [
     "PassthroughStation",
     "Pipeline",
     "TransportBase",
-    "TransportBufferMixin",
+    "ProtocolBase",
     "SessionManager",
 ]
 

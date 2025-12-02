@@ -10,12 +10,15 @@ Responsibilities:
 """
 
 import asyncio
-from typing import Callable, Dict, Optional, AsyncIterator
+from typing import Callable, Dict, Optional, AsyncIterator, TYPE_CHECKING
 from core.transport import TransportBase
 from core.pipeline import Pipeline
 from core.control_bus import ControlBus
 from core.chunk import Chunk, ChunkType
 from loguru import logger
+
+if TYPE_CHECKING:
+    from core.station import Station
 
 
 class SessionManager:
@@ -54,6 +57,7 @@ class SessionManager:
         self._sessions: Dict[str, asyncio.Task] = {}  # connection_id -> pipeline task
         self._control_buses: Dict[str, ControlBus] = {}  # connection_id -> control bus
         self._pipelines: Dict[str, Pipeline] = {}  # connection_id -> pipeline
+        self._input_stations: Dict[str, 'Station'] = {}  # connection_id -> input station
         self._interrupt_tasks: Dict[str, asyncio.Task] = {}  # connection_id -> interrupt handler task
         self.logger = logger.bind(component="SessionManager")
     
@@ -65,8 +69,8 @@ class SessionManager:
         """
         self.logger.info("Starting session manager...")
         
-        # Register for new connections
-        await self.transport.on_new_connection(self._handle_connection)
+        # Register for new connections (sync method)
+        self.transport.on_new_connection(self._handle_connection)
         
         # Register disconnect handler to cancel sessions
         if hasattr(self.transport, 'set_disconnect_handler'):
@@ -111,6 +115,7 @@ class SessionManager:
         Handle new client connection.
         
         Creates pipeline, control bus, and interrupt handler for this connection.
+        Auto-adds InputStation and OutputStation to Pipeline.
         
         Args:
             connection_id: Unique identifier for the connection
@@ -128,16 +133,35 @@ class SessionManager:
         else:
             self.logger.warning(f"Transport does not support set_control_bus for connection {connection_id[:8]}")
         
-        # Create fresh pipeline with ControlBus (support both sync and async factories)
+        # Create fresh business pipeline (support both sync and async factories)
         if self._is_async_factory:
-            pipeline = await self.pipeline_factory()
+            business_pipeline = await self.pipeline_factory()
         else:
-            pipeline = self.pipeline_factory()
-        pipeline.control_bus = control_bus
-        pipeline.session_id = connection_id  # Set session_id (auto-propagates to all stations)
+            business_pipeline = self.pipeline_factory()
+        
+        # Get InputStation and OutputStation from Transport
+        input_station = self.transport.get_input_station(connection_id)
+        output_station = self.transport.get_output_station(connection_id)
+        
+        # Assemble complete Pipeline (only OutputStation is added, InputStation is the data source)
+        full_stations = business_pipeline.stations + [output_station]
+        
+        # Create complete Pipeline with ControlBus
+        pipeline = Pipeline(
+            stations=full_stations,
+            control_bus=control_bus,
+            session_id=connection_id
+        )
         self._pipelines[connection_id] = pipeline
         
-        self.logger.debug(f"Created pipeline for connection {connection_id[:8]}: {pipeline}")
+        # Store InputStation separately (it's not part of the pipeline, it's the data source)
+        self._input_stations[connection_id] = input_station
+        
+        # Set ControlBus for InputStation manually (since it's not in the pipeline)
+        input_station.control_bus = control_bus
+        input_station.set_session_id(connection_id)
+        
+        self.logger.debug(f"Created complete pipeline for connection {connection_id[:8]} with {len(full_stations)} stations (InputStation as source)")
         
         # Start interrupt handler task
         interrupt_task = asyncio.create_task(
@@ -146,11 +170,10 @@ class SessionManager:
         )
         self._interrupt_tasks[connection_id] = interrupt_task
         
-        # Notify transport that pipeline is ready (so it can send HELLO)
-        if hasattr(self.transport, 'on_pipeline_ready'):
-            await self.transport.on_pipeline_ready(connection_id)
+        # Notify transport that pipeline is ready (so it can send handshake signal)
+        await self.transport.on_pipeline_ready(connection_id)
         
-        # Run pipeline in background task
+        # Run pipeline in background task (InputStation provides the data stream)
         task = asyncio.create_task(
             self._run_pipeline(connection_id, pipeline),
             name=f"pipeline-{connection_id[:8]}"
@@ -206,7 +229,6 @@ class SessionManager:
                 # This removes pending chunks from all queues
                 pipeline.clear_queues(from_stage=1)
                 
-                # Note: We do NOT cancel tasks anymore!
                 # Tasks continue running and will automatically discard old chunks
                 # based on turn_id. This ensures they can process new chunks.
                 
@@ -232,20 +254,19 @@ class SessionManager:
                 except Exception as e:
                     self.logger.warning(f"Failed to inject CONTROL_INTERRUPT: {e}")
                 
-                # Clear transport send queue to stop pending audio
-                if hasattr(self.transport, 'clear_send_queue'):
-                    self.transport.clear_send_queue(connection_id)
-                
-                # Send control events immediately (bypass queue)
+
+                # Send control events as high-priority chunks
+                # These will be processed by OutputStation
                 try:
                     from core.chunk import EventChunk, ChunkType
                     
-                    # Send TTS stop event - IMMEDIATE delivery to stop client playback
+                    # Send TTS stop event to stop client playback
                     stop_event = EventChunk(
                         type=ChunkType.EVENT_TTS_STOP,
                         event_data={"reason": "interrupted"},
                         source="SessionManager",
-                        session_id=connection_id
+                        session_id=connection_id,
+                        turn_id=new_turn
                     )
                     
                     # Send state transition to LISTENING
@@ -253,21 +274,32 @@ class SessionManager:
                         type=ChunkType.EVENT_STATE_LISTENING,
                         event_data={"reason": "interrupted"},
                         source="SessionManager",
-                        session_id=connection_id
+                        session_id=connection_id,
+                        turn_id=new_turn
                     )
                     
-                    # Use send_immediate if available, otherwise fallback to output_chunk
-                    if hasattr(self.transport, 'send_immediate'):
-                        await self.transport.send_immediate(connection_id, stop_event)
-                        await self.transport.send_immediate(connection_id, state_event)
-                        self.logger.debug("Sent immediate interrupt events to client")
+                    # Inject into OutputStation's input queue
+                    # Pipeline has n+1 queues for n stations:
+                    # - Queue[0-n-1]: between stations
+                    # - Queue[n]: OutputStation's output (pipeline output)
+                    # So OutputStation's input is Queue[n-1] (or queues[-2])
+                    if pipeline.queues and len(pipeline.queues) >= 2:
+                        # Put into OutputStation's input queue (second to last)
+                        output_station_input_queue = pipeline.queues[-2]
+                        await output_station_input_queue.put(stop_event)
+                        await output_station_input_queue.put(state_event)
+                        self.logger.info(
+                            f"[{connection_id[:8]}] Injected interrupt events (TTS_STOP + STATE_LISTENING) to OutputStation input queue"
+                        )
                     else:
-                        await self.transport.output_chunk(connection_id, stop_event)
-                        await self.transport.output_chunk(connection_id, state_event)
-                        self.logger.debug("Sent interrupt events to client (via queue)")
+                        self.logger.warning(
+                            f"[{connection_id[:8]}] Cannot inject interrupt events: "
+                            f"queues={len(pipeline.queues) if pipeline.queues else 0}, "
+                            f"stations={len(pipeline.stations)}"
+                        )
                         
                 except Exception as e:
-                    self.logger.warning(f"Failed to send interrupt events: {e}")
+                    self.logger.warning(f"Failed to inject interrupt events: {e}", exc_info=True)
                 
                 # Clear interrupt event flag
                 control_bus.clear_interrupt_event()
@@ -289,10 +321,9 @@ class SessionManager:
         Run pipeline for a connection.
         
         Flow:
-        1. Get input stream from transport
+        1. Get input stream from InputStation (via _generate_chunks())
         2. Wrap input stream to detect CONTROL_INTERRUPT chunks
-        3. Run pipeline (yields output chunks)
-        4. Send output chunks back to transport
+        3. Run pipeline (all chunks flow through business stations and OutputStation)
         
         Args:
             connection_id: Connection ID to run pipeline for
@@ -301,8 +332,14 @@ class SessionManager:
         self.logger.info(f"Starting pipeline for connection {connection_id[:8]}")
         
         try:
-            # Get input stream from transport
-            raw_input_stream = self.transport.input_stream(connection_id)
+            # Get InputStation from stored instances
+            input_station = self._input_stations.get(connection_id)
+            if not input_station:
+                self.logger.error(f"InputStation not found for connection {connection_id[:8]}")
+                return
+            
+            # Get input stream from InputStation (acts as data source)
+            raw_input_stream = input_station._generate_chunks()
             
             # Get ControlBus for this connection
             control_bus = self._control_buses.get(connection_id)
@@ -310,10 +347,10 @@ class SessionManager:
             # Wrap input stream to detect CONTROL_INTERRUPT and send to ControlBus
             input_stream = self._wrap_input_stream(raw_input_stream, control_bus, connection_id)
             
-            # Run pipeline and send outputs
+            # Run pipeline (OutputStation handles sending)
             chunk_count = 0
-            async for output_chunk in pipeline.run(input_stream):
-                await self.transport.output_chunk(connection_id, output_chunk)
+            async for _ in pipeline.run(input_stream):
+                # OutputStation already handles output, nothing to do here
                 chunk_count += 1
             
             self.logger.info(f"Pipeline completed for connection {connection_id[:8]}, processed {chunk_count} chunks")
@@ -405,6 +442,10 @@ class SessionManager:
         
         if connection_id in self._control_buses:
             del self._control_buses[connection_id]
+        
+        # Cleanup InputStation
+        if connection_id in self._input_stations:
+            del self._input_stations[connection_id]
     
     async def _cleanup_pipeline(self, connection_id: str, pipeline: Pipeline) -> None:
         """
