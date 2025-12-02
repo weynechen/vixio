@@ -73,7 +73,10 @@ class SessionManager:
         self.transport.on_new_connection(self._handle_connection)
         
         # Register disconnect handler to cancel sessions
-        if hasattr(self.transport, 'set_disconnect_handler'):
+        # Support both new interface on_disconnect and legacy interface set_disconnect_handler
+        if hasattr(self.transport, 'on_disconnect'):
+            self.transport.on_disconnect(self.cancel_session)
+        elif hasattr(self.transport, 'set_disconnect_handler'):
             self.transport.set_disconnect_handler(self.cancel_session)
         
         # Start transport server
@@ -127,11 +130,14 @@ class SessionManager:
         self._control_buses[connection_id] = control_bus
         
         # Inject ControlBus into Transport (for turn_id management)
-        if hasattr(self.transport, 'set_control_bus'):
-            self.transport.set_control_bus(connection_id, control_bus)
-            self.logger.info(f"Injected ControlBus into Transport for connection {connection_id[:8]}")
-        else:
-            self.logger.warning(f"Transport does not support set_control_bus for connection {connection_id[:8]}")
+        self.transport.set_control_bus(connection_id, control_bus)
+        self.logger.debug(f"ControlBus set for connection {connection_id[:8]}")
+        
+        # Start Transport workers (read_worker + send_worker)
+        # This starts framework-level common capabilities (Turn management, Latency tracking, etc.)
+        if hasattr(self.transport, 'start_workers'):
+            await self.transport.start_workers(connection_id)
+            self.logger.debug(f"Transport workers started for connection {connection_id[:8]}")
         
         # Create fresh business pipeline (support both sync and async factories)
         if self._is_async_factory:
@@ -255,51 +261,41 @@ class SessionManager:
                     self.logger.warning(f"Failed to inject CONTROL_INTERRUPT: {e}")
                 
 
-                # Send control events as high-priority chunks
-                # These will be processed by OutputStation
+                # Send CONTROL_INTERRUPT to OutputStation for immediate client notification
+                # OutputStation will convert it to TTS_STOP + STATE_LISTENING protocol messages
                 try:
-                    from core.chunk import EventChunk, ChunkType
+                    from core.chunk import ControlChunk, ChunkType
                     
-                    # Send TTS stop event to stop client playback
-                    stop_event = EventChunk(
-                        type=ChunkType.EVENT_TTS_STOP,
-                        event_data={"reason": "interrupted"},
+                    # Create interrupt chunk for OutputStation
+                    output_interrupt = ControlChunk(
+                        type=ChunkType.CONTROL_ABORT,
+                        command="interrupt",
+                        params={"reason": interrupt.reason, "source": "SessionManager"},
                         source="SessionManager",
                         session_id=connection_id,
                         turn_id=new_turn
                     )
                     
-                    # Send state transition to LISTENING
-                    state_event = EventChunk(
-                        type=ChunkType.EVENT_STATE_LISTENING,
-                        event_data={"reason": "interrupted"},
-                        source="SessionManager",
-                        session_id=connection_id,
-                        turn_id=new_turn
-                    )
-                    
-                    # Inject into OutputStation's input queue
+                    # Inject into OutputStation's input queue for immediate sending
                     # Pipeline has n+1 queues for n stations:
                     # - Queue[0-n-1]: between stations
                     # - Queue[n]: OutputStation's output (pipeline output)
                     # So OutputStation's input is Queue[n-1] (or queues[-2])
                     if pipeline.queues and len(pipeline.queues) >= 2:
-                        # Put into OutputStation's input queue (second to last)
                         output_station_input_queue = pipeline.queues[-2]
-                        await output_station_input_queue.put(stop_event)
-                        await output_station_input_queue.put(state_event)
+                        await output_station_input_queue.put(output_interrupt)
                         self.logger.info(
-                            f"[{connection_id[:8]}] Injected interrupt events (TTS_STOP + STATE_LISTENING) to OutputStation input queue"
+                            f"[{connection_id[:8]}] Injected CONTROL_ABORT to OutputStation"
                         )
                     else:
                         self.logger.warning(
-                            f"[{connection_id[:8]}] Cannot inject interrupt events: "
+                            f"[{connection_id[:8]}] Cannot inject CONTROL_ABORT: "
                             f"queues={len(pipeline.queues) if pipeline.queues else 0}, "
                             f"stations={len(pipeline.stations)}"
                         )
                         
                 except Exception as e:
-                    self.logger.warning(f"Failed to inject interrupt events: {e}", exc_info=True)
+                    self.logger.warning(f"Failed to inject CONTROL_ABORT: {e}", exc_info=True)
                 
                 # Clear interrupt event flag
                 control_bus.clear_interrupt_event()
@@ -415,10 +411,6 @@ class SessionManager:
         """
         self.logger.debug(f"Cleaning up session for connection {connection_id[:8]}")
         
-        # Remove ControlBus from Transport
-        if hasattr(self.transport, '_control_buses'):
-            self.transport._control_buses.pop(connection_id, None)
-        
         # Cancel interrupt handler
         if connection_id in self._interrupt_tasks:
             task = self._interrupt_tasks[connection_id]
@@ -435,6 +427,17 @@ class SessionManager:
                 name=f"cleanup-pipeline-{connection_id[:8]}"
             )
             del self._pipelines[connection_id]
+        
+        # Stop Transport workers (Transport handles ControlBus cleanup, etc.)
+        if hasattr(self.transport, 'stop_workers'):
+            asyncio.create_task(
+                self.transport.stop_workers(connection_id),
+                name=f"stop-workers-{connection_id[:8]}"
+            )
+        else:
+            # Legacy interface compatibility: manual cleanup
+            if hasattr(self.transport, '_control_buses'):
+                self.transport._control_buses.pop(connection_id, None)
         
         # Cleanup session resources
         if connection_id in self._sessions:

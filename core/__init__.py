@@ -16,12 +16,20 @@ from core.chunk import (
     is_video_chunk,
     is_control_chunk,
     is_event_chunk,
+    HIGH_PRIORITY_TYPES,
 )
 from core.station import Station, PassthroughStation
 from core.pipeline import Pipeline
 from core.transport import TransportBase
 from core.session import SessionManager
 from core.protocol import ProtocolBase
+from core.output_controller import (
+    FlowControllerBase,
+    PlayoutTrackerBase,
+    PlayoutResult,
+    SimpleFlowController,
+    SimplePlayoutTracker,
+)
 
 __all__ = [
     # Chunk types
@@ -39,6 +47,7 @@ __all__ = [
     "is_video_chunk",
     "is_control_chunk",
     "is_event_chunk",
+    "HIGH_PRIORITY_TYPES",
     # Core classes
     "Station",
     "PassthroughStation",
@@ -46,5 +55,11 @@ __all__ = [
     "TransportBase",
     "ProtocolBase",
     "SessionManager",
+    # Output controllers
+    "FlowControllerBase",
+    "PlayoutTrackerBase",
+    "PlayoutResult",
+    "SimpleFlowController",
+    "SimplePlayoutTracker",
 ]
 

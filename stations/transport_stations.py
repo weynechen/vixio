@@ -1,12 +1,17 @@
 """
-Transport Stations - Bridge between Transport and Pipeline
+Transport Stations - Bridge between Pipeline and Transport
 
-InputStation: Read from Transport → Chunk stream
-OutputStation: Chunk stream → Send to Transport
+InputStation: Read from read_queue -> Chunk stream
+OutputStation: Chunk stream -> Write to send_queue
+
+Design principles:
+- InputStation/OutputStation are pure format conversion layers
+- NOT responsible for: connection management, flow control, turn management, latency tracking
+- These common capabilities are unified by TransportBase's read_worker/send_worker
 """
 
 import asyncio
-from typing import AsyncIterator, Optional, Dict, Any, Union, Callable, Awaitable
+from typing import AsyncIterator, Optional, Dict, Any, Union
 from core.station import Station
 from core.protocol import ProtocolBase
 from core.chunk import Chunk, ChunkType
@@ -15,66 +20,81 @@ from loguru import logger
 
 class InputStation(Station):
     """
-    Input Station - Starting point of Pipeline.
+    Input format conversion Station - Pipeline starting point.
     
-    Responsibilities:
-    1. Read raw data from Transport
-    2. Decode via Protocol and convert to Chunk
-    3. Decode audio via Codec (e.g., Opus → PCM)
-    4. Output Chunk stream
+    Responsibilities (pure format conversion):
+    1. Read raw data from Transport's read_queue
+    2. Call Protocol to decode message
+    3. Call Protocol to convert to Chunk
+    4. Call AudioCodec to decode audio (if needed)
+    5. Output Chunk to Pipeline
+    
+    NOT responsible for:
+    - Connection management (handled by Transport's read_worker)
+    - Turn management (handled by TransportBase framework)
+    - Latency tracking (handled by TransportBase framework)
     """
     
     def __init__(
         self,
         session_id: str,
-        read_func: Callable[[], Awaitable[Union[bytes, str]]],  # Read from Transport
-        protocol: ProtocolBase,
-        audio_codec: Optional[Any] = None,
+        read_queue: asyncio.Queue,      # From Transport
+        protocol: ProtocolBase,          # From Transport
+        audio_codec: Optional[Any] = None,  # From Transport, can be None
         name: str = "InputStation"
     ):
         """
         Args:
             session_id: Session ID
-            read_func: Function to read raw data from Transport
-            protocol: Protocol instance
-            audio_codec: Optional audio codec
+            read_queue: Transport's read queue
+            protocol: Protocol handler
+            audio_codec: Audio codec (can be None)
             name: Station name
         """
         super().__init__(name=name)
         self._session_id = session_id
-        self.read_func = read_func
+        self._read_queue = read_queue
         self.protocol = protocol
         self.audio_codec = audio_codec
         self._running = True
     
     async def process_chunk(self, chunk: Chunk) -> AsyncIterator[Chunk]:
         """
-        InputStation is the starting point, doesn't process upstream Chunks.
+        InputStation is starting point, doesn't process upstream Chunks.
         
         Actual data generation is in _generate_chunks().
         """
-        # If receiving upstream Chunk (shouldn't happen), passthrough
+        # If receiving upstream Chunk (shouldn't happen), pass through
         yield chunk
     
     async def _generate_chunks(self) -> AsyncIterator[Chunk]:
         """
         Generate Chunk stream (true input source).
         
-        This method is specially handled by Pipeline as the starting point.
+        Flow:
+        1. Get raw data from read_queue
+        2. protocol.decode_message() decode
+        3. protocol.message_to_chunk() convert
+        4. audio_codec.decode() decode audio (if needed)
+        5. yield Chunk
         """
         self.logger.info(f"Starting input stream for session {self._session_id[:8]}")
         
         try:
             while self._running:
-                # 1. Read raw data from Transport
+                # 1. Read raw data from queue
                 try:
-                    raw_data = await self.read_func()
-                except ConnectionError:
-                    self.logger.info(f"Connection closed for session {self._session_id[:8]}")
-                    break
+                    raw_data = await asyncio.wait_for(
+                        self._read_queue.get(), 
+                        timeout=30.0  # Prevent infinite wait
+                    )
+                except asyncio.TimeoutError:
+                    # Timeout but connection may still be alive, continue waiting
+                    continue
                 
                 if raw_data is None:
-                    # End of stream
+                    # End of stream signal
+                    self.logger.debug(f"End of stream signal received")
                     break
                 
                 # 2. Protocol decode
@@ -91,7 +111,7 @@ class InputStation(Station):
                 if chunk is None:
                     continue
                 
-                # 4. Audio decode (Opus → PCM)
+                # 4. Audio decode (Opus -> PCM)
                 if chunk.type == ChunkType.AUDIO_RAW and self.audio_codec and chunk.data:
                     try:
                         pcm_data = self.audio_codec.decode(chunk.data)
@@ -104,9 +124,10 @@ class InputStation(Station):
                 self.logger.debug(f"Input chunk: {chunk.type.value} from {chunk.source}")
                 yield chunk
         
+        except asyncio.CancelledError:
+            self.logger.debug(f"Input stream cancelled")
         except Exception as e:
             self.logger.error(f"Error in input stream: {e}", exc_info=True)
-        
         finally:
             self.logger.info(f"Input stream ended for session {self._session_id[:8]}")
     
@@ -123,67 +144,86 @@ class InputStation(Station):
 
 class OutputStation(Station):
     """
-    Output Station - End point of Pipeline.
+    Output format conversion Station - Pipeline endpoint.
     
-    Responsibilities:
-    1. Receive Chunks from upstream
-    2. Convert to protocol messages via Protocol business methods
-    3. Encode audio via Codec (e.g., PCM → Opus)
-    4. Encode messages via Protocol
-    5. Apply flow control (if needed)
-    6. Send via Transport
+    Responsibilities (pure format conversion):
+    1. Receive Chunk from Pipeline
+    2. Call AudioCodec to encode audio (if needed)
+    3. Call Protocol to convert to message
+    4. Call Protocol to encode message
+    5. Write to Transport's queues (priority_queue for control, send_queue for data)
+    
+    Dual queue design:
+    - priority_queue: Control messages (TTS_STOP, STATE changes) - sent immediately
+    - send_queue: Normal data (audio) - may be delayed by flow control
+    
+    NOT responsible for:
+    - Flow control (handled by TransportBase.send_worker)
+    - Turn management (handled by TransportBase.send_worker)
+    - Latency tracking (handled by TransportBase.send_worker)
     """
+    
     
     def __init__(
         self,
         session_id: str,
-        write_func: Callable[[Union[bytes, str]], Awaitable[None]],  # Send to Transport
-        protocol: ProtocolBase,
-        audio_codec: Optional[Any] = None,
-        flow_controller: Optional[Any] = None,
-        latency_monitor: Optional[Any] = None,
+        send_queue: asyncio.Queue,      # From Transport - for normal data (audio)
+        priority_queue: asyncio.Queue,  # From Transport - for control messages
+        protocol: ProtocolBase,          # From Transport
+        audio_codec: Optional[Any] = None,  # From Transport, can be None
         name: str = "OutputStation"
     ):
         """
         Args:
             session_id: Session ID
-            write_func: Function to write data to Transport
-            protocol: Protocol instance
-            audio_codec: Optional audio codec
-            flow_controller: Optional flow controller
-            latency_monitor: Optional latency monitor for recording metrics
+            send_queue: Transport's send queue for normal data
+            priority_queue: Transport's priority queue for control messages
+            protocol: Protocol handler
+            audio_codec: Audio codec (can be None)
             name: Station name
+            
+        Note: Queue data format for send_queue is (data, metadata) tuple.
+        metadata contains turn_id for latency tracking by send_worker.
         """
         super().__init__(name=name)
         self._session_id = session_id
-        self.write_func = write_func
+        self._send_queue = send_queue
+        self._priority_queue = priority_queue
         self.protocol = protocol
         self.audio_codec = audio_codec
-        self.flow_controller = flow_controller
-        self.latency_monitor = latency_monitor
-        
-        # Track first audio sent per turn (for latency monitoring)
-        self._first_audio_sent_recorded: set = set()  # Set of "session_id_turn_id" keys
     
     async def process_chunk(self, chunk: Chunk) -> AsyncIterator[Chunk]:
         """
-        Process Chunk: convert to protocol message and send.
+        Process Chunk: convert to protocol message and put into appropriate queue.
         
-        OutputStation is the end point, doesn't produce new Chunks.
+        Queue selection based on ChunkType.is_high_priority():
+        - High priority (CONTROL_INTERRUPT, STATE changes) -> priority_queue (immediate)
+        - Normal (audio, TTS events) -> send_queue (may be delayed by flow control)
+        
+        Special handling:
+        - CONTROL_INTERRUPT: converted to TTS_STOP + STATE_LISTENING messages
+        - AUDIO_RAW: split into frames and encoded
+        
+        OutputStation is endpoint, doesn't produce new Chunks.
         """
-        # Special handling for AUDIO_RAW: split into frames and send with flow control
+        # Special handling for AUDIO_RAW: split into frames, encode, and send
         if chunk.type == ChunkType.AUDIO_RAW and "tts" in chunk.source.lower() and chunk.data:
-            await self._send_audio_frames(chunk.data, chunk.session_id, chunk.turn_id)
+            await self._send_audio_frames(chunk.data, chunk.turn_id)
             return
-            yield  # Make it a generator
+            yield  # Keep as generator
         
-        # 1. Dispatch to Protocol business methods based on Chunk type
+        # Special handling for CONTROL_INTERRUPT: send TTS_STOP + STATE_LISTENING
+        if chunk.type == ChunkType.CONTROL_ABORT:
+            await self._handle_abort(chunk)
+            return
+            yield  # Keep as generator
+        
+        # 1. Call Protocol business methods based on Chunk type
         message = await self._chunk_to_message(chunk)
         
         if message is None:
-            # Chunk doesn't need sending
             return
-            yield  # Make it a generator
+            yield  # Keep as generator
         
         # 2. Encode message
         try:
@@ -191,30 +231,59 @@ class OutputStation(Station):
         except Exception as e:
             self.logger.error(f"Failed to encode message: {e}")
             return
-            yield  # Make it a generator
+            yield  # Keep as generator
         
-        # 3. Send immediately (non-audio messages)
-        await self._send_immediately(encoded_data)
+        # 3. Choose queue based on chunk type priority
+        use_priority = chunk.type.is_high_priority()
         
-        # 4. Handle TTS_STOP: increment turn after bot finishes speaking (natural completion)
-        # Note: Only increment for TTS_STOP from TTS station, not from interrupt handler
-        if chunk.type == ChunkType.EVENT_TTS_STOP:
-            # Check if this is a natural completion (from TTS station) vs interrupt (from SessionManager)
-            is_natural_completion = "tts" in chunk.source.lower()
-            
-            if is_natural_completion and self.control_bus:
-                # Increment turn to allow user to speak
-                await self.control_bus.increment_turn(
-                    source="Transport",
-                    reason="bot_finished"
-                )
-                self.logger.info(f"Turn incremented after bot finished speaking (session={self._session_id[:8]})")
-            elif not is_natural_completion:
-                self.logger.debug(f"TTS_STOP from {chunk.source}, not incrementing turn (already incremented by interrupt)")
+        # Create metadata for tracking
+        metadata = {
+            "type": chunk.type.value,
+            "turn_id": chunk.turn_id,
+            "is_tts_stop": chunk.type == ChunkType.EVENT_TTS_STOP,
+        }
+        
+        if use_priority:
+            # Priority queue: just data (no metadata needed for control messages)
+            await self._priority_queue.put(encoded_data)
+            self.logger.debug(f"Queued priority message: {chunk.type.value}")
+        else:
+            # Send queue: (data, metadata) tuple for latency tracking
+            await self._send_queue.put((encoded_data, metadata))
         
         # OutputStation doesn't produce new Chunks
         return
-        yield  # Make it a generator
+        yield  # Keep as generator
+    
+    async def _handle_abort(self, chunk: Chunk) -> None:
+        """
+        Handle CONTROL_ABORT: send TTS_STOP and STATE_LISTENING messages.
+        
+        This converts the semantic interrupt signal into protocol-specific messages.
+        Both messages are sent via priority_queue for immediate delivery.
+        
+        Args:
+            chunk: CONTROL_ABORT chunk
+        """
+        # 1. Send TTS_STOP to stop client playback
+        tts_stop_msg = self.protocol.send_tts_event(self._session_id, "stop")
+        if tts_stop_msg:
+            try:
+                encoded = self.protocol.encode_message(tts_stop_msg)
+                await self._priority_queue.put(encoded)
+                self.logger.debug("Sent TTS_STOP via priority queue (abort)")
+            except Exception as e:
+                self.logger.error(f"Failed to send TTS_STOP: {e}")
+        
+        # 2. Send STATE_LISTENING to activate client microphone
+        listen_msg = self.protocol.start_listen(self._session_id)
+        if listen_msg:
+            try:
+                encoded = self.protocol.encode_message(listen_msg)
+                await self._priority_queue.put(encoded)
+                self.logger.debug("Sent STATE_LISTENING via priority queue (abort)")
+            except Exception as e:
+                self.logger.error(f"Failed to send STATE_LISTENING: {e}")
     
     async def _chunk_to_message(self, chunk: Chunk) -> Optional[Dict[str, Any]]:
         """
@@ -232,7 +301,6 @@ class OutputStation(Station):
         
         # AUDIO chunks - skip here, handled separately in process_chunk
         elif chunk.type == ChunkType.AUDIO_RAW:
-            # Audio is handled directly in process_chunk() with frame splitting
             return None
         
         # TTS events
@@ -268,14 +336,16 @@ class OutputStation(Station):
         else:
             return self.protocol.chunk_to_message(chunk)
     
-    async def _send_audio_frames(self, pcm_data: bytes, session_id: str, turn_id: int) -> None:
+    async def _send_audio_frames(self, pcm_data: bytes, turn_id: int) -> None:
         """
-        Split audio into frames, encode each frame, and send with flow control.
+        Split audio into frames and put into send queue.
+        
+        Queue data format: (encoded_message, metadata)
+        - metadata = {"type": "audio", "turn_id": turn_id, "is_first": bool}
         
         Args:
             pcm_data: PCM audio data (may be large, from TTS)
-            session_id: Session ID for latency monitoring
-            turn_id: Turn ID for latency monitoring
+            turn_id: Turn ID for latency tracking
         """
         # Split PCM into 60ms frames (16kHz, mono, 16-bit = 1920 bytes per 60ms)
         frame_size = 1920  # 60ms at 16kHz mono
@@ -283,73 +353,47 @@ class OutputStation(Station):
         for i in range(0, len(pcm_data), frame_size):
             frames.append(pcm_data[i:i + frame_size])
         
-        self.logger.debug(f"Sending {len(frames)} audio frames with flow control")
+        self.logger.debug(f"Sending {len(frames)} audio frames for turn {turn_id}")
         
-        # Get current turn_id at start
-        current_turn_id = self._get_current_turn_id()
-        
-        # Encode and send each frame
+        # Encode and put into queue
         for frame_idx, frame in enumerate(frames):
             if not frame:
                 continue
             
-            # Check if turn has changed (interrupt occurred)
-            if self._get_current_turn_id() != current_turn_id:
-                self.logger.info(f"Turn changed during audio transmission, stopping (was {current_turn_id}, now {self._get_current_turn_id()})")
-                break
-            
-            # Encode frame (PCM → Opus)
+            # Encode frame (PCM -> ex:Opus)
             if self.audio_codec:
                 try:
-                    opus_data = self.audio_codec.encode(frame)
+                    encoded_data = self.audio_codec.encode(frame)
                 except Exception as e:
                     self.logger.error(f"Failed to encode audio frame: {e}")
                     continue
             else:
                 # No codec, send raw PCM
-                opus_data = frame
+                encoded_data = frame
             
             # Create audio message
-            message = self.protocol.send_tts_audio(self._session_id, opus_data)
+            message = self.protocol.send_tts_audio(self._session_id, encoded_data)
             if not message:
                 continue
             
             # Encode message
             try:
-                encoded_data = self.protocol.encode_message(message)
+                encoded_message = self.protocol.encode_message(message)
             except Exception as e:
                 self.logger.error(f"Failed to encode message: {e}")
                 continue
             
-            # Send with flow control
-            if self.flow_controller:
-                await self.flow_controller.wait_for_next_frame()
-            
-            await self._send_immediately(encoded_data)
-            
-            # Record latency for first audio frame sent (T6: first_audio_sent)
-            if frame_idx == 0 and self.latency_monitor:
-                session_turn_key = f"{session_id}_{turn_id}"
-                if session_turn_key not in self._first_audio_sent_recorded:
-                    self.latency_monitor.record(session_id, turn_id, "first_audio_sent")
-                    self._first_audio_sent_recorded.add(session_turn_key)
-                    self.logger.debug("Recorded first audio sent to client")
-                    
-                    # Generate and log latency report for this turn
-                    self.latency_monitor.log_report(session_id, turn_id)
-                    self.latency_monitor.print_summary(session_id, turn_id)
-    
-    async def _send_immediately(self, data: Union[bytes, str]) -> None:
-        """Send data immediately"""
-        try:
-            await self.write_func(data)
-        except Exception as e:
-            self.logger.error(f"Failed to send data: {e}")
+            # Put into send queue with metadata for latency tracking
+            # Format: (data, metadata) where metadata contains turn_id and frame info
+            metadata = {
+                "type": "audio",
+                "turn_id": turn_id,
+                "is_first_frame": frame_idx == 0,
+            }
+            await self._send_queue.put((encoded_message, metadata))
     
     def _get_current_turn_id(self) -> int:
         """Get current turn_id"""
         if self.control_bus:
             return self.control_bus.get_current_turn_id()
         return self.current_turn_id
-
-

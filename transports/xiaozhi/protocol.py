@@ -201,7 +201,7 @@ class XiaozhiProtocol(ProtocolBase):
         # HELLO message → ControlChunk
         elif msg_type == XiaozhiMessageType.HELLO:
             return ControlChunk(
-                type=ChunkType.CONTROL_HELLO,
+                type=ChunkType.CONTROL_HANDSHAKE,
                 command="hello",
                 params=message,
                 session_id=session_id,

@@ -30,13 +30,9 @@ class ChunkType(str, Enum):
     # ============ Signal Chunks (Messages - passthrough + trigger state change) ============
     
     # --- Control Signals (from client, change pipeline behavior) ---
-    CONTROL_START = "control.start"         # Start session
-    CONTROL_STOP = "control.stop"           # Stop session
-    CONTROL_HELLO = "control.hello"         # Handshake
-    CONTROL_INTERRUPT = "control.interrupt" # Interrupt bot (stop TTS, start listening)
-    CONTROL_PAUSE = "control.pause"         # Pause processing
-    CONTROL_RESUME = "control.resume"       # Resume processing
-    CONTROL_CONFIG = "control.config"       # Update configuration
+    CONTROL_HANDSHAKE = "control.handshake" # Handshake with client
+    CONTROL_INTERRUPT = "control.interrupt" # Interrupt bot (stop TTS, start listening) , reset all station
+    CONTROL_ABORT = "control.abort_current_turn"         # Abort current turn , immediately send to client
     
     # --- Event Signals (internal state notifications) ---
     # VAD events (from VAD station)
@@ -77,6 +73,33 @@ class ChunkType(str, Enum):
     
     # Metrics events
     EVENT_METRICS = "event.metrics"
+    
+    def is_high_priority(self) -> bool:
+        """
+        Check if this chunk type should be sent with high priority.
+        
+        High priority chunks are sent immediately via priority_queue,
+        not blocked by audio data in send_queue.
+        
+        Returns:
+            True if this is a high priority chunk type
+        """
+        return self in HIGH_PRIORITY_TYPES
+
+
+# High priority chunk types (for immediate sending, not blocked by audio queue)
+# These are typically control commands and state changes that need immediate delivery
+HIGH_PRIORITY_TYPES = {
+    # Control signals - always high priority
+    ChunkType.CONTROL_HANDSHAKE,
+    ChunkType.CONTROL_INTERRUPT,
+    ChunkType.CONTROL_ABORT,
+    
+    # State events - client needs immediate feedback
+    ChunkType.EVENT_STATE_LISTENING,
+    ChunkType.EVENT_STATE_IDLE,
+    ChunkType.EVENT_STATE_SPEAKING,
+}
 
 
 @dataclass
@@ -246,18 +269,14 @@ class ControlChunk(Chunk):
     Control chunk - control signals from client.
     
     Examples:
-    - CONTROL_START: Start session
-    - CONTROL_STOP: Stop session
-    - CONTROL_INTERRUPT: Interrupt bot (stop TTS, start listening)
-    - CONTROL_PAUSE/RESUME: Pause/resume processing
-    - CONTROL_CONFIG: Update configuration
+    - CONTROL_ABORT: Abort current turn, immediately send to client
     
     Attributes:
         command: str - Command name (optional, can use type instead)
         params: Dict - Command parameters
         data: Optional - Additional control data
     """
-    type: ChunkType = ChunkType.CONTROL_START
+    type: ChunkType = ChunkType.CONTROL_ABORT
     command: str = ""
     params: Dict[str, Any] = field(default_factory=dict)
     

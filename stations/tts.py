@@ -90,19 +90,11 @@ class TTSStation(StreamStation):
         """
         Handle CONTROL_INTERRUPT signal.
         
-        Cancel TTS synthesis and emit TTS_STOP event.
+        Cancel TTS synthesis and reset state.
+        Note: TTS_STOP is NOT emitted here - OutputStation handles client notification via CONTROL_ABORT.
         """
         if self._is_speaking:
             self.tts.cancel()
-            
-            yield EventChunk(
-                type=ChunkType.EVENT_TTS_STOP,
-                event_data={"reason": "user_interrupt"},
-                source=self.name,
-                session_id=chunk.session_id,
-                turn_id=chunk.turn_id
-            )
-            
             self._is_speaking = False
             self.logger.info("TTS cancelled by interrupt")
             
@@ -110,19 +102,37 @@ class TTSStation(StreamStation):
         """
         Handle EVENT_AGENT_STOP signal.
         
-        Emit TTS_STOP event to mark end of turn.
+        Emit TTS_STOP to signal TTS session complete.
+        
+        Note: Due to sequential chunk processing, when EVENT_AGENT_STOP arrives:
+        - All TEXT chunks have been processed (they come before EVENT_AGENT_STOP)
+        - TTS synthesis for each TEXT is complete (process_chunk runs to completion)
+        - So TTS_STOP here correctly indicates "TTS has finished all synthesis"
+        
+        Edge case: if no TEXT was processed (_is_speaking=False), no TTS_STOP needed.
         """
-        if self._is_speaking:
-            yield EventChunk(
-                type=ChunkType.EVENT_TTS_STOP,
-                event_data={"reason": "agent_complete"},
-                source=self.name,
-                session_id=chunk.session_id,
-                turn_id=chunk.turn_id
-            )
-            
-            self._is_speaking = False
-            self.logger.info("TTS session complete (agent stopped)")
+        if not self._is_speaking:
+            # No TTS session active, nothing to stop
+            self.logger.debug("Agent stopped but TTS never started, no TTS_STOP needed")
+            return
+            yield  # Keep as generator
+        
+        # Emit TTS_STOP - all TEXT has been processed at this point
+        yield EventChunk(
+            type=ChunkType.EVENT_TTS_STOP,
+            event_data={"reason": "synthesis_complete"},
+            source=self.name,
+            session_id=chunk.session_id,
+            turn_id=chunk.turn_id
+        )
+        
+        self._is_speaking = False
+        self.logger.info("TTS session complete (all sentences synthesized)")
+    
+    async def reset_state(self) -> None:
+        """Reset TTS state for new turn."""
+        self._is_speaking = False
+        self.logger.debug("TTS state reset for new turn")
             
     async def process_chunk(self, chunk: Chunk) -> AsyncIterator[Chunk]:
         """

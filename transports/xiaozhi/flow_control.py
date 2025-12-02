@@ -6,15 +6,18 @@ Implements flow control strategy for smooth audio playback
 
 import asyncio
 import time
+from typing import Optional
+
+from core.output_controller import FlowControllerBase
 
 
-class AudioFlowController:
+class AudioFlowController(FlowControllerBase):
     """
-    Audio flow control for smooth playback.
+    Xiaozhi audio flow controller - Upper layer actively controls send rhythm.
     
     Strategy:
-    - First N packets: fast pre-buffering
-    - Subsequent packets: timed intervals
+    - First N packets: Fast pre-buffering (no wait)
+    - Subsequent packets: Send at timed intervals
     
     This ensures:
     1. Client has enough buffer to start playback quickly
@@ -26,22 +29,26 @@ class AudioFlowController:
         Initialize flow controller.
         
         Args:
-            pre_buffer_count: Number of packets to send quickly (pre-buffer)
-            frame_duration_ms: Frame duration in milliseconds
+            pre_buffer_count: Number of packets for fast pre-buffering
+            frame_duration_ms: Frame duration (milliseconds)
         """
         self.pre_buffer_count = pre_buffer_count
         self.frame_duration_s = frame_duration_ms / 1000.0
         self.packet_count = 0
-        self.start_time = time.time()
+        self.start_time: Optional[float] = None
     
-    async def wait_for_next_frame(self) -> None:
+    async def wait_for_next(self) -> None:
         """
-        Wait until next packet should be sent.
+        Wait for next send opportunity.
         
-        Applies flow control timing based on packet count:
-        - Pre-buffer phase (first N packets): send immediately
-        - Timed phase: maintain steady intervals
+        Apply flow control based on packet count:
+        - Pre-buffer phase (first N packets): Send immediately
+        - Timed phase: Maintain steady intervals
         """
+        # First send, record start time
+        if self.start_time is None:
+            self.start_time = time.time()
+        
         if self.packet_count < self.pre_buffer_count:
             # Pre-buffer: send immediately
             pass
@@ -60,7 +67,11 @@ class AudioFlowController:
         self.packet_count += 1
     
     def reset(self) -> None:
-        """Reset for new audio stream"""
+        """Reset flow control state (called when new turn starts)"""
         self.packet_count = 0
-        self.start_time = time.time()
-
+        self.start_time = None
+    
+    # Legacy interface compatibility
+    async def wait_for_next_frame(self) -> None:
+        """Legacy interface - please use wait_for_next()"""
+        await self.wait_for_next()
