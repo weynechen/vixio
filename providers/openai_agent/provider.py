@@ -461,6 +461,9 @@ class OpenAIAgentProvider(AgentProvider):
         # Create new session
         self._create_session()
         
+        # Configure prompt capture with agent name and session ID
+        dump_promt.configure_session(session_id=session_id, agent_name=self.name)
+        
         if old_session_id:
             self.logger.info(f"Switched session: {old_session_id[:8]}... -> {session_id[:8]}...")
         else:

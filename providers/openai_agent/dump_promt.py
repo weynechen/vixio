@@ -4,51 +4,141 @@ from datetime import datetime as dt
 import json
 from pathlib import Path
 import inspect
-import sys
-
-
-def _detect_caller_filename():
-    """Auto-detect the filename of the script that imported this module."""
-    try:
-        # Try to get the main module filename
-        if hasattr(sys.modules.get('__main__'), '__file__'):
-            main_file = sys.modules['__main__'].__file__
-            if main_file:
-                return Path(main_file).stem
-        
-        # Fallback: inspect the call stack to find the caller
-        frame = inspect.currentframe()
-        if frame and frame.f_back and frame.f_back.f_back:
-            caller_frame = frame.f_back.f_back
-            caller_filename = caller_frame.f_globals.get('__file__')
-            if caller_filename:
-                return Path(caller_filename).stem
-    except Exception:
-        pass
-    
-    # Default fallback
-    return "prompt"
+import threading
 
 
 # Global state for prompt capture
 _prompt_capture_state = {
-    "call_count": 0,
     "output_dir": Path("logs/prompt_logs"),
-    "filename_prefix": _detect_caller_filename(),
+    "agent_name": "agent",
+    "session_id": None,
+    "session_start_time": None,
+    "session_calls": [],  # List of calls for current session
+    "lock": threading.Lock(),
 }
 
 # Create output directory
 _prompt_capture_state["output_dir"].mkdir(parents=True, exist_ok=True)
 
 
-def set_filename_prefix(prefix: str):
-    """Set custom filename prefix for saved prompts.
+def configure_session(session_id: str, agent_name: str = "agent"):
+    """Configure the current session for prompt capture.
     
     Args:
-        prefix: The prefix to use for prompt filenames (e.g., 'my_script')
+        session_id: Unique identifier for the session
+        agent_name: Name of the agent (used in filename)
     """
-    _prompt_capture_state["filename_prefix"] = prefix
-    print(f"[INFO] Prompt filename prefix set to: {prefix}")
+    with _prompt_capture_state["lock"]:
+        # If switching to a new session, save the previous one first
+        if (_prompt_capture_state["session_id"] is not None and 
+            _prompt_capture_state["session_id"] != session_id and
+            _prompt_capture_state["session_calls"]):
+            _save_session_sync()
+        
+        _prompt_capture_state["session_id"] = session_id
+        _prompt_capture_state["agent_name"] = agent_name
+        _prompt_capture_state["session_start_time"] = dt.now().strftime("%Y%m%d_%H%M%S")
+        _prompt_capture_state["session_calls"] = []
+        print(f"[INFO] Prompt capture session configured: agent={agent_name}, session_id={session_id}")
+
+
+def set_agent_name(agent_name: str):
+    """Set the agent name for prompt filenames.
+    
+    Args:
+        agent_name: Name of the agent
+    """
+    _prompt_capture_state["agent_name"] = agent_name
+    print(f"[INFO] Prompt agent name set to: {agent_name}")
+
+
+def set_session_id(session_id: str):
+    """Set the session ID for prompt aggregation.
+    
+    Args:
+        session_id: Unique session identifier
+    """
+    with _prompt_capture_state["lock"]:
+        # If switching to a new session, save the previous one first
+        if (_prompt_capture_state["session_id"] is not None and 
+            _prompt_capture_state["session_id"] != session_id and
+            _prompt_capture_state["session_calls"]):
+            _save_session_sync()
+        
+        _prompt_capture_state["session_id"] = session_id
+        _prompt_capture_state["session_start_time"] = dt.now().strftime("%Y%m%d_%H%M%S")
+        _prompt_capture_state["session_calls"] = []
+        print(f"[INFO] Prompt capture session ID set to: {session_id}")
+
+
+def _get_session_filename() -> str:
+    """Generate filename for current session: agent-name_time_session_id"""
+    agent_name = _prompt_capture_state["agent_name"]
+    session_id = _prompt_capture_state["session_id"] or "unknown"
+    start_time = _prompt_capture_state["session_start_time"] or dt.now().strftime("%Y%m%d_%H%M%S")
+    return f"{agent_name}_{start_time}_{session_id}"
+
+
+def _save_session_sync():
+    """Save the current session data to files (synchronous version)."""
+    if not _prompt_capture_state["session_calls"]:
+        return
+    
+    output_dir = _prompt_capture_state["output_dir"]
+    filename = _get_session_filename()
+    
+    # Save as JSON
+    json_file = output_dir / f"{filename}.json"
+    session_data = {
+        "agent_name": _prompt_capture_state["agent_name"],
+        "session_id": _prompt_capture_state["session_id"],
+        "session_start_time": _prompt_capture_state["session_start_time"],
+        "total_calls": len(_prompt_capture_state["session_calls"]),
+        "calls": _prompt_capture_state["session_calls"],
+    }
+    with open(json_file, "w", encoding="utf-8") as f:
+        json.dump(session_data, f, indent=2, ensure_ascii=False, cls=DateTimeEncoder)
+    
+    # Save as formatted text
+    txt_file = output_dir / f"{filename}.txt"
+    with open(txt_file, "w", encoding="utf-8") as f:
+        f.write(f"=== Session: {_prompt_capture_state['session_id']} ===\n")
+        f.write(f"Agent: {_prompt_capture_state['agent_name']}\n")
+        f.write(f"Start Time: {_prompt_capture_state['session_start_time']}\n")
+        f.write(f"Total Calls: {len(_prompt_capture_state['session_calls'])}\n")
+        f.write("=" * 60 + "\n\n")
+        
+        for call in _prompt_capture_state["session_calls"]:
+            f.write(f"--- Call #{call['call_number']} ({call['timestamp']}) ---\n")
+            f.write(f"Model: {call['model']}\n\n")
+            f.write(call["formatted_prompt"])
+            f.write(f"\n\n=== Response ===\n")
+            if call["response"]["content"]:
+                f.write(f"Content: {call['response']['content']}\n")
+            if call["response"]["tool_calls"]:
+                f.write(f"Tool Calls: {call['response']['tool_calls']}\n")
+            if call["usage"]["prompt_tokens"] is not None:
+                f.write(f"\nTokens: {call['usage']['prompt_tokens']} prompt, ")
+                f.write(f"{call['usage']['completion_tokens']} completion, ")
+                f.write(f"{call['usage']['total_tokens']} total\n")
+            f.write("\n" + "=" * 60 + "\n\n")
+    
+    print(f"[Session Saved] {len(_prompt_capture_state['session_calls'])} calls -> {json_file.name}")
+
+
+def save_session():
+    """Manually save the current session data to files."""
+    with _prompt_capture_state["lock"]:
+        _save_session_sync()
+
+
+def end_session():
+    """End the current session, save data and reset state."""
+    with _prompt_capture_state["lock"]:
+        _save_session_sync()
+        _prompt_capture_state["session_id"] = None
+        _prompt_capture_state["session_start_time"] = None
+        _prompt_capture_state["session_calls"] = []
 
 
 class DateTimeEncoder(json.JSONEncoder):
@@ -125,7 +215,7 @@ def _format_prompt(messages: list, tools: list = None) -> str:
 
 
 async def prompt_capture_callback(kwargs, response_obj, start_time, end_time):
-    """Async callback function to capture and save complete prompts from LiteLLM calls."""
+    """Async callback function to capture and aggregate prompts by session."""
     try:
         # Skip incomplete streaming events
         # Only capture when we have usage info (indicates complete response)
@@ -136,11 +226,7 @@ async def prompt_capture_callback(kwargs, response_obj, start_time, end_time):
         if not hasattr(response_obj.usage, "prompt_tokens") or response_obj.usage.prompt_tokens is None:
             return
         
-        _prompt_capture_state["call_count"] += 1
-        call_count = _prompt_capture_state["call_count"]
         timestamp = dt.now().strftime("%Y%m%d_%H%M%S_%f")
-        output_dir = _prompt_capture_state["output_dir"]
-        filename_prefix = _prompt_capture_state["filename_prefix"]
         
         # Extract messages from kwargs
         messages = kwargs.get("messages", [])
@@ -176,9 +262,9 @@ async def prompt_capture_callback(kwargs, response_obj, start_time, end_time):
         filtered_kwargs = {k: _make_json_serializable(v) for k, v in kwargs.items() 
                           if k not in ["messages", "tools", "model"]}
         
-        # Save detailed info
-        prompt_data = {
-            "call_number": call_count,
+        # Build call data
+        call_data = {
+            "call_number": len(_prompt_capture_state["session_calls"]) + 1,
             "timestamp": timestamp,
             "model": model,
             "messages": _make_json_serializable(messages),
@@ -197,31 +283,18 @@ async def prompt_capture_callback(kwargs, response_obj, start_time, end_time):
             "kwargs": filtered_kwargs,
         }
         
-        # Save as JSON with custom encoder
-        json_file = output_dir / f"{filename_prefix}_{call_count}_{timestamp}.json"
-        with open(json_file, "w", encoding="utf-8") as f:
-            json.dump(prompt_data, f, indent=2, ensure_ascii=False, cls=DateTimeEncoder)
+        with _prompt_capture_state["lock"]:
+            # Skip capture if session not configured
+            if _prompt_capture_state["session_id"] is None:
+                return
+            
+            _prompt_capture_state["session_calls"].append(call_data)
+            call_count = len(_prompt_capture_state["session_calls"])
+            
+            # Auto-save after each call to prevent data loss
+            _save_session_sync()
         
-        # Save formatted prompt as text
-        txt_file = output_dir / f"{filename_prefix}_{call_count}_{timestamp}.txt"
-        with open(txt_file, "w", encoding="utf-8") as f:
-            f.write(f"=== Prompt Call #{call_count} ===\n")
-            f.write(f"Timestamp: {timestamp}\n")
-            f.write(f"Model: {model}\n")
-            f.write(f"\n=== Formatted Prompt ===\n\n")
-            f.write(prompt_text)
-            f.write(f"\n\n=== Response ===\n\n")
-            if prompt_data["response"]["content"]:
-                f.write(f"Content: {prompt_data['response']['content']}\n")
-            if prompt_data["response"]["tool_calls"]:
-                f.write(f"Tool Calls: {prompt_data['response']['tool_calls']}\n")
-            if prompt_data["usage"]["prompt_tokens"] is not None:
-                f.write(f"\n=== Token Usage ===\n")
-                f.write(f"Prompt Tokens: {prompt_data['usage']['prompt_tokens']}\n")
-                f.write(f"Completion Tokens: {prompt_data['usage']['completion_tokens']}\n")
-                f.write(f"Total Tokens: {prompt_data['usage']['total_tokens']}\n")
-        
-        print(f"[Prompt Captured #{call_count}] Saved to: {json_file.name}")
+        print(f"[Prompt Captured #{call_count}] Session: {_prompt_capture_state['session_id']}")
     except Exception as e:
         print(f"[Error in prompt capture callback] {e}")
         import traceback
@@ -241,4 +314,4 @@ if not hasattr(litellm, "_async_success_callback") or litellm._async_success_cal
 if prompt_capture_callback not in litellm._async_success_callback:
     litellm._async_success_callback.append(prompt_capture_callback)
 
-print(f"[INFO] Prompt capture callback registered (sync and async). Filename prefix: '{_prompt_capture_state['filename_prefix']}'. All prompts will be saved to 'out/prompt_logs' directory.")
+print(f"[INFO] Prompt capture callback registered (sync and async). Prompts will be aggregated by session_id to 'logs/prompt_logs' directory.")
