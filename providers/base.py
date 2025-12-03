@@ -27,7 +27,7 @@ class BaseProvider(ABC):
             name: Provider name for logging
         """
         self.name = name or self.__class__.__name__
-        self.logger = logger.bind(provider=self.name)
+        self.logger = logger.bind(component=self.name)
     
     @property
     @abstractmethod

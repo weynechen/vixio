@@ -9,7 +9,7 @@ import uuid
 import json
 import time
 import base64
-from typing import Dict, Optional, Callable, Coroutine, Any, Union, TYPE_CHECKING
+from typing import Dict, Optional, Callable, Coroutine, Any, Union, List, TYPE_CHECKING, Awaitable
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request, Header, Query
 from fastapi.responses import JSONResponse
@@ -25,6 +25,8 @@ from utils.audio import get_opus_codec, OPUS_AVAILABLE
 
 if TYPE_CHECKING:
     from utils.audio import OpusCodec
+    from transports.xiaozhi.device_tools import XiaozhiDeviceToolClient
+    from core.tools.types import ToolDefinition
 
 
 class XiaozhiTransport(TransportBase):
@@ -81,6 +83,10 @@ class XiaozhiTransport(TransportBase):
         
         # ============ Audio codec (per session) ============
         self._opus_codecs: Dict[str, 'OpusCodec'] = {}
+        
+        # ============ Device tool clients (for MCP/function tools) ============
+        self._device_tool_clients: Dict[str, 'XiaozhiDeviceToolClient'] = {}
+        self._device_tools_callback: Optional[Callable[[str, List], Awaitable[None]]] = None
         
         # ============ Protocol instance (shared) ============
         self._protocol: Optional[XiaozhiProtocol] = None
@@ -239,6 +245,162 @@ class XiaozhiTransport(TransportBase):
         """Cleanup resources when session ends"""
         # Cleanup Opus codec
         self._opus_codecs.pop(session_id, None)
+        
+        # Cleanup device tool client
+        client = self._device_tool_clients.pop(session_id, None)
+        if client:
+            client.cancel_all()
+    
+    # ============ Device tools (MCP) support ============
+    
+    def set_device_tools_callback(
+        self,
+        callback: Callable[[str, List['ToolDefinition']], Awaitable[None]]
+    ) -> None:
+        """
+        Set callback for device tools notification.
+        
+        Called when device tools become available after MCP initialization.
+        
+        Args:
+            callback: Async function(session_id, tool_definitions) -> None
+        """
+        self._device_tools_callback = callback
+    
+    async def _init_device_tools(self, session_id: str) -> None:
+        """
+        Initialize device tool client and fetch tools.
+        
+        Called after hello handshake when device supports MCP.
+        """
+        from transports.xiaozhi.device_tools import XiaozhiDeviceToolClient
+        
+        # Create send callback
+        async def send_mcp_message(message: Dict[str, Any]) -> None:
+            """Send MCP message to device."""
+            encoded = self._protocol.encode_message(message)
+            await self._do_write(session_id, encoded)
+        
+        # Create client
+        client = XiaozhiDeviceToolClient(
+            send_callback=send_mcp_message,
+            session_id=session_id,
+            timeout=30.0
+        )
+        self._device_tool_clients[session_id] = client
+        
+        # Initialize and fetch tools
+        if await client.initialize():
+            # Notify callback with tool definitions
+            if self._device_tools_callback and client.has_tools:
+                tool_defs = client.get_tool_definitions()
+                self.logger.info(f"Session {session_id[:8]} has {len(tool_defs)} device tools")
+                await self._device_tools_callback(session_id, tool_defs)
+        else:
+            self.logger.warning(f"Failed to initialize MCP for session {session_id[:8]}")
+    
+    def _route_mcp_message(self, session_id: str, message: Dict[str, Any]) -> bool:
+        """
+        Route MCP message to device tool client.
+        
+        Args:
+            session_id: Session ID
+            message: Parsed message (should have type="mcp")
+            
+        Returns:
+            True if message was handled, False otherwise
+        """
+        if not self._protocol.is_mcp_message(message):
+            return False
+        
+        client = self._device_tool_clients.get(session_id)
+        if client:
+            payload = self._protocol.get_mcp_payload(message)
+            if payload:
+                client.on_mcp_message(payload)
+                return True
+        else:
+            self.logger.warning(f"No device tool client for session {session_id[:8]}")
+        
+        return False
+    
+    def get_device_tool_client(self, session_id: str) -> Optional['XiaozhiDeviceToolClient']:
+        """
+        Get device tool client for session.
+        
+        Args:
+            session_id: Session ID
+            
+        Returns:
+            XiaozhiDeviceToolClient or None
+        """
+        return self._device_tool_clients.get(session_id)
+    
+    # ============ Override read_worker for MCP message handling ============
+    
+    async def _read_worker(self, session_id: str) -> None:
+        """
+        Read Worker (override for Xiaozhi-specific handling).
+        
+        Extended responsibilities:
+        1. Call _do_read() to read from connection
+        2. Detect hello message and initialize MCP if supported
+        3. Route MCP messages to DeviceToolClient (bypass Pipeline)
+        4. Put other messages into read_queue
+        """
+        read_queue = self._read_queues[session_id]
+        
+        try:
+            while True:
+                # Read from connection
+                data = await self._do_read(session_id)
+                
+                if data is None:
+                    # Connection closed
+                    break
+                
+                # Parse message for special handling
+                if isinstance(data, str):
+                    try:
+                        message = json.loads(data)
+                        msg_type = message.get("type")
+                        
+                        # Handle hello message - check for MCP support
+                        if msg_type == "hello":
+                            features = message.get("features", {})
+                            if features.get("mcp"):
+                                self.logger.info(f"Device supports MCP, initializing tools for session {session_id[:8]}")
+                                # Start MCP initialization in background
+                                asyncio.create_task(self._init_device_tools(session_id))
+                            # Still pass hello to Pipeline for normal processing
+                            await read_queue.put(data)
+                            continue
+                        
+                        # Handle MCP messages - route to DeviceToolClient
+                        if msg_type == "mcp":
+                            if self._route_mcp_message(session_id, message):
+                                # MCP message handled, don't pass to Pipeline
+                                continue
+                            else:
+                                self.logger.warning(f"MCP message not handled for session {session_id[:8]}")
+                                continue
+                    
+                    except json.JSONDecodeError:
+                        pass  # Not JSON, treat as regular message
+                
+                # Put into queue (audio and other messages)
+                await read_queue.put(data)
+        
+        except asyncio.CancelledError:
+            self.logger.debug(f"Read worker cancelled for session {session_id[:8]}")
+        except ConnectionError as e:
+            self.logger.debug(f"Connection closed for session {session_id[:8]}: {e}")
+        except Exception as e:
+            self.logger.error(f"Error in read worker for session {session_id[:8]}: {e}")
+        
+        finally:
+            # Put None to signal stream end
+            await read_queue.put(None)
     
     def _is_audio_message(self, data: Union[bytes, str]) -> bool:
         """Check if message is audio"""

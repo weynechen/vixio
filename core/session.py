@@ -7,10 +7,11 @@ Responsibilities:
 3. Route chunks: Transport input -> Pipeline -> Transport output
 4. Manage pipeline lifecycle
 5. Handle interrupts via ControlBus
+6. Handle device tools registration
 """
 
 import asyncio
-from typing import Callable, Dict, Optional, AsyncIterator, TYPE_CHECKING
+from typing import Callable, Dict, Optional, AsyncIterator, List, TYPE_CHECKING
 from core.transport import TransportBase
 from core.pipeline import Pipeline
 from core.control_bus import ControlBus
@@ -19,6 +20,7 @@ from loguru import logger
 
 if TYPE_CHECKING:
     from core.station import Station
+    from core.tools.types import ToolDefinition
 
 
 class SessionManager:
@@ -78,6 +80,10 @@ class SessionManager:
             self.transport.on_disconnect(self.cancel_session)
         elif hasattr(self.transport, 'set_disconnect_handler'):
             self.transport.set_disconnect_handler(self.cancel_session)
+        
+        # Register device tools callback (for MCP/function tools)
+        if hasattr(self.transport, 'set_device_tools_callback'):
+            self.transport.set_device_tools_callback(self._on_device_tools_ready)
         
         # Start transport server
         await self.transport.start()
@@ -401,6 +407,100 @@ class SessionManager:
             
             # Always yield the chunk (so pipeline can process it too)
             yield chunk
+    
+    async def _on_device_tools_ready(
+        self,
+        connection_id: str,
+        tool_definitions: List['ToolDefinition']
+    ) -> None:
+        """
+        Handle device tools becoming available.
+        
+        Called by Transport when MCP initialization completes and device tools are ready.
+        Finds the AgentStation in the pipeline and updates its tools.
+        
+        Args:
+            connection_id: Connection ID
+            tool_definitions: List of ToolDefinition from device
+        """
+        self.logger.info(
+            f"Device tools ready for connection {connection_id[:8]}: "
+            f"{len(tool_definitions)} tools"
+        )
+        
+        # Find pipeline for this connection
+        pipeline = self._pipelines.get(connection_id)
+        if not pipeline:
+            self.logger.warning(
+                f"No pipeline found for connection {connection_id[:8]}, "
+                f"cannot update tools"
+            )
+            return
+        
+        # Find AgentStation in pipeline
+        agent_station = None
+        for station in pipeline.stations:
+            if hasattr(station, 'agent') and hasattr(station.agent, 'update_tools'):
+                agent_station = station
+                break
+        
+        if not agent_station:
+            self.logger.warning(
+                f"No AgentStation found in pipeline for connection {connection_id[:8]}"
+            )
+            return
+        
+        # Convert ToolDefinition to Tool (for AgentProvider.update_tools)
+        from providers.agent import Tool
+        
+        def make_device_executor(client, name):
+            """Create executor closure with captured variables."""
+            async def executor(**kwargs):
+                return await client.call_tool(name, kwargs)
+            return executor
+        
+        tools = []
+        for tool_def in tool_definitions:
+            # Create executor wrapper for device tools
+            if tool_def.device_client:
+                # Create async executor that calls device_client
+                # Use factory function to capture variables correctly
+                device_executor = make_device_executor(
+                    tool_def.device_client,
+                    tool_def.name
+                )
+                
+                tool = Tool(
+                    name=tool_def.name,
+                    description=tool_def.description,
+                    parameters=tool_def.parameters,
+                    executor=device_executor
+                )
+            elif tool_def.executor:
+                # Local tool - use executor directly
+                tool = Tool(
+                    name=tool_def.name,
+                    description=tool_def.description,
+                    parameters=tool_def.parameters,
+                    executor=tool_def.executor
+                )
+            else:
+                self.logger.warning(f"Tool {tool_def.name} has no executor, skipping")
+                continue
+            
+            tools.append(tool)
+        
+        # Update agent tools
+        try:
+            await agent_station.agent.update_tools(tools)
+            self.logger.info(
+                f"Updated AgentStation with {len(tools)} device tools for "
+                f"connection {connection_id[:8]}"
+            )
+        except Exception as e:
+            self.logger.error(
+                f"Failed to update agent tools for connection {connection_id[:8]}: {e}"
+            )
     
     def _cleanup_session(self, connection_id: str) -> None:
         """

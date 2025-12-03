@@ -30,6 +30,17 @@ from core.output_controller import (
     SimpleFlowController,
     SimplePlayoutTracker,
 )
+from core.tools import (
+    ToolDefinition,
+    ToolCallRequest,
+    ToolCallResult,
+    DeviceToolClientBase,
+    ToolConverterBase,
+    get_current_time,
+    get_current_date,
+    func_to_tool_definition,
+    get_builtin_local_tools,
+)
 
 __all__ = [
     # Chunk types
@@ -61,5 +72,15 @@ __all__ = [
     "PlayoutResult",
     "SimpleFlowController",
     "SimplePlayoutTracker",
+    # Tools
+    "ToolDefinition",
+    "ToolCallRequest",
+    "ToolCallResult",
+    "DeviceToolClientBase",
+    "ToolConverterBase",
+    "get_current_time",
+    "get_current_date",
+    "func_to_tool_definition",
+    "get_builtin_local_tools",
 ]
 

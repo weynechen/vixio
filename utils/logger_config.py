@@ -79,16 +79,12 @@ def configure_logger(
             """
             Allow DEBUG level for specific components, enforce min_level for others.
             
-            Components are identified by 'middleware' or 'station' in record extra.
+            Components are identified by 'component' field in record extra.
+            All logger.bind() calls should use component=<name> for consistency.
             """
             # Check if this is a debug-enabled component
-            middleware_name = record["extra"].get("middleware")
-            station_name = record["extra"].get("station")
-            
-            is_debug_component = (
-                middleware_name in debug_components or 
-                station_name in debug_components
-            )
+            component_name = record["extra"].get("component")
+            is_debug_component = component_name in debug_components
             
             if is_debug_component:
                 # Allow DEBUG and above for this component

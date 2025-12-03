@@ -287,6 +287,40 @@ class OpenAIAgentProvider(AgentProvider):
         # previous_response_id starts a fresh conversation
         self.logger.info("Conversation reset (next run will start fresh)")
     
+    async def update_tools(self, tools: List[Tool]) -> None:
+        """
+        Update agent's available tools.
+        
+        Recreates the Agent with new tools while preserving other settings.
+        
+        Args:
+            tools: New list of tools
+        """
+        if not self._initialized:
+            self.logger.warning("Cannot update tools: agent not initialized")
+            return
+        
+        self.logger.info(f"Updating agent with {len(tools)} tools")
+        
+        # Convert tools to FunctionTool format
+        function_tools = []
+        for tool in tools:
+            try:
+                func_tool = self._convert_to_function_tool(tool)
+                function_tools.append(func_tool)
+            except Exception as e:
+                self.logger.error(f"Failed to convert tool {tool.name}: {e}")
+        
+        # Recreate agent with new tools
+        self.agent = Agent(
+            name=self.name,
+            model=self.model,
+            instructions=self.system_prompt,
+            tools=function_tools,
+        )
+        
+        self.logger.info(f"Agent updated with {len(function_tools)} tools")
+    
     async def cleanup(self) -> None:
         """
         Cleanup Agent and resources.
@@ -309,29 +343,38 @@ class OpenAIAgentProvider(AgentProvider):
         Returns:
             FunctionTool instance
         """
+        # Capture tool reference for closure
+        tool_ref = tool
+        
         # Create a wrapper function that calls our executor
-        async def tool_function(**kwargs) -> str:
+        async def on_invoke_tool(ctx: ToolContext, input_json: str) -> str:
             """Tool execution wrapper."""
+            import json
             try:
+                # Parse input JSON to kwargs
+                kwargs = json.loads(input_json) if input_json else {}
+                
                 # Call our tool executor
-                if hasattr(tool.executor, '__call__'):
-                    result = await tool.executor(**kwargs)
+                if hasattr(tool_ref.executor, '__call__'):
+                    result = await tool_ref.executor(**kwargs)
                 else:
-                    result = await tool.executor.execute(**kwargs)
+                    result = await tool_ref.executor.execute(**kwargs)
                 
                 # Return result as string
                 return str(result) if result else "Success"
             
             except Exception as e:
-                self.logger.error(f"Tool {tool.name} execution error: {e}")
+                self.logger.error(f"Tool {tool_ref.name} execution error: {e}")
                 return f"Error: {str(e)}"
         
         # Create FunctionTool with our tool's metadata
+        # Note: FunctionTool uses params_json_schema, not parameters
         return FunctionTool(
             name=tool.name,
             description=tool.description,
-            parameters=tool.parameters,
-            function=tool_function,
+            params_json_schema=tool.parameters,
+            on_invoke_tool=on_invoke_tool,
+            strict_json_schema=False,
         )
     
     def get_config(self) -> Dict[str, Any]:

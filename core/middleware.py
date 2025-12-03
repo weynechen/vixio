@@ -40,7 +40,7 @@ class Middleware(ABC):
             name: Middleware name for logging (defaults to class name)
         """
         self.name = name or self.__class__.__name__
-        self.logger = logger.bind(middleware=self.name)
+        self.logger = logger.bind(component=self.name)
         self.station: Optional['Station'] = None
     
     def attach(self, station: 'Station') -> None:
@@ -54,7 +54,7 @@ class Middleware(ABC):
             station: The station this middleware is attached to
         """
         self.station = station
-        self.logger = logger.bind(station=station.name, middleware=self.name)
+        self.logger = logger.bind(component=self.name, attached_to=station.name)
     
     @abstractmethod
     async def process(

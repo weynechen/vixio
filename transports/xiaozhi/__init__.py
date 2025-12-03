@@ -10,11 +10,13 @@ from transports.xiaozhi.protocol import (
     XiaozhiMessageType,
     XiaozhiControlAction,
 )
+from transports.xiaozhi.device_tools import XiaozhiDeviceToolClient
 
 __all__ = [
     "XiaozhiTransport",
     "XiaozhiProtocol",
     "XiaozhiMessageType",
     "XiaozhiControlAction",
+    "XiaozhiDeviceToolClient",
 ]
 

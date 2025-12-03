@@ -1,9 +1,9 @@
 - [x] 延时计算有BUG，有负数产生，需要搞清楚责任链和装饰器怎么工作
-- [ ] transport 需要抽象和解耦 → 设计文档已完成: [transport_architecture.md](./transport_architecture.md)
-- [ ] function tool 需要接入
+- [x] transport 需要抽象和解耦 → 已完成: [transport_architecture.md](./transport_architecture.md)
+- [ ] function tool 需要接入 → 设计文档: [function_tool_design.md](./function_tool_design.md)
 - [ ] 接入video
-- [ ] 更新intranscribe
 - [ ] 更改pipeline为DAG，充分解耦各个station的依赖
+- [ ] 更新intranscribe
 
 
 ┌─────────────────────────────────────────────────────────────────────┐

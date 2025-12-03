@@ -50,7 +50,7 @@ class Pipeline:
         self._session_id = session_id
         self.name = name or "Pipeline"
         self.queue_size = queue_size
-        self.logger = logger.bind(pipeline=self.name)
+        self.logger = logger.bind(component=self.name)
         
         # Runtime state
         self.queues: List[asyncio.Queue] = []
@@ -105,7 +105,7 @@ class Pipeline:
             self._propagate_session_id()
             # Also update pipeline's own logger
             session_id_short = value[:8] if len(value) > 8 else value
-            self.logger = logger.bind(pipeline=self.name, session_id=session_id_short)
+            self.logger = logger.bind(component=self.name, session_id=session_id_short)
     
     def _propagate_control_bus(self) -> None:
         """Propagate control_bus to all stations."""

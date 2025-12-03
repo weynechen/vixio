@@ -37,7 +37,7 @@ class Station(ABC):
         """
         self.name = name or self.__class__.__name__
         self._session_id: Optional[str] = None
-        self.logger = logger.bind(station=self.name)
+        self.logger = logger.bind(component=self.name)
         
         # Turn tracking
         self.current_turn_id = 0
@@ -122,7 +122,7 @@ class Station(ABC):
         # Truncate to 8 chars for readability
         session_id_short = session_id[:8] if session_id and len(session_id) > 8 else (session_id or "--------")
         # Rebind logger with session_id
-        self.logger = logger.bind(station=self.name, session_id=session_id_short)
+        self.logger = logger.bind(component=self.name, session_id=session_id_short)
     
     @abstractmethod
     async def process_chunk(self, chunk: Chunk) -> AsyncIterator[Chunk]:

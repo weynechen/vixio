@@ -47,7 +47,7 @@ class TransportBase(ABC):
     
     def __init__(self, name: str = "Transport"):
         self._name = name
-        self.logger = logger.bind(transport=name)
+        self.logger = logger.bind(component=name)
         
         # ============ Queue management (framework maintained) ============
         self._read_queues: Dict[str, asyncio.Queue] = {}   # session_id -> read queue

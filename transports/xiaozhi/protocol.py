@@ -21,6 +21,7 @@ class XiaozhiMessageType:
     CONTROL = "control"
     STATE = "state"
     ERROR = "error"
+    MCP = "mcp"  # MCP JSON-RPC messages (function tools)
 
 
 class XiaozhiControlAction:
@@ -64,7 +65,7 @@ class XiaozhiProtocol(ProtocolBase):
         self.sample_rate = sample_rate
         self.channels = channels
         self.frame_duration = frame_duration
-        self.logger = logger.bind(name="XiaozhiProtocol")
+        self.logger = logger.bind(component="XiaozhiProtocol")
     # ============ ProtocolBase interface implementation ============
     
     def decode_message(self, data: Union[bytes, str]) -> Dict[str, Any]:
@@ -217,6 +218,12 @@ class XiaozhiProtocol(ProtocolBase):
                 session_id=session_id,
                 turn_id=turn_id
             )
+        
+        # MCP message → None (handled directly by Transport, not Pipeline)
+        elif msg_type == XiaozhiMessageType.MCP:
+            # Return None to signal Transport to handle this specially
+            # MCP messages bypass Pipeline and go directly to DeviceToolClient
+            return None
         
         return None
     
@@ -402,6 +409,49 @@ class XiaozhiProtocol(ProtocolBase):
         
         message.update(kwargs)
         return message
+    
+    def create_mcp_message(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Create MCP message for sending to device.
+        
+        MCP messages wrap JSON-RPC payloads for device tool interactions.
+        
+        Args:
+            payload: JSON-RPC 2.0 payload (method, id, params, etc.)
+            
+        Returns:
+            MCP message dictionary ready for encoding
+        """
+        return {
+            "type": XiaozhiMessageType.MCP,
+            "payload": payload
+        }
+    
+    def is_mcp_message(self, message: Dict[str, Any]) -> bool:
+        """
+        Check if message is an MCP message.
+        
+        Args:
+            message: Parsed message dictionary
+            
+        Returns:
+            True if message type is MCP
+        """
+        return message.get("type") == XiaozhiMessageType.MCP
+    
+    def get_mcp_payload(self, message: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Extract MCP payload from message.
+        
+        Args:
+            message: Parsed MCP message
+            
+        Returns:
+            JSON-RPC payload or None if not MCP message
+        """
+        if self.is_mcp_message(message):
+            return message.get("payload")
+        return None
     
     # ============ Business interface layer implementation ============
     
