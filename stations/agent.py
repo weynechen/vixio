@@ -78,6 +78,24 @@ class AgentStation(StreamStation):
         self.agent = agent_provider
         self._streaming_generator: Optional[AsyncIterator] = None
     
+    def set_session_id(self, session_id: str) -> None:
+        """
+        Set session ID for this station and propagate to agent provider.
+        
+        This ensures the agent's conversation memory uses the same session_id
+        as the Pipeline (which comes from SessionManager's connection_id).
+        
+        Args:
+            session_id: Session identifier from SessionManager
+        """
+        # Call parent to set station's session_id and rebind logger
+        super().set_session_id(session_id)
+        
+        # Propagate session_id to agent provider for conversation memory
+        if hasattr(self.agent, 'set_session_id'):
+            self.agent.set_session_id(session_id)
+            self.logger.debug(f"Session ID propagated to agent provider: {session_id[:8]}...")
+    
     def _configure_middlewares_hook(self, middlewares: list) -> None:
         """
         Hook called when middlewares are attached.

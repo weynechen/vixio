@@ -10,7 +10,7 @@ from providers.registry import register_provider
 
 
 try:
-    from agents import Agent, Runner, FunctionTool
+    from agents import Agent, Runner, FunctionTool, SQLiteSession
     from agents.extensions.models.litellm_model import LitellmModel
     from agents.tool_context import ToolContext
     AGENTS_AVAILABLE = True
@@ -52,6 +52,8 @@ class OpenAIAgentProvider(AgentProvider):
         timeout: int = 300,
         top_p: Optional[float] = None,
         frequency_penalty: Optional[float] = None,
+        session_id: Optional[str] = None,
+        session_db_path: Optional[str] = None,
     ):
         """
         Initialize OpenAI Agent provider.
@@ -65,6 +67,8 @@ class OpenAIAgentProvider(AgentProvider):
             timeout: Request timeout in seconds
             top_p: Nucleus sampling parameter (optional)
             frequency_penalty: Frequency penalty parameter (optional)
+            session_id: Session ID for conversation memory (auto-generated if not provided)
+            session_db_path: Path to SQLite database file for session storage (in-memory if not provided)
         """
         if not AGENTS_AVAILABLE:
             raise RuntimeError(
@@ -95,6 +99,13 @@ class OpenAIAgentProvider(AgentProvider):
         self.timeout = timeout
         self.top_p = top_p
         self.frequency_penalty = frequency_penalty
+        
+        # Session configuration for conversation memory
+        # session_id is expected to be set externally (e.g., by SessionManager via AgentStation)
+        # If not provided, session will be created lazily when set_session_id() is called
+        self.session_id = session_id  # Can be None initially
+        self.session_db_path = session_db_path  # None = in-memory database
+        self.session: Optional[SQLiteSession] = None  # Created when session_id is set
         
         # Agent framework objects (created in initialize)
         self.model = None
@@ -150,6 +161,16 @@ class OpenAIAgentProvider(AgentProvider):
                 "type": "float",
                 "default": None,
                 "description": "Frequency penalty parameter (optional)"
+            },
+            "session_id": {
+                "type": "string",
+                "default": None,
+                "description": "Session ID for conversation memory (auto-generated if not provided)"
+            },
+            "session_db_path": {
+                "type": "string",
+                "default": None,
+                "description": "Path to SQLite database file for session storage (in-memory if not provided)"
             }
         }
     
@@ -170,6 +191,15 @@ class OpenAIAgentProvider(AgentProvider):
         self.logger.info("Initializing OpenAI Agent framework...")
         
         self.system_prompt = system_prompt or "You are a helpful AI assistant."
+        
+        # Create SQLiteSession for conversation memory (if session_id is already set)
+        # Otherwise, session will be created when set_session_id() is called
+        if self.session_id:
+            self._create_session()
+        else:
+            self.logger.info(
+                "Session not created yet - waiting for set_session_id() call"
+            )
         
         # Create LiteLLM model
         model_params = {
@@ -232,6 +262,12 @@ class OpenAIAgentProvider(AgentProvider):
         if not self._initialized:
             raise RuntimeError("Agent not initialized. Call initialize() first.")
         
+        if not self.session:
+            raise RuntimeError(
+                "Session not initialized. Ensure set_session_id() is called before chat(). "
+                "This typically happens via AgentStation when Pipeline receives session_id."
+            )
+        
         self.logger.debug(f"User message: {message[:100]}...")
         
         result = None
@@ -239,8 +275,8 @@ class OpenAIAgentProvider(AgentProvider):
             # Import required types for event filtering
             from openai.types.responses import ResponseTextDeltaEvent
             
-            # Use Runner.run_streamed for streaming responses
-            result = Runner.run_streamed(self.agent, input=message)
+            # Use Runner.run_streamed for streaming responses with session memory
+            result = Runner.run_streamed(self.agent, input=message, session=self.session)
             
             # Stream text deltas
             async for event in result.stream_events():
@@ -280,14 +316,16 @@ class OpenAIAgentProvider(AgentProvider):
     
     async def reset_conversation(self) -> None:
         """
-        Reset conversation.
+        Reset conversation by clearing session history.
         
-        Note: OpenAI Agents SDK manages conversation state via previous_response_id.
-        Each new run without previous_response_id starts a fresh conversation.
+        This clears all conversation history from the SQLiteSession,
+        allowing the agent to start a fresh conversation.
         """
-        # No explicit reset needed - each Runner.run() call without
-        # previous_response_id starts a fresh conversation
-        self.logger.info("Conversation reset (next run will start fresh)")
+        if self.session:
+            await self.session.clear_session()
+            self.logger.info(f"Conversation reset: session {self.session_id} cleared")
+        else:
+            self.logger.warning("Cannot reset conversation: session not initialized")
     
     async def add_tools(self, tools: List[Tool]) -> None:
         """
@@ -366,6 +404,67 @@ class OpenAIAgentProvider(AgentProvider):
         # But we can clear references
         self.agent = None
         self.model = None
+        self.session = None
+    
+    async def get_conversation_history(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+        """
+        Get conversation history from session.
+        
+        Args:
+            limit: Maximum number of items to return (None for all)
+            
+        Returns:
+            List of conversation items (messages)
+        """
+        if not self.session:
+            self.logger.warning("Cannot get history: session not initialized")
+            return []
+        
+        items = await self.session.get_items(limit=limit)
+        return items
+    
+    def _create_session(self) -> None:
+        """
+        Create SQLiteSession with current session_id.
+        
+        Internal method called during initialization or when session_id is set.
+        """
+        if not self.session_id:
+            self.logger.warning("Cannot create session: session_id is not set")
+            return
+        
+        if self.session_db_path:
+            self.session = SQLiteSession(self.session_id, self.session_db_path)
+            self.logger.info(
+                f"Created persistent SQLiteSession: id={self.session_id[:8]}..., "
+                f"db={self.session_db_path}"
+            )
+        else:
+            self.session = SQLiteSession(self.session_id)
+            self.logger.info(
+                f"Created in-memory SQLiteSession: id={self.session_id[:8]}..."
+            )
+    
+    def set_session_id(self, session_id: str) -> None:
+        """
+        Set session ID and create/switch session.
+        
+        This method is typically called by AgentStation when Pipeline receives
+        the session_id from SessionManager (connection_id).
+        
+        Args:
+            session_id: Session ID (typically connection_id from SessionManager)
+        """
+        old_session_id = self.session_id
+        self.session_id = session_id
+        
+        # Create new session
+        self._create_session()
+        
+        if old_session_id:
+            self.logger.info(f"Switched session: {old_session_id[:8]}... -> {session_id[:8]}...")
+        else:
+            self.logger.info(f"Session initialized: {session_id[:8]}...")
     
     def _convert_to_function_tool(self, tool: Tool) -> FunctionTool:
         """
@@ -422,6 +521,8 @@ class OpenAIAgentProvider(AgentProvider):
             "max_tokens": self.max_tokens,
             "base_url": self.base_url,
             "timeout": self.timeout,
+            "session_id": self.session_id,
+            "session_db_path": self.session_db_path,
         })
         return config
 
