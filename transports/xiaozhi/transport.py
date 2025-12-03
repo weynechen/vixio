@@ -317,7 +317,7 @@ class XiaozhiTransport(TransportBase):
         if client:
             payload = self._protocol.get_mcp_payload(message)
             if payload:
-                client.on_mcp_message(payload)
+                client.on_tools_message(payload)
                 return True
         else:
             self.logger.warning(f"No device tool client for session {session_id[:8]}")
@@ -336,71 +336,56 @@ class XiaozhiTransport(TransportBase):
         """
         return self._device_tool_clients.get(session_id)
     
-    # ============ Override read_worker for MCP message handling ============
+    # ============ Message handling hook (implements core hook) ============
     
-    async def _read_worker(self, session_id: str) -> None:
+    async def _on_message_received(self, session_id: str, data: Union[bytes, str]) -> bool:
         """
-        Read Worker (override for Xiaozhi-specific handling).
+        Handle Xiaozhi-specific messages before Pipeline.
         
-        Extended responsibilities:
-        1. Call _do_read() to read from connection
-        2. Detect hello message and initialize MCP if supported
-        3. Route MCP messages to DeviceToolClient (bypass Pipeline)
-        4. Put other messages into read_queue
+        Implements the core TransportBase._on_message_received() hook.
+        
+        Handles:
+        - hello message: Check for MCP support and initialize device tools
+        - mcp message: Route to DeviceToolClient (bypass Pipeline)
+        
+        Args:
+            session_id: Session ID
+            data: Raw message data
+            
+        Returns:
+            True if message was handled (skip Pipeline)
+            False if message should continue to Pipeline
         """
-        read_queue = self._read_queues[session_id]
+        # Only handle string messages (JSON)
+        if not isinstance(data, str):
+            return False  # Audio data goes to Pipeline
         
         try:
-            while True:
-                # Read from connection
-                data = await self._do_read(session_id)
-                
-                if data is None:
-                    # Connection closed
-                    break
-                
-                # Parse message for special handling
-                if isinstance(data, str):
-                    try:
-                        message = json.loads(data)
-                        msg_type = message.get("type")
-                        
-                        # Handle hello message - check for MCP support
-                        if msg_type == "hello":
-                            features = message.get("features", {})
-                            if features.get("mcp"):
-                                self.logger.info(f"Device supports MCP, initializing tools for session {session_id[:8]}")
-                                # Start MCP initialization in background
-                                asyncio.create_task(self._init_device_tools(session_id))
-                            # Still pass hello to Pipeline for normal processing
-                            await read_queue.put(data)
-                            continue
-                        
-                        # Handle MCP messages - route to DeviceToolClient
-                        if msg_type == "mcp":
-                            if self._route_mcp_message(session_id, message):
-                                # MCP message handled, don't pass to Pipeline
-                                continue
-                            else:
-                                self.logger.warning(f"MCP message not handled for session {session_id[:8]}")
-                                continue
-                    
-                    except json.JSONDecodeError:
-                        pass  # Not JSON, treat as regular message
-                
-                # Put into queue (audio and other messages)
-                await read_queue.put(data)
+            message = json.loads(data)
+            msg_type = message.get("type")
+            
+            # Handle hello message - check for MCP support
+            if msg_type == "hello":
+                features = message.get("features", {})
+                if features.get("mcp"):
+                    self.logger.info(f"Device supports MCP, initializing tools for session {session_id[:8]}")
+                    # Start MCP initialization in background
+                    asyncio.create_task(self._init_device_tools(session_id))
+                # hello still goes to Pipeline for normal handshake processing
+                return False
+            
+            # Handle MCP messages - route to DeviceToolClient
+            if msg_type == "mcp":
+                if self._route_mcp_message(session_id, message):
+                    return True  # MCP handled, skip Pipeline
+                else:
+                    self.logger.warning(f"MCP message not handled for session {session_id[:8]}")
+                    return True  # Still skip Pipeline even if not handled
         
-        except asyncio.CancelledError:
-            self.logger.debug(f"Read worker cancelled for session {session_id[:8]}")
-        except ConnectionError as e:
-            self.logger.debug(f"Connection closed for session {session_id[:8]}: {e}")
-        except Exception as e:
-            self.logger.error(f"Error in read worker for session {session_id[:8]}: {e}")
+        except json.JSONDecodeError:
+            pass  # Not JSON, let it go to Pipeline
         
-        finally:
-            # Put None to signal stream end
-            await read_queue.put(None)
+        return False  # Pass to Pipeline
     
     def _is_audio_message(self, data: Union[bytes, str]) -> bool:
         """Check if message is audio"""

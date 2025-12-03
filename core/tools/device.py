@@ -16,7 +16,7 @@ class DeviceToolClientBase(ABC):
     Abstract base class for device tool client.
     
     Responsibilities:
-    - Initialize MCP connection with device
+    - Initialize tools connection with device
     - Fetch tool list from device
     - Execute tool calls on device
     - Handle tool call results
@@ -40,9 +40,9 @@ class DeviceToolClientBase(ABC):
     @abstractmethod
     async def initialize(self) -> bool:
         """
-        Initialize MCP connection and fetch tool list.
+        Initialize tools connection and fetch tool list.
         
-        Sends MCP initialize and tools/list requests to device.
+        Sends tools initialize and tools/list requests to device.
         Stores tool definitions internally.
         
         Returns:
@@ -82,15 +82,15 @@ class DeviceToolClientBase(ABC):
         pass
     
     @abstractmethod
-    def on_mcp_message(self, payload: Dict[str, Any]) -> None:
+    def on_tools_message(self, payload: Dict[str, Any]) -> None:
         """
-        Handle incoming MCP message from device.
+        Handle incoming tools message from device.
         
-        Called by Transport when receiving MCP response.
+        Called by Transport when receiving tools response.
         Routes to appropriate handler based on message type.
         
         Args:
-            payload: MCP JSON-RPC payload (without type="mcp" wrapper)
+            payload: tools JSON-RPC payload (without type="tools" wrapper) , or any other implementation of the tools protocol
         """
         pass
     

@@ -380,7 +380,11 @@ class TransportBase(ABC):
         
         Responsibilities:
         1. Call _do_read() to read from connection
-        2. Put into read_queue
+        2. Call _on_message_received() hook for special message handling
+        3. Put unhandled messages into read_queue for Pipeline
+        
+        Subclasses should NOT override this method. Instead, override
+        _on_message_received() to handle protocol-specific messages.
         """
         read_queue = self._read_queues[session_id]
         
@@ -393,7 +397,12 @@ class TransportBase(ABC):
                     # Connection closed
                     break
                 
-                # Put into queue
+                # Hook: let subclass handle special messages (e.g., MCP, control)
+                # Returns True if message was handled and should NOT go to Pipeline
+                if await self._on_message_received(session_id, data):
+                    continue
+                
+                # Normal messages go to Pipeline
                 await read_queue.put(data)
         
         except asyncio.CancelledError:
@@ -406,6 +415,34 @@ class TransportBase(ABC):
         finally:
             # Put None to signal stream end
             await read_queue.put(None)
+    
+    async def _on_message_received(self, session_id: str, data: Union[bytes, str]) -> bool:
+        """
+        Hook for handling special messages before they enter Pipeline.
+        
+        Override in subclass to handle protocol-specific messages that:
+        - Need special routing (e.g., MCP messages to DeviceToolClient)
+        - Should bypass the Pipeline entirely
+        - Require side effects before Pipeline processing
+        
+        Args:
+            session_id: Session ID
+            data: Raw message data (bytes for audio, str for JSON)
+            
+        Returns:
+            True if message was fully handled (skip Pipeline)
+            False if message should continue to Pipeline
+            
+        Example:
+            async def _on_message_received(self, session_id, data):
+                if isinstance(data, str):
+                    msg = json.loads(data)
+                    if msg.get("type") == "mcp":
+                        self._route_mcp_message(session_id, msg)
+                        return True  # Handled, skip Pipeline
+                return False  # Pass to Pipeline
+        """
+        return False  # Default: pass all messages to Pipeline
     
     async def _send_worker(self, session_id: str) -> None:
         """

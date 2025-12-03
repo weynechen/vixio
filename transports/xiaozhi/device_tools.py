@@ -36,7 +36,7 @@ class XiaozhiDeviceToolClient(DeviceToolClientBase):
             tool_defs = client.get_tool_definitions()
         
         # Handle incoming MCP messages (called by Transport)
-        client.on_mcp_message(payload)
+        client.on_tools_message(payload)
         
         # Call a tool (triggered by agent)
         result = await client.call_tool("play_music", {"query": "周杰伦"})
@@ -231,7 +231,7 @@ class XiaozhiDeviceToolClient(DeviceToolClientBase):
         
         return definitions
     
-    def on_mcp_message(self, payload: Dict[str, Any]) -> None:
+    def on_tools_message(self, payload: Dict[str, Any]) -> None:
         """
         Handle incoming MCP message from device.
         
