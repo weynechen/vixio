@@ -4,6 +4,7 @@ OpenAI Agent provider implementation using OpenAI Agents framework and LiteLLM
 
 import asyncio
 from typing import Any, AsyncIterator, Dict, List, Optional
+from . import dump_promt
 from providers.agent import AgentProvider, Tool
 from providers.registry import register_provider
 
@@ -99,6 +100,7 @@ class OpenAIAgentProvider(AgentProvider):
         self.model = None
         self.agent = None
         self.system_prompt = None
+        self._current_tools: List[Tool] = []  # Track current tools for add_tools
         
         self.logger.info(
             f"OpenAI Agent provider created: model={model}, "
@@ -181,15 +183,15 @@ class OpenAIAgentProvider(AgentProvider):
         self.logger.info(f"Model params: {model_params}")
         self.model = LitellmModel(**model_params)
         
-        # Convert tools to FunctionTool format
+        # Store and convert tools to FunctionTool format
+        self._current_tools = list(tools) if tools else []
         function_tools = []
-        if tools:
-            for tool in tools:
-                try:
-                    func_tool = self._convert_to_function_tool(tool)
-                    function_tools.append(func_tool)
-                except Exception as e:
-                    self.logger.error(f"Failed to convert tool {tool.name}: {e}")
+        for tool in self._current_tools:
+            try:
+                func_tool = self._convert_to_function_tool(tool)
+                function_tools.append(func_tool)
+            except Exception as e:
+                self.logger.error(f"Failed to convert tool {tool.name}: {e}")
         
         self.logger.info(f"Registered {len(function_tools)} tools")
         
@@ -287,31 +289,65 @@ class OpenAIAgentProvider(AgentProvider):
         # previous_response_id starts a fresh conversation
         self.logger.info("Conversation reset (next run will start fresh)")
     
-    async def update_tools(self, tools: List[Tool]) -> None:
+    async def add_tools(self, tools: List[Tool]) -> None:
         """
-        Update agent's available tools.
+        Add tools to agent's available tools.
         
-        Recreates the Agent with new tools while preserving other settings.
+        Appends new tools to existing tools and recreates the Agent.
         
         Args:
-            tools: New list of tools
+            tools: Tools to add (appended to existing tools)
+        """
+        if not self._initialized:
+            self.logger.warning("Cannot add tools: agent not initialized")
+            return
+        
+        # Append new tools to existing tools
+        existing_names = {t.name for t in self._current_tools}
+        new_tools = [t for t in tools if t.name not in existing_names]
+        
+        if not new_tools:
+            self.logger.info("No new tools to add (all already exist)")
+            return
+        
+        self._current_tools.extend(new_tools)
+        self.logger.info(
+            f"Adding {len(new_tools)} tools to existing {len(self._current_tools) - len(new_tools)} tools"
+        )
+        
+        # Rebuild agent with all tools
+        await self._rebuild_agent_with_current_tools()
+    
+    async def update_tools(self, tools: List[Tool]) -> None:
+        """
+        Replace all agent's tools with new list.
+        
+        WARNING: This replaces ALL existing tools. Use add_tools() to append.
+        
+        Args:
+            tools: New list of tools (replaces ALL existing tools)
         """
         if not self._initialized:
             self.logger.warning("Cannot update tools: agent not initialized")
             return
         
-        self.logger.info(f"Updating agent with {len(tools)} tools")
+        self._current_tools = list(tools)
+        self.logger.info(f"Replacing all tools with {len(tools)} new tools")
         
+        await self._rebuild_agent_with_current_tools()
+    
+    async def _rebuild_agent_with_current_tools(self) -> None:
+        """Rebuild agent with current tool list."""
         # Convert tools to FunctionTool format
         function_tools = []
-        for tool in tools:
+        for tool in self._current_tools:
             try:
                 func_tool = self._convert_to_function_tool(tool)
                 function_tools.append(func_tool)
             except Exception as e:
                 self.logger.error(f"Failed to convert tool {tool.name}: {e}")
         
-        # Recreate agent with new tools
+        # Recreate agent with all tools
         self.agent = Agent(
             name=self.name,
             model=self.model,
@@ -319,7 +355,7 @@ class OpenAIAgentProvider(AgentProvider):
             tools=function_tools,
         )
         
-        self.logger.info(f"Agent updated with {len(function_tools)} tools")
+        self.logger.info(f"Agent rebuilt with {len(function_tools)} tools")
     
     async def cleanup(self) -> None:
         """

@@ -44,6 +44,8 @@ from pathlib import Path
 from loguru import logger
 from core.pipeline import Pipeline
 from core.session import SessionManager
+from core.tools import get_builtin_local_tools
+from providers.agent import Tool
 from transports.xiaozhi import XiaozhiTransport
 from stations import (
     VADStation,
@@ -273,7 +275,24 @@ async def main():
             await asr_provider.initialize()
         
         agent_provider = session_providers["agent"]
-        await agent_provider.initialize(system_prompt=agent_system_prompt)
+        
+        # Convert builtin local tools to Agent Tool format
+        local_tool_defs = get_builtin_local_tools()
+        local_tools = [
+            Tool(
+                name=td.name,
+                description=td.description,
+                parameters=td.parameters,
+                executor=td.executor
+            )
+            for td in local_tool_defs
+        ]
+        logger.info(f"Loaded {len(local_tools)} local tools: {[t.name for t in local_tools]}")
+        
+        await agent_provider.initialize(
+            tools=local_tools,
+            system_prompt=agent_system_prompt
+        )
         
         tts_provider = session_providers["tts"]
         # TTS providers may not need explicit initialization

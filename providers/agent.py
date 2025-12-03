@@ -111,16 +111,30 @@ class AgentProvider(BaseProvider):
         """
         pass
     
-    async def update_tools(self, tools: List[Tool]) -> None:
+    async def add_tools(self, tools: List[Tool]) -> None:
         """
-        Update agent's available tools.
+        Add tools to agent's available tools.
         
         Called when device tools become available after initialization.
+        Should APPEND to existing tools, not replace them.
         Default implementation does nothing - override if framework supports
         dynamic tool updates.
         
         Args:
-            tools: New list of tools (replaces existing tools)
+            tools: Tools to add (appended to existing tools)
+        """
+        pass
+    
+    async def update_tools(self, tools: List[Tool]) -> None:
+        """
+        Replace all agent's tools with new list.
+        
+        WARNING: This replaces all existing tools. Use add_tools() to append.
+        Default implementation does nothing - override if framework supports
+        dynamic tool updates.
+        
+        Args:
+            tools: New list of tools (replaces ALL existing tools)
         """
         pass
     

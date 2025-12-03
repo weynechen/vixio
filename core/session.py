@@ -440,7 +440,7 @@ class SessionManager:
         # Find AgentStation in pipeline
         agent_station = None
         for station in pipeline.stations:
-            if hasattr(station, 'agent') and hasattr(station.agent, 'update_tools'):
+            if hasattr(station, 'agent') and hasattr(station.agent, 'add_tools'):
                 agent_station = station
                 break
         
@@ -490,16 +490,16 @@ class SessionManager:
             
             tools.append(tool)
         
-        # Update agent tools
+        # Add device tools to agent (appends to existing tools)
         try:
-            await agent_station.agent.update_tools(tools)
+            await agent_station.agent.add_tools(tools)
             self.logger.info(
-                f"Updated AgentStation with {len(tools)} device tools for "
+                f"Added {len(tools)} device tools to AgentStation for "
                 f"connection {connection_id[:8]}"
             )
         except Exception as e:
             self.logger.error(
-                f"Failed to update agent tools for connection {connection_id[:8]}: {e}"
+                f"Failed to add device tools for connection {connection_id[:8]}: {e}"
             )
     
     def _cleanup_session(self, connection_id: str) -> None:
