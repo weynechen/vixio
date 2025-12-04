@@ -11,6 +11,9 @@ from transports.xiaozhi.protocol import (
     XiaozhiControlAction,
 )
 from transports.xiaozhi.device_tools import XiaozhiDeviceToolClient
+from transports.xiaozhi.auth import XiaozhiAuth, generate_mqtt_password
+from transports.xiaozhi.ota_router import create_ota_router
+from transports.xiaozhi.vision_router import create_vision_router
 
 __all__ = [
     "XiaozhiTransport",
@@ -18,5 +21,9 @@ __all__ = [
     "XiaozhiMessageType",
     "XiaozhiControlAction",
     "XiaozhiDeviceToolClient",
+    "XiaozhiAuth",
+    "generate_mqtt_password",
+    "create_ota_router",
+    "create_vision_router",
 ]
 

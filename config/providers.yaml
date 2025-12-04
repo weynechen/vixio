@@ -59,6 +59,14 @@ dev:
         lang: "zh"
         sample_rate: 24000  # Kokoro 原生采样率
 
+    vlm:
+      provider: openai-compatible-vlm
+      config:
+        model: "glm-4v-flash"
+        api_key: "${GLM_API_KEY}"
+        base_url: "https://open.bigmodel.cn/api/paas/v4"
+      
+
 # ==============================================================================
 # Docker Mode
 # ==============================================================================

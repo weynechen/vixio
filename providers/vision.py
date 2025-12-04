@@ -7,13 +7,16 @@ This module provides:
 - VisionStrategy: Abstract base for vision processing strategies
 - DescribeStrategy: Single-modal strategy (image -> description -> LLM)
 - PassthroughStrategy: Multi-modal strategy (image + text -> VLM)
+- VisionDescriber: Base class for vision describers (inherits BaseProvider)
 """
 
-from abc import ABC, abstractmethod
+from abc import abstractmethod, ABC
 from dataclasses import dataclass, field
-from typing import Optional, List, Any
+from typing import Optional, List, Any, Dict
 import time
 import base64
+
+from providers.base import BaseProvider
 
 
 @dataclass
@@ -211,14 +214,66 @@ class DescribeStrategy(VisionStrategy):
         return MultimodalMessage(text=enhanced_text, images=None)
 
 
-class VisionDescriber(ABC):
+class VisionDescriber(BaseProvider):
     """
     Vision describer base class.
     
-    Converts images to text descriptions for single-modal strategy.
+    Inherits from BaseProvider to integrate with ProviderFactory.
+    Converts images to text descriptions / answers.
     
     Key design: describe() needs user's query to provide relevant descriptions.
+    
+    Default BaseProvider properties:
+    - is_local: False (typically cloud API)
+    - is_stateful: False (stateless)
+    - category: "vlm"
     """
+    
+    # ============ BaseProvider implementations ============
+    
+    @property
+    def is_local(self) -> bool:
+        """VLM providers are typically remote (cloud API)."""
+        return False
+    
+    @property
+    def is_stateful(self) -> bool:
+        """VLM providers are stateless."""
+        return False
+    
+    @property
+    def category(self) -> str:
+        """Provider category."""
+        return "vlm"
+    
+    @classmethod
+    def get_config_schema(cls) -> Dict[str, Any]:
+        """
+        Return configuration schema.
+        
+        Subclasses should override this to provide their specific schema.
+        """
+        return {}
+    
+    async def initialize(self) -> None:
+        """
+        Initialize the provider.
+        
+        Default implementation does nothing.
+        Subclasses can override if needed (e.g., for connection pooling).
+        """
+        pass
+    
+    async def cleanup(self) -> None:
+        """
+        Cleanup provider resources.
+        
+        Default implementation does nothing.
+        Subclasses can override if needed.
+        """
+        pass
+    
+    # ============ VisionDescriber specific ============
     
     @abstractmethod
     async def describe(
@@ -234,6 +289,6 @@ class VisionDescriber(ABC):
             query: User's question (guides description focus)
             
         Returns:
-            Targeted image description
+            Targeted image description / answer
         """
         pass

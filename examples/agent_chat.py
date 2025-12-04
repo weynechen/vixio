@@ -192,6 +192,11 @@ async def main():
         logger.error(f"Config file not found: {config_path}")
         return
     
+    # Load raw config for transport (contains server settings, providers, etc.)
+    import yaml
+    with open(config_path) as f:
+        raw_config = yaml.safe_load(f)
+    
     try:
         # Load all providers from config
         providers_dict = ProviderFactory.create_from_config_file(
@@ -239,7 +244,8 @@ async def main():
     transport = XiaozhiTransport(
         host="0.0.0.0",
         port=8000,
-        websocket_path="/xiaozhi/v1/"
+        websocket_path="/xiaozhi/v1/",
+        config=raw_config,  # Pass config for VLM and other settings
     )
     
     # Step 3: Create async pipeline factory

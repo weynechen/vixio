@@ -28,7 +28,7 @@ class XiaozhiDeviceToolClient(DeviceToolClientBase):
     - Executes tool calls and waits for responses
     
     Usage:
-        client = XiaozhiDeviceToolClient(send_callback, session_id)
+        client = XiaozhiDeviceToolClient(send_callback, session_id, vision_config)
         
         # Initialize (called by Transport after hello handshake)
         if await client.initialize():
@@ -51,6 +51,7 @@ class XiaozhiDeviceToolClient(DeviceToolClientBase):
         send_callback: Callable[[Dict[str, Any]], Awaitable[None]],
         session_id: str,
         timeout: float = 30.0,
+        vision_config: Optional[Dict[str, str]] = None,
     ):
         """
         Initialize Xiaozhi device tool client.
@@ -60,10 +61,13 @@ class XiaozhiDeviceToolClient(DeviceToolClientBase):
                            Signature: async def send(message: Dict) -> None
             session_id: Session ID for logging
             timeout: Default timeout for tool calls
+            vision_config: Optional vision config with 'url' and 'token' keys
+                          Will be sent in MCP initialize capabilities.vision
         """
         self._send_callback = send_callback
         self._session_id = session_id
         self._timeout = timeout
+        self._vision_config = vision_config  # {"url": "...", "token": "..."}
         
         # Tool storage
         self._tools: Dict[str, Dict[str, Any]] = {}  # sanitized_name -> tool_data
@@ -292,14 +296,25 @@ class XiaozhiDeviceToolClient(DeviceToolClientBase):
         await self._send_callback(message)
     
     async def _send_initialize(self) -> None:
-        """Send MCP initialize request."""
+        """Send MCP initialize request with vision capabilities."""
+        # Build capabilities
+        capabilities: Dict[str, Any] = {
+            "roots": {"listChanged": True},
+            "sampling": {},
+        }
+        
+        # Add vision config if available
+        if self._vision_config:
+            capabilities["vision"] = self._vision_config
+            self.logger.debug(f"Including vision config: url={self._vision_config.get('url', '')[:50]}...")
+        
         payload = {
             "jsonrpc": "2.0",
             "id": self.MCP_INITIALIZE_ID,
             "method": "initialize",
             "params": {
                 "protocolVersion": "2024-11-05",
-                "capabilities": {},
+                "capabilities": capabilities,
                 "clientInfo": {
                     "name": "VixioServer",
                     "version": "1.0.0"

@@ -82,6 +82,9 @@ class ServiceManager:
         
         services = []
         for category, provider_config in providers_config.items():
+            if provider_config is None:
+                logger.warning(f"Provider config for '{category}' is empty (check YAML indentation)")
+                continue
             provider_name = provider_config.get("provider")
             
             if provider_name in self.SERVICE_MAP:

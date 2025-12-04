@@ -6,8 +6,7 @@ Combines multiple describers into one.
 
 from typing import List
 from loguru import logger
-from providers.vision import ImageContent
-from providers.vision_describers.base import VisionDescriber
+from providers.vision import ImageContent, VisionDescriber
 
 
 class CompositeDescriber(VisionDescriber):

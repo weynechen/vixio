@@ -1,18 +1,23 @@
 """
-Vision describers - implementations for image-to-text conversion
+Vision describers - implementations for image analysis
 
 Available describers:
-- VLMDescriber: Use VLM (GLM-4V, GPT-4o-mini) for description
+- OpenAICompatibleVLM: OpenAI-compatible VLM (GPT-4o, GLM-4V, etc.)
 - CompositeDescriber: Combine multiple describers
+
+Each describer implements VisionDescriber interface and handles
+image format conversion internally based on provider requirements.
+
+Note: VisionDescriber base class is defined in providers.vision
 """
 
-from providers.vision_describers.base import VisionDescriber
-from providers.vision_describers.vlm import VLMDescriber
+from providers.vision import VisionDescriber
+from providers.vision_describers.openai_compatible import OpenAICompatibleVLM, VLMDescriber
 from providers.vision_describers.composite import CompositeDescriber
 
 __all__ = [
     "VisionDescriber",
-    "VLMDescriber", 
+    "OpenAICompatibleVLM",
+    "VLMDescriber",  # Backward compatibility alias
     "CompositeDescriber",
 ]
-

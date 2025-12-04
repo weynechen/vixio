@@ -28,6 +28,9 @@ from providers.silero_vad.grpc_provider import LocalSileroVADProvider
 from providers.sherpa_onnx_local.grpc_provider import LocalSherpaASRProvider
 from providers.kokoro.grpc_provider import LocalKokoroTTSProvider
 
+# Vision describers (auto-registered via @register_provider decorator)
+from providers.vision_describers.openai_compatible import OpenAICompatibleVLM
+
 __all__ = [
     # Interfaces
     "BaseProvider",
@@ -48,5 +51,7 @@ __all__ = [
     "LocalSileroVADProvider",
     "LocalSherpaASRProvider",
     "LocalKokoroTTSProvider",
+    # Vision Describers
+    "OpenAICompatibleVLM",
 ]
 

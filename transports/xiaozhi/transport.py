@@ -7,11 +7,9 @@ Provides WebSocket and HTTP endpoints using FastAPI
 import asyncio
 import uuid
 import json
-import time
-import base64
-from typing import Dict, Optional, Callable, Coroutine, Any, Union, List, TYPE_CHECKING, Awaitable
+from typing import Dict, Optional, Callable, Any, Union, List, TYPE_CHECKING, Awaitable
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request, Header, Query
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query
 from fastapi.responses import JSONResponse
 import uvicorn
 from loguru import logger
@@ -20,7 +18,10 @@ from core.transport import TransportBase
 from core.protocol import ProtocolBase
 from transports.xiaozhi.protocol import XiaozhiProtocol
 from transports.xiaozhi.flow_control import AudioFlowController
-from utils import get_local_ip, AuthManager, generate_password_signature, get_latency_monitor
+from transports.xiaozhi.ota_router import create_ota_router
+from transports.xiaozhi.vision_router import create_vision_router
+from transports.xiaozhi.auth import XiaozhiAuth, generate_mqtt_password
+from utils import get_local_ip, get_latency_monitor
 from utils.audio import get_opus_codec, OPUS_AVAILABLE
 
 if TYPE_CHECKING:
@@ -88,6 +89,10 @@ class XiaozhiTransport(TransportBase):
         self._device_tool_clients: Dict[str, 'XiaozhiDeviceToolClient'] = {}
         self._device_tools_callback: Optional[Callable[[str, List], Awaitable[None]]] = None
         
+        # ============ Session-Device mapping (for database association) ============
+        # Maps session_id -> device_id after device sends hello message
+        self._session_device_map: Dict[str, str] = {}
+        
         # ============ Protocol instance (shared) ============
         self._protocol: Optional[XiaozhiProtocol] = None
         
@@ -113,12 +118,18 @@ class XiaozhiTransport(TransportBase):
         self.allowed_devices = set(auth_config.get("allowed_devices", []))
         
         secret_key = server_config.get("auth_key", "default_secret_key")
-        expire_seconds = auth_config.get("expire_seconds", 60 * 60 * 24 * 30)
+        ota_expire_seconds = auth_config.get("expire_seconds", 60 * 60 * 24 * 30)
+        vision_expire_seconds = auth_config.get("vision_expire_seconds", 60 * 60 * 24)
         
-        self.auth_manager = AuthManager(
+        # Use unified XiaozhiAuth for both OTA and Vision authentication
+        self.auth = XiaozhiAuth(
             secret_key=secret_key,
-            expire_seconds=expire_seconds
+            ota_expire_seconds=ota_expire_seconds,
+            vision_expire_seconds=vision_expire_seconds
         )
+        
+        # Backward compatibility alias
+        self.auth_manager = self.auth
     
     # ============ TransportBase abstract method implementations ============
     
@@ -250,6 +261,76 @@ class XiaozhiTransport(TransportBase):
         client = self._device_tool_clients.pop(session_id, None)
         if client:
             client.cancel_all()
+        
+        # Cleanup session-device mapping
+        self._session_device_map.pop(session_id, None)
+    
+    async def on_pipeline_ready(self, session_id: str) -> None:
+        """
+        Send hello handshake message when pipeline is ready.
+        """
+        protocol = self.get_protocol()
+        handshake_msg = protocol.handshake(session_id)
+        
+        if handshake_msg:
+            encoded = protocol.encode_message(handshake_msg)
+            await self._do_write(session_id, encoded)
+            self.logger.info(f"Handshake sent for session {session_id[:8]}")
+    
+    def _get_vision_config(self, device_id: str) -> dict:
+        """
+        Get vision configuration for MCP initialize capabilities.
+        
+        Returns dict with 'url' and 'token' keys matching xiaozhi-server format.
+        Used in MCP initialize message: capabilities.vision = {...}
+        
+        Args:
+            device_id: Device ID for token generation
+            
+        Returns:
+            Dict with 'url' and 'token' keys
+        """
+        server_config = self.config.get("server", {})
+        vision_explain = server_config.get("vision_explain", "")
+        
+        # Auto-generate vision_explain URL if not configured
+        if not vision_explain or "你的" in vision_explain:
+            local_ip = get_local_ip()
+            vision_explain = f"http://{local_ip}:{self.port}/mcp/vision/explain"
+        
+        # Generate vision token using XiaozhiAuth
+        token = self.auth.generate_vision_token(device_id)
+        
+        return {
+            "url": vision_explain,
+            "token": token,
+        }
+    
+    def register_device(self, session_id: str, device_id: str) -> None:
+        """
+        Register device_id for a session.
+        
+        Called after processing device's hello message.
+        Enables session_id -> device_id lookup for database association.
+        
+        Args:
+            session_id: Session ID
+            device_id: Device ID (MAC address)
+        """
+        self._session_device_map[session_id] = device_id
+        self.logger.info(f"Registered device {device_id} for session {session_id[:8]}")
+    
+    def get_device_id(self, session_id: str) -> Optional[str]:
+        """
+        Get device_id for a session.
+        
+        Args:
+            session_id: Session ID
+            
+        Returns:
+            Device ID or None if not registered
+        """
+        return self._session_device_map.get(session_id)
     
     # ============ Device tools (MCP) support ============
     
@@ -281,11 +362,17 @@ class XiaozhiTransport(TransportBase):
             encoded = self._protocol.encode_message(message)
             await self._do_write(session_id, encoded)
         
-        # Create client
+        # Get vision config for MCP initialize message
+        # At this point we may have device_id from hello message
+        device_id = self._session_device_map.get(session_id, session_id)
+        vision_config = self._get_vision_config(device_id)
+        
+        # Create client with vision config
         client = XiaozhiDeviceToolClient(
             send_callback=send_mcp_message,
             session_id=session_id,
-            timeout=30.0
+            timeout=30.0,
+            vision_config=vision_config,
         )
         self._device_tool_clients[session_id] = client
         
@@ -548,6 +635,8 @@ class XiaozhiTransport(TransportBase):
     def _setup_routes(self) -> None:
         """Setup FastAPI routes"""
         
+        # ============ Basic endpoints ============
+        
         @self.app.get("/")
         async def root():
             """Root endpoint - server info"""
@@ -575,177 +664,27 @@ class XiaozhiTransport(TransportBase):
                 "sessions": list(self._connections.keys()),
             })
         
-        # OTA endpoint - GET
-        @self.app.get("/xiaozhi/ota/")
-        async def ota_get():
-            """Handle OTA GET request"""
-            try:
-                websocket_url = self._get_websocket_url()
-                message = f"OTA interface is running, websocket URL sent to device: {websocket_url}"
-                return JSONResponse({
-                    "message": message,
-                    "websocket_url": websocket_url,
-                    "status": "available",
-                })
-            except Exception as e:
-                self.logger.error(f"OTA GET request error: {e}")
-                return JSONResponse({
-                    "message": "OTA interface error",
-                    "status": "error",
-                })
+        # ============ Include routers ============
         
-        # OTA endpoint - POST
-        @self.app.post("/xiaozhi/ota/")
-        async def ota_post(
-            request: Request,
-            device_id: Optional[str] = Header(None, alias="device-id"),
-            client_id: Optional[str] = Header(None, alias="client-id"),
-        ):
-            """Handle OTA POST request"""
-            try:
-                body = await request.body()
-                body_text = body.decode("utf-8")
-                
-                self.logger.debug(f"OTA request method: {request.method}")
-                self.logger.debug(f"OTA request headers: {request.headers}")
-                self.logger.debug(f"OTA request data: {body_text}")
-                
-                if not device_id:
-                    raise ValueError("OTA request device-id header is empty")
-                
-                self.logger.info(f"OTA request device ID: {device_id}")
-                
-                if not client_id:
-                    raise ValueError("OTA request client-id header is empty")
-                
-                self.logger.info(f"OTA request client ID: {client_id}")
-                
-                data_json = json.loads(body_text)
-                
-                server_config = self.config.get("server", {})
-                
-                return_json = {
-                    "server_time": {
-                        "timestamp": int(round(time.time() * 1000)),
-                        "timezone_offset": server_config.get("timezone_offset", 8) * 60,
-                    },
-                    "firmware": {
-                        "version": data_json.get("application", {}).get("version", "1.0.0"),
-                        "url": "",
-                    },
-                }
-                
-                mqtt_gateway_endpoint = server_config.get("mqtt_gateway")
-                
-                if mqtt_gateway_endpoint:
-                    # MQTT gateway configuration
-                    device_model = "default"
-                    try:
-                        if "device" in data_json and isinstance(data_json["device"], dict):
-                            device_model = data_json["device"].get("model", "default")
-                        elif "model" in data_json:
-                            device_model = data_json["model"]
-                        group_id = f"GID_{device_model}".replace(":", "_").replace(" ", "_")
-                    except Exception as e:
-                        self.logger.error(f"Failed to get device model: {e}")
-                        group_id = "GID_default"
-                    
-                    mac_address_safe = device_id.replace(":", "_")
-                    mqtt_client_id = f"{group_id}@@@{mac_address_safe}@@@{mac_address_safe}"
-                    
-                    user_data = {"ip": "unknown"}
-                    try:
-                        user_data_json = json.dumps(user_data)
-                        username = base64.b64encode(user_data_json.encode("utf-8")).decode("utf-8")
-                    except Exception as e:
-                        self.logger.error(f"Failed to generate username: {e}")
-                        username = ""
-                    
-                    password = ""
-                    signature_key = server_config.get("mqtt_signature_key", "")
-                    if signature_key:
-                        password = generate_password_signature(
-                            mqtt_client_id + "|" + username,
-                            signature_key
-                        )
-                        if not password:
-                            password = ""
-                    else:
-                        self.logger.warning("Missing MQTT signature key, password left empty")
-                    
-                    return_json["mqtt"] = {
-                        "endpoint": mqtt_gateway_endpoint,
-                        "client_id": mqtt_client_id,
-                        "username": username,
-                        "password": password,
-                        "publish_topic": "device-server",
-                        "subscribe_topic": f"devices/p2p/{mac_address_safe}",
-                    }
-                    self.logger.info(f"Configured MQTT gateway for device {device_id}")
-                
-                else:
-                    # WebSocket configuration
-                    token = ""
-                    if self.auth_enable:
-                        if self.allowed_devices:
-                            if device_id not in self.allowed_devices:
-                                token = self.auth_manager.generate_token(client_id, device_id)
-                        else:
-                            token = self.auth_manager.generate_token(client_id, device_id)
-                    
-                    return_json["websocket"] = {
-                        "url": self._get_websocket_url(),
-                        "token": token,
-                    }
-                    self.logger.info(f"No MQTT gateway configured, sent WebSocket config for device {device_id}")
-                
-                return JSONResponse(
-                    content=return_json,
-                    headers={
-                        "Access-Control-Allow-Headers": "client-id, content-type, device-id",
-                        "Access-Control-Allow-Credentials": "true",
-                        "Access-Control-Allow-Origin": "*",
-                    }
-                )
-                
-            except Exception as e:
-                self.logger.error(f"OTA POST request error: {e}", exc_info=True)
-                return JSONResponse(
-                    content={"success": False, "message": "request error."},
-                    headers={
-                        "Access-Control-Allow-Headers": "client-id, content-type, device-id",
-                        "Access-Control-Allow-Credentials": "true",
-                        "Access-Control-Allow-Origin": "*",
-                    }
-                )
+        # OTA Router
+        ota_router = create_ota_router(
+            config=self.config,
+            auth=self.auth,
+            auth_enabled=self.auth_enable,
+            allowed_devices=self.allowed_devices,
+            get_websocket_url=self._get_websocket_url,
+        )
+        self.app.include_router(ota_router)
         
-        # OTA endpoint - OPTIONS (CORS)
-        @self.app.options("/xiaozhi/ota/")
-        async def ota_options():
-            """Handle OTA OPTIONS request (CORS)"""
-            return JSONResponse(
-                content={},
-                headers={
-                    "Access-Control-Allow-Headers": "client-id, content-type, device-id",
-                    "Access-Control-Allow-Credentials": "true",
-                    "Access-Control-Allow-Origin": "*",
-                    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-                }
-            )
+        # Vision Router
+        vision_router = create_vision_router(
+            config=self.config,
+            auth=self.auth,
+        )
+        self.app.include_router(vision_router)
         
-        # Vision analysis endpoint
-        @self.app.post("/mcp/vision/explain")
-        async def vision_explain(request: Request):
-            """Vision analysis endpoint"""
-            try:
-                return JSONResponse({
-                    "status": "success",
-                    "message": "Vision analysis not yet implemented",
-                })
-            except Exception as e:
-                raise HTTPException(status_code=500, detail=str(e))
+        # ============ WebSocket endpoint ============
         
-        # WebSocket endpoint
         @self.app.websocket(self.websocket_path)
         async def websocket_endpoint(
             websocket: WebSocket,
