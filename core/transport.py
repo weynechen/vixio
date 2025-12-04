@@ -53,6 +53,7 @@ class TransportBase(ABC):
         self._read_queues: Dict[str, asyncio.Queue] = {}   # session_id -> read queue
         self._send_queues: Dict[str, asyncio.Queue] = {}   # session_id -> send queue (audio, etc.)
         self._priority_queues: Dict[str, asyncio.Queue] = {}  # session_id -> priority queue (control messages)
+        self._video_queues: Dict[str, asyncio.Queue] = {}  # session_id -> video queue (vision support)
         
         # ============ Worker tasks (framework maintained) ============
         self._read_workers: Dict[str, asyncio.Task] = {}   # session_id -> read_worker task
@@ -149,6 +150,24 @@ class TransportBase(ABC):
             self._priority_queues[session_id] = asyncio.Queue()
         return self._priority_queues[session_id]
     
+    def get_video_queue(self, session_id: str) -> asyncio.Queue:
+        """
+        Get video queue for vision frames (vision support).
+        
+        Video frames from device are stored here for InputStation to inject
+        as visual context into audio chunks.
+        
+        Args:
+            session_id: Session ID
+            
+        Returns:
+            asyncio.Queue: Video frame queue (limited size to drop old frames)
+        """
+        if session_id not in self._video_queues:
+            # Limited size queue - drop old frames if full
+            self._video_queues[session_id] = asyncio.Queue(maxsize=10)
+        return self._video_queues[session_id]
+    
     def get_protocol(self) -> 'ProtocolBase':
         """
         Get protocol handler (for InputStation/OutputStation use).
@@ -176,7 +195,7 @@ class TransportBase(ABC):
         """
         Get InputStation (for SessionManager use).
         
-        Framework implementation: Creates InputStation bound to read_queue.
+        Framework implementation: Creates InputStation bound to read_queue and video_queue.
         
         Args:
             session_id: Session ID
@@ -187,6 +206,7 @@ class TransportBase(ABC):
         from stations.transport_stations import InputStation
         
         read_queue = self.get_read_queue(session_id)
+        video_queue = self.get_video_queue(session_id)
         protocol = self.get_protocol()
         audio_codec = self.get_audio_codec(session_id)
         
@@ -195,6 +215,7 @@ class TransportBase(ABC):
             read_queue=read_queue,
             protocol=protocol,
             audio_codec=audio_codec,
+            video_queue=video_queue,
             name=f"InputStation-{session_id[:8]}"
         )
     

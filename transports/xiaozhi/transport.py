@@ -347,6 +347,7 @@ class XiaozhiTransport(TransportBase):
         Handles:
         - hello message: Check for MCP support and initialize device tools
         - mcp message: Route to DeviceToolClient (bypass Pipeline)
+        - image message: Route to video_queue (bypass Pipeline, for vision support)
         
         Args:
             session_id: Session ID
@@ -381,11 +382,54 @@ class XiaozhiTransport(TransportBase):
                 else:
                     self.logger.warning(f"MCP message not handled for session {session_id[:8]}")
                     return True  # Still skip Pipeline even if not handled
+            
+            # Handle IMAGE messages - route to video_queue (vision support)
+            if msg_type == "image":
+                await self._handle_image_message(session_id, message)
+                return True  # Image handled, skip Pipeline
         
         except json.JSONDecodeError:
             pass  # Not JSON, let it go to Pipeline
         
         return False  # Pass to Pipeline
+    
+    async def _handle_image_message(self, session_id: str, message: Dict[str, Any]) -> None:
+        """
+        Handle image message from device.
+        
+        Puts image data into video_queue for InputStation to process.
+        
+        Expected message format:
+        {
+            "type": "image",
+            "data": "<base64 encoded image>",
+            "trigger": "vad_start" | "heartbeat",
+            "timestamp": 1701234567890,
+            "width": 640,
+            "height": 480,
+            "format": "jpeg"
+        }
+        
+        Args:
+            session_id: Session ID
+            message: Parsed image message
+        """
+        protocol = self.get_protocol()
+        image_data = protocol.get_image_data(message)
+        
+        if not image_data:
+            self.logger.warning(f"Failed to parse image data for session {session_id[:8]}")
+            return
+        
+        video_queue = self.get_video_queue(session_id)
+        
+        try:
+            # Use put_nowait to avoid blocking, drop frame if queue is full
+            video_queue.put_nowait(image_data)
+            trigger = image_data.get("trigger", "unknown")
+            self.logger.debug(f"Image frame received: trigger={trigger}, session={session_id[:8]}")
+        except asyncio.QueueFull:
+            self.logger.warning(f"Video queue full, dropping frame for session {session_id[:8]}")
     
     def _is_audio_message(self, data: Union[bytes, str]) -> bool:
         """Check if message is audio"""

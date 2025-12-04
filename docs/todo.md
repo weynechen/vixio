@@ -1,27 +1,10 @@
 - [x] 延时计算有BUG，有负数产生，需要搞清楚责任链和装饰器怎么工作
 - [x] transport 需要抽象和解耦 → 已完成: [transport_architecture.md](./transport_architecture.md)
-- [ ] function tool 需要接入 → 设计文档: [function_tool_design.md](./function_tool_design.md)
-- [ ] 接入video
+- [x] function tool 需要接入 → 已完成: [function_tool_design.md](./function_tool_design.md)
+- [ ] 接入video in , video 在语音驱动下做describe，辅助场景理解 → 已完成: [vision_design.md](./vision_design.md) 未测试
+- [ ] 时间xiaozhi的vision mcp 接口
+- [ ] 数字人station
+- [ ] 制作python 包
 - [ ] 更改pipeline为DAG，充分解耦各个station的依赖
 - [ ] 更新intranscribe
 
-
-┌─────────────────────────────────────────────────────────────────────┐
-│                            Pipeline                                  │
-│  ┌────────────┐    ┌─────┐    ┌─────┐    ┌─────┐    ┌─────────────┐ │
-│  │InputStation│ -> │ VAD │ -> │ ASR │ -> │ TTS │ -> │OutputStation│ │
-│  │ (格式转换) │    │     │    │     │    │     │    │  (格式转换) │ │
-│  └─────┬──────┘    └─────┘    └─────┘    └─────┘    └──────┬──────┘ │
-│        │                                                    │        │
-└────────│────────────────────────────────────────────────────│────────┘
-         │ read from                                 write to │
-         ▼                                                    ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                           Transport                                  │
-│  ┌─────────────────┐                         ┌─────────────────┐    │
-│  │   接收队列      │    ← WebSocket/TCP →    │   发送队列      │    │
-│  │ (raw data queue)│                         │ (raw data queue)│    │
-│  └─────────────────┘                         └─────────────────┘    │
-│                                                                      │
-│  提供: read_queue, write_queue, audio_codec, protocol               │
-└─────────────────────────────────────────────────────────────────────┘

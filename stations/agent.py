@@ -8,10 +8,15 @@ Note: Agent is the central processing node. All text must go through Agent,
 even if it's just a passthrough (echo agent) or translation agent.
 
 Refactored with middleware pattern for clean separation of concerns.
+
+Vision Support:
+- Extracts visual_context from chunk.metadata
+- Processes through VisionStrategy (Describe or Passthrough)
+- Passes MultimodalMessage to Agent
 """
 
 import asyncio
-from typing import AsyncIterator, Optional
+from typing import AsyncIterator, Optional, List
 from core.station import StreamStation
 from core.chunk import Chunk, ChunkType, TextDeltaChunk, is_text_chunk
 from core.middleware import with_middlewares
@@ -20,6 +25,11 @@ from stations.middlewares import (
     TimeoutHandlerMiddleware
 )
 from providers.agent import AgentProvider
+from providers.vision import (
+    ImageContent, 
+    VisionStrategy, 
+    PassthroughStrategy
+)
 
 
 @with_middlewares(
@@ -59,6 +69,7 @@ class AgentStation(StreamStation):
     def __init__(
         self,
         agent_provider: AgentProvider,
+        vision_strategy: Optional[VisionStrategy] = None,
         timeout_seconds: Optional[float] = 30.0,
         name: str = "agent"  # Lowercase for consistent source tracking
     ):
@@ -67,6 +78,9 @@ class AgentStation(StreamStation):
         
         Args:
             agent_provider: Agent provider instance
+            vision_strategy: Vision processing strategy (default: PassthroughStrategy)
+                - PassthroughStrategy: Pass images directly to VLM
+                - DescribeStrategy: Convert images to text descriptions for regular LLM
             timeout_seconds: Timeout for agent processing (default: 30s, None = no timeout)
             name: Station name
         """
@@ -76,6 +90,7 @@ class AgentStation(StreamStation):
             enable_interrupt_detection=True
         )
         self.agent = agent_provider
+        self.vision_strategy = vision_strategy or PassthroughStrategy()
         self._streaming_generator: Optional[AsyncIterator] = None
     
     def set_session_id(self, session_id: str) -> None:
@@ -144,6 +159,29 @@ class AgentStation(StreamStation):
         except Exception as e:
             self.logger.error(f"Error cleaning up agent provider: {e}")
     
+    def _extract_visual_context(self, chunk: Chunk) -> Optional[List[ImageContent]]:
+        """
+        Extract visual context from chunk metadata.
+        
+        Args:
+            chunk: Input chunk
+            
+        Returns:
+            List of ImageContent or None
+        """
+        visual_ctx = chunk.metadata.get("visual_context")
+        if visual_ctx is None:
+            return None
+        
+        # Support single image or list of images
+        if isinstance(visual_ctx, ImageContent):
+            return [visual_ctx]
+        elif isinstance(visual_ctx, list):
+            return [img for img in visual_ctx if isinstance(img, ImageContent)]
+        else:
+            self.logger.warning(f"Unknown visual_context type: {type(visual_ctx)}")
+            return None
+    
     async def process_chunk(self, chunk: Chunk) -> AsyncIterator[Chunk]:
         """
         Process chunk through Agent - CORE LOGIC ONLY.
@@ -154,7 +192,8 @@ class AgentStation(StreamStation):
         
         This method now contains ONLY the core business logic:
         - Extract text from chunk
-        - Check agent initialization
+        - Extract visual context from metadata
+        - Process through VisionStrategy
         - Stream agent response as TEXT_DELTA chunks
         
         Note: Middlewares handle the rest automatically in the correct order.
@@ -168,8 +207,14 @@ class AgentStation(StreamStation):
         # Extract text content (unified using chunk.data)
         text = chunk.data if isinstance(chunk.data, str) else (str(chunk.data) if chunk.data else "")
         
-        # 🔍 DEBUG: Log extracted text
-        self.logger.info(f"[Agent] Extracted text: {repr(text)[:100]}")
+        # Extract visual context from metadata
+        images = self._extract_visual_context(chunk)
+        
+        # Log extracted content
+        if images:
+            self.logger.info(f"[Agent] Extracted text: {repr(text)[:100]} with {len(images)} image(s)")
+        else:
+            self.logger.info(f"[Agent] Extracted text: {repr(text)[:100]}")
         
         # Check if agent is initialized
         if not self.agent.is_initialized():
@@ -185,9 +230,13 @@ class AgentStation(StreamStation):
         # Passthrough input TEXT first for immediate client feedback
         yield chunk
         
+        # Process through VisionStrategy
+        # This converts (text, images) to MultimodalMessage
+        multimodal_msg = await self.vision_strategy.process(text, images)
+        
         # Stream agent response - CORE BUSINESS LOGIC
         # Store generator reference for cleanup on interrupt
-        agent_stream = self.agent.chat(text)
+        agent_stream = self.agent.chat(multimodal_msg)
         self._streaming_generator = agent_stream
         
         try:

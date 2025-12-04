@@ -22,6 +22,7 @@ class XiaozhiMessageType:
     STATE = "state"
     ERROR = "error"
     MCP = "mcp"  # MCP JSON-RPC messages (function tools)
+    IMAGE = "image"  # Image/video frame from device (vision support)
 
 
 class XiaozhiControlAction:
@@ -452,6 +453,61 @@ class XiaozhiProtocol(ProtocolBase):
         if self.is_mcp_message(message):
             return message.get("payload")
         return None
+    
+    def is_image_message(self, message: Dict[str, Any]) -> bool:
+        """
+        Check if message is an image/video frame message.
+        
+        Args:
+            message: Parsed message dictionary
+            
+        Returns:
+            True if message type is IMAGE
+        """
+        return message.get("type") == XiaozhiMessageType.IMAGE
+    
+    def get_image_data(self, message: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Extract image data from message.
+        
+        Expected message format:
+        {
+            "type": "image",
+            "data": "<base64 encoded image>",
+            "trigger": "vad_start" | "heartbeat",
+            "timestamp": 1701234567890,
+            "width": 640,
+            "height": 480,
+            "format": "jpeg"
+        }
+        
+        Args:
+            message: Parsed image message
+            
+        Returns:
+            Image data dict or None if not image message
+        """
+        if not self.is_image_message(message):
+            return None
+        
+        import base64
+        import time
+        
+        # Decode base64 image data
+        data_str = message.get("data", "")
+        try:
+            image_bytes = base64.b64decode(data_str) if data_str else b""
+        except Exception:
+            image_bytes = b""
+        
+        return {
+            "data": image_bytes,
+            "trigger": message.get("trigger", "heartbeat"),
+            "timestamp": message.get("timestamp", time.time()),
+            "width": message.get("width", 0),
+            "height": message.get("height", 0),
+            "format": message.get("format", "jpeg")
+        }
     
     # ============ Business interface layer implementation ============
     

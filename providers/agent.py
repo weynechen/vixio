@@ -3,8 +3,9 @@ Agent provider interface
 """
 
 from abc import abstractmethod
-from typing import Any, AsyncIterator, Dict, List, Optional
+from typing import Any, AsyncIterator, Dict, List, Optional, Union
 from providers.base import BaseProvider
+from providers.vision import MultimodalMessage
 
 
 class Tool:
@@ -81,23 +82,31 @@ class AgentProvider(BaseProvider):
     @abstractmethod
     async def chat(
         self,
-        message: str,
+        message: Union[str, MultimodalMessage],
         context: Optional[Dict[str, Any]] = None,
     ) -> AsyncIterator[str]:
         """
         Send a message to Agent and get streaming response.
         
-        Pure text input/output - no audio dependencies.
+        Supports both text-only and multimodal input.
         
         Args:
-            message: User message (pure text)
+            message: User message - can be:
+                - str: Pure text message
+                - MultimodalMessage: Text with optional images
             context: Optional context (device_id, user_info, etc.)
             
         Yields:
             Response chunks (pure text deltas)
             
         Example:
+            # Text-only
             async for chunk in agent.chat("Hello"):
+                print(chunk, end="", flush=True)
+            
+            # Multimodal
+            msg = MultimodalMessage(text="What's in this image?", images=[...])
+            async for chunk in agent.chat(msg):
                 print(chunk, end="", flush=True)
         """
         pass

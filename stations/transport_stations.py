@@ -1,20 +1,27 @@
 """
 Transport Stations - Bridge between Pipeline and Transport
 
-InputStation: Read from read_queue -> Chunk stream
+InputStation: Read from read_queue -> Chunk stream (supports audio + optional video)
 OutputStation: Chunk stream -> Write to send_queue
 
 Design principles:
 - InputStation/OutputStation are pure format conversion layers
 - NOT responsible for: connection management, flow control, turn management, latency tracking
 - These common capabilities are unified by TransportBase's read_worker/send_worker
+
+Vision Support:
+- InputStation can optionally receive video frames via video_queue
+- Visual context is injected into audio chunks via metadata["visual_context"]
+- VAD-triggered frames take priority over heartbeat frames
 """
 
 import asyncio
+from collections import deque
 from typing import AsyncIterator, Optional, Dict, Any, Union
 from core.station import Station
 from core.protocol import ProtocolBase
 from core.chunk import Chunk, ChunkType
+from providers.vision import ImageContent
 from loguru import logger
 
 
@@ -27,7 +34,14 @@ class InputStation(Station):
     2. Call Protocol to decode message
     3. Call Protocol to convert to Chunk
     4. Call AudioCodec to decode audio (if needed)
-    5. Output Chunk to Pipeline
+    5. Inject visual context into audio chunks (if video_queue provided)
+    6. Output Chunk to Pipeline
+    
+    Vision Support:
+    - Optionally receives video frames via video_queue
+    - VAD-triggered frames stored as speech_context (high priority)
+    - Heartbeat frames stored as latest_frame (low priority)
+    - Visual context injected into audio chunks via metadata["visual_context"]
     
     NOT responsible for:
     - Connection management (handled by Transport's read_worker)
@@ -38,25 +52,33 @@ class InputStation(Station):
     def __init__(
         self,
         session_id: str,
-        read_queue: asyncio.Queue,      # From Transport
+        read_queue: asyncio.Queue,      # From Transport - audio/control messages
         protocol: ProtocolBase,          # From Transport
         audio_codec: Optional[Any] = None,  # From Transport, can be None
+        video_queue: Optional[asyncio.Queue] = None,  # From Transport - video frames
         name: str = "InputStation"
     ):
         """
         Args:
             session_id: Session ID
-            read_queue: Transport's read queue
+            read_queue: Transport's read queue (audio/control)
             protocol: Protocol handler
             audio_codec: Audio codec (can be None)
+            video_queue: Transport's video queue (optional, for vision support)
             name: Station name
         """
         super().__init__(name=name)
         self._session_id = session_id
         self._read_queue = read_queue
+        self._video_queue = video_queue
         self.protocol = protocol
         self.audio_codec = audio_codec
         self._running = True
+        
+        # Vision context management
+        self._speech_context_frame: Optional[ImageContent] = None  # VAD-triggered frame
+        self._latest_frame: Optional[ImageContent] = None  # Heartbeat frame
+        self._video_task: Optional[asyncio.Task] = None
     
     async def process_chunk(self, chunk: Chunk) -> AsyncIterator[Chunk]:
         """
@@ -67,18 +89,117 @@ class InputStation(Station):
         # If receiving upstream Chunk (shouldn't happen), pass through
         yield chunk
     
+    async def _collect_video_frames(self) -> None:
+        """
+        Background task: Collect video frames from video_queue.
+        
+        Frame types:
+        - trigger="vad_start": Speech context frame (high priority)
+        - trigger="heartbeat": Latest frame (low priority, backup)
+        """
+        self.logger.info(f"Starting video frame collector for session {self._session_id[:8]}")
+        
+        try:
+            while self._running:
+                try:
+                    frame_data = await asyncio.wait_for(
+                        self._video_queue.get(),
+                        timeout=1.0
+                    )
+                except asyncio.TimeoutError:
+                    continue
+                
+                if frame_data is None:
+                    break
+                
+                # Parse frame data to ImageContent
+                image = self._parse_video_frame(frame_data)
+                if image is None:
+                    continue
+                
+                # Store based on trigger type
+                if image.trigger == "vad_start":
+                    self._speech_context_frame = image
+                    self.logger.debug(f"Stored VAD-triggered frame")
+                else:
+                    self._latest_frame = image
+                    self.logger.debug(f"Updated latest frame (heartbeat)")
+        
+        except asyncio.CancelledError:
+            self.logger.debug("Video frame collector cancelled")
+        except Exception as e:
+            self.logger.error(f"Error in video frame collector: {e}")
+        finally:
+            self.logger.info(f"Video frame collector ended for session {self._session_id[:8]}")
+    
+    def _parse_video_frame(self, frame_data: Dict[str, Any]) -> Optional[ImageContent]:
+        """
+        Parse video frame data to ImageContent.
+        
+        Expected format:
+        {
+            "data": bytes or base64 string,
+            "trigger": "vad_start" | "heartbeat",
+            "timestamp": float,
+            "width": int,
+            "height": int,
+            "format": "jpeg" | "png"
+        }
+        """
+        try:
+            return ImageContent(
+                image=frame_data.get("data", b""),
+                mime_type=f"image/{frame_data.get('format', 'jpeg')}",
+                source="camera",
+                trigger=frame_data.get("trigger", "heartbeat"),
+                capture_time=frame_data.get("timestamp"),
+                width=frame_data.get("width", 0),
+                height=frame_data.get("height", 0)
+            )
+        except Exception as e:
+            self.logger.error(f"Failed to parse video frame: {e}")
+            return None
+    
+    def get_visual_context(self) -> Optional[ImageContent]:
+        """
+        Get current visual context.
+        
+        Priority:
+        1. VAD-triggered speech context frame
+        2. Latest heartbeat frame
+        
+        Returns:
+            ImageContent or None
+        """
+        return self._speech_context_frame or self._latest_frame
+    
+    def clear_speech_context(self) -> None:
+        """
+        Clear speech context frame.
+        
+        Called after each turn to reset VAD-triggered frame.
+        """
+        self._speech_context_frame = None
+    
     async def _generate_chunks(self) -> AsyncIterator[Chunk]:
         """
         Generate Chunk stream (true input source).
         
         Flow:
-        1. Get raw data from read_queue
-        2. protocol.decode_message() decode
-        3. protocol.message_to_chunk() convert
-        4. audio_codec.decode() decode audio (if needed)
-        5. yield Chunk
+        1. Start video collector (if video_queue provided)
+        2. Get raw data from read_queue
+        3. protocol.decode_message() decode
+        4. protocol.message_to_chunk() convert
+        5. audio_codec.decode() decode audio (if needed)
+        6. Inject visual context into audio chunks
+        7. yield Chunk
         """
         self.logger.info(f"Starting input stream for session {self._session_id[:8]}")
+        
+        # Start video frame collector if video_queue is provided
+        if self._video_queue:
+            self._video_task = asyncio.create_task(self._collect_video_frames())
+            self.logger.info("Video frame collector started")
         
         try:
             while self._running:
@@ -120,7 +241,13 @@ class InputStation(Station):
                         self.logger.error(f"Failed to decode audio: {e}")
                         continue
                 
-                # 5. Output Chunk
+                # 5. Inject visual context into audio chunks
+                if chunk.type == ChunkType.AUDIO_RAW and self._video_queue:
+                    visual_ctx = self.get_visual_context()
+                    if visual_ctx:
+                        chunk.metadata["visual_context"] = visual_ctx
+                
+                # 6. Output Chunk
                 self.logger.debug(f"Input chunk: {chunk.type.value} from {chunk.source}")
                 yield chunk
         
@@ -129,6 +256,13 @@ class InputStation(Station):
         except Exception as e:
             self.logger.error(f"Error in input stream: {e}", exc_info=True)
         finally:
+            # Cancel video collector task
+            if self._video_task and not self._video_task.done():
+                self._video_task.cancel()
+                try:
+                    await self._video_task
+                except asyncio.CancelledError:
+                    pass
             self.logger.info(f"Input stream ended for session {self._session_id[:8]}")
     
     def _get_current_turn_id(self) -> int:

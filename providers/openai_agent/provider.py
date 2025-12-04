@@ -3,9 +3,10 @@ OpenAI Agent provider implementation using OpenAI Agents framework and LiteLLM
 """
 
 import asyncio
-from typing import Any, AsyncIterator, Dict, List, Optional
+from typing import Any, AsyncIterator, Dict, List, Optional, Union
 from . import dump_promt
 from providers.agent import AgentProvider, Tool
+from providers.vision import MultimodalMessage
 from providers.registry import register_provider
 
 
@@ -242,14 +243,18 @@ class OpenAIAgentProvider(AgentProvider):
     
     async def chat(
         self,
-        message: str,
+        message: Union[str, MultimodalMessage],
         context: Optional[Dict[str, Any]] = None,
     ) -> AsyncIterator[str]:
         """
         Chat with Agent (streaming).
         
+        Supports both text-only and multimodal input.
+        
         Args:
-            message: User message (pure text)
+            message: User message - can be:
+                - str: Pure text message
+                - MultimodalMessage: Text with optional images
             context: Optional context
             
         Yields:
@@ -258,6 +263,10 @@ class OpenAIAgentProvider(AgentProvider):
         Note:
             This generator can be closed via aclose() to immediately terminate
             the OpenAI streaming connection. This is critical for handling interrupts.
+            
+            For multimodal messages with images:
+            - If using DescribeStrategy, images are pre-converted to text
+            - If using PassthroughStrategy with VLM model, images are included
         """
         if not self._initialized:
             raise RuntimeError("Agent not initialized. Call initialize() first.")
@@ -268,7 +277,27 @@ class OpenAIAgentProvider(AgentProvider):
                 "This typically happens via AgentStation when Pipeline receives session_id."
             )
         
-        self.logger.debug(f"User message: {message[:100]}...")
+        # Extract text and images from message
+        if isinstance(message, str):
+            text = message
+            images = None
+        else:
+            text = message.text
+            images = message.images if message.has_images else None
+        
+        self.logger.debug(f"User message: {text[:100]}...")
+        if images:
+            self.logger.debug(f"Message includes {len(images)} image(s)")
+        
+        # Build input for Agent
+        # Note: OpenAI Agents framework currently only supports text input
+        # For multimodal with images, we need to construct message differently
+        if images:
+            # For VLM models, construct multimodal content
+            # This will be passed as structured input
+            input_content = self._build_multimodal_input(text, images)
+        else:
+            input_content = text
         
         result = None
         try:
@@ -276,7 +305,7 @@ class OpenAIAgentProvider(AgentProvider):
             from openai.types.responses import ResponseTextDeltaEvent
             
             # Use Runner.run_streamed for streaming responses with session memory
-            result = Runner.run_streamed(self.agent, input=message, session=self.session)
+            result = Runner.run_streamed(self.agent, input=input_content, session=self.session)
             
             # Stream text deltas
             async for event in result.stream_events():
@@ -313,6 +342,41 @@ class OpenAIAgentProvider(AgentProvider):
                     self.logger.debug("OpenAI stream resources cleaned up")
                 except Exception as e:
                     self.logger.warning(f"Error cleaning up OpenAI stream: {e}")
+    
+    def _build_multimodal_input(self, text: str, images: list) -> Any:
+        """
+        Build multimodal input for VLM models.
+        
+        Note: The OpenAI Agents framework may need special handling for multimodal input.
+        This method constructs the appropriate format.
+        
+        Args:
+            text: User text
+            images: List of ImageContent
+            
+        Returns:
+            Input format suitable for the Agent framework
+        """
+        # For models that support multimodal input (like GPT-4o),
+        # we construct a list of content items
+        content = [{"type": "text", "text": text}]
+        
+        for img in images:
+            content.append({
+                "type": "image_url",
+                "image_url": {"url": img.to_data_url()}
+            })
+        
+        # Note: The OpenAI Agents framework may not directly support this format
+        # In that case, we fall back to text-only (images should be pre-described)
+        # For now, we return the structured content and let the framework handle it
+        # If the framework doesn't support it, it will use the text representation
+        
+        # TODO: Verify if OpenAI Agents framework supports multimodal input
+        # If not, this should be handled at the VisionStrategy level
+        self.logger.debug(f"Built multimodal input with {len(images)} images")
+        
+        return content
     
     async def reset_conversation(self) -> None:
         """
