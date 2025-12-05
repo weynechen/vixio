@@ -1,37 +1,95 @@
-# Vixio - Streaming Audio Processing Framework
+# Vixio
 
-一个基于流水线设计的流式语音agent处理框架，灵感来自 Pipecat。
+A streaming voice-powered agent framework based on pipeline architecture
 
-## 设计理念
+[![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Status: Alpha](https://img.shields.io/badge/status-alpha-orange.svg)]()
 
-- **Pipeline（流水线）**: 串联多个工站形成完整的处理流程
-- **Station（工站）**: 负责特定的处理任务（VAD/ASR/Agent/TTS）
-- **Chunk（载体）**: 
-  - **Data Chunk（产品）**: Audio/Vision/Text，经过工站加工转换
-  - **Signal Chunk（消息）**: Control/Event，立即透传并触发工站状态变化
-- **Transport（传输层）**: 流水线的输入输出接口，完全解耦传输细节
+**[中文文档](docs/README_zh.md)**
 
-### Pipeline
-线性异步队列链：队列 ->station process -> 队列 -> station proecess -> output
+## Features
 
-每个station 有一个 task和一个queue。 station process 出来的chunk放入到queue中。
+- **Pipeline Architecture**: Chain multiple stations to form a complete processing flow
+- **Station-based Processing**: Each station handles specific tasks (VAD/ASR/Agent/TTS)
+- **Streaming Support**: Real-time audio processing with async queue chains
+- **Modular Design**: Install only what you need with optional dependencies
+- **Multiple Providers**: Support for both local inference and cloud services
 
-主task从最后一个queue中取出chunk给到output。
+## Requirements
 
-注意： 不适合多分钟的情况。
+- Python 3.12 or higher
+- [uv](https://docs.astral.sh/uv/) (recommended package manager)
 
-### ControlBus
+## Installation
 
-### Station
+### Using uv (Recommended)
 
-### Chunk
+1. Install with core dependencies only:
 
+```bash
+uv pip install vixio
+```
 
-## 项目状态
+2. Install with specific providers:
 
-当前版本: **v0.1.0 (开发中)**
+```bash
+# For Chinese local development (VAD + ASR + TTS + Agent)
+uv pip install "vixio[dev-local-cn]"
 
+# For Qwen platform integration
+uv pip install "vixio[dev-qwen]"
 
+# Or install individual components
+uv pip install "vixio[xiaozhi,openai-agent,silero-vad-grpc]"
+```
 
-**注意**: 本项目目前处于开发阶段，API 可能会发生变化。
+### Using pip
 
+```bash
+pip install vixio
+
+# With optional dependencies
+pip install "vixio[dev-local-cn]"
+```
+
+## Available Components
+
+### Transports
+- `xiaozhi` - Xiaozhi protocol transport (WebSocket + HTTP)
+
+### VAD (Voice Activity Detection)
+- `silero-vad-grpc` - Silero VAD via gRPC service
+- `silero-vad-local` - Silero VAD local inference
+
+### ASR (Automatic Speech Recognition)
+- `sherpa-onnx-asr-grpc` - Sherpa-ONNX ASR via gRPC service
+- `sherpa-onnx-asr-local` - Sherpa-ONNX ASR local inference
+- `qwen` - Qwen platform ASR
+
+### TTS (Text-to-Speech)
+- `kokoro-cn-tts-grpc` - Kokoro TTS via gRPC service
+- `kokoro-cn-tts-local` - Kokoro TTS local inference
+- `edge-tts` - Microsoft Edge TTS (cloud)
+- `qwen` - Qwen platform TTS
+
+### Agent
+- `openai-agent` - OpenAI-compatible LLM via LiteLLM
+
+## Getting Started
+
+1. Check out the `examples/` directory for usage examples
+2. Configure your providers in a YAML config file
+3. Run your voice agent application
+
+For detailed configuration and usage guide, see the [documentation](docs/).
+
+## Project Status
+
+**Current Version: v0.1.0 (Alpha)**
+
+> **Note**: This project is under active development. APIs may change.
+
+## License
+
+MIT License - see [LICENSE](LICENSE) for details.
