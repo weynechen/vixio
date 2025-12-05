@@ -13,7 +13,9 @@ try:
     OPUS_AVAILABLE = True
 except ImportError:
     OPUS_AVAILABLE = False
-    logger.warning("opuslib_next not available, Opus codec disabled")
+    logger.error("opuslib_next not available, Opus codec disabled")
+    logger.warning("if you are in windows,please install opus from https://github.com/ShiftMediaProject/opus/releases")
+    logger.warning("if you are in linux,please install opus with sudo apt-get install libopus-dev")
 
 
 class OpusCodec:
