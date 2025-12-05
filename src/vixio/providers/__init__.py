@@ -209,22 +209,23 @@ except ImportError:
 
 # Local inference providers (gRPC clients - always available)
 # These are renamed to follow the dual-mode pattern
+# Note: Catch both ImportError (package not installed) and RuntimeError (grpc version mismatch)
 try:
     from vixio.providers.silero_vad.grpc_provider import LocalSileroVADProvider
     __all__.append("LocalSileroVADProvider")
-except ImportError:
+except (ImportError, RuntimeError):
     pass
 
 try:
     from vixio.providers.sherpa_onnx_local.grpc_provider import LocalSherpaASRProvider
     __all__.append("LocalSherpaASRProvider")
-except ImportError:
+except (ImportError, RuntimeError):
     pass
 
 try:
     from vixio.providers.kokoro_cn_tts_local.grpc_provider import LocalKokoroTTSProvider
     __all__.append("LocalKokoroTTSProvider")
-except ImportError:
+except (ImportError, RuntimeError):
     pass
 
 # In-process local inference providers (requires heavy dependencies)

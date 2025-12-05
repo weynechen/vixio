@@ -7,9 +7,10 @@ Supports multiple operation modes:
 """
 
 # gRPC provider (connects to external service, requires grpc)
+# Note: Catch both ImportError (package not installed) and RuntimeError (grpc version mismatch)
 try:
     from .grpc_provider import LocalKokoroTTSProvider
-except ImportError:
+except (ImportError, RuntimeError):
     LocalKokoroTTSProvider = None
 
 # In-process provider (requires: pip install vixio[kokoro-cn-tts-local])

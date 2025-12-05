@@ -15,9 +15,10 @@ Usage:
 """
 
 # gRPC provider (connects to external service, requires grpc)
+# Note: Catch both ImportError (package not installed) and RuntimeError (grpc version mismatch)
 try:
     from vixio.providers.sherpa_onnx_local.grpc_provider import LocalSherpaASRProvider
-except ImportError:
+except (ImportError, RuntimeError):
     LocalSherpaASRProvider = None
 
 # In-process provider (requires: pip install vixio[sherpa-onnx-asr-local])

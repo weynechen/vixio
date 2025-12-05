@@ -18,9 +18,10 @@ Usage:
 from vixio.providers.silero_vad.provider import SileroVADProvider
 
 # gRPC provider (connects to external service, requires grpc)
+# Note: Catch both ImportError (package not installed) and RuntimeError (grpc version mismatch)
 try:
     from vixio.providers.silero_vad.grpc_provider import LocalSileroVADProvider
-except ImportError:
+except (ImportError, RuntimeError):
     LocalSileroVADProvider = None
 
 # In-process provider (requires: pip install vixio[silero-vad-local])
