@@ -27,9 +27,9 @@ async def test_memory_cleanup():
     """Test that provider resources are cleaned up properly."""
     logger.info("=== Testing Memory Cleanup ===")
     
-    from providers import SileroVADProvider, SherpaOnnxLocalProvider, OpenAIAgentProvider
-    from core.pipeline import Pipeline
-    from stations import VADStation, ASRStation, AgentStation
+    from vixio.providers import SileroVADProvider, SherpaOnnxLocalProvider, OpenAIAgentProvider
+    from vixio.core.pipeline import Pipeline
+    from vixio.stations import VADStation, ASRStation, AgentStation
     
     # Get initial memory
     gc.collect()  # Clean up before starting
@@ -127,7 +127,7 @@ async def test_provider_cleanup_directly():
     """Test that individual provider cleanup methods work."""
     logger.info("\n=== Testing Provider Cleanup Methods ===")
     
-    from providers import SileroVADProvider, SherpaOnnxLocalProvider
+    from vixio.providers import SileroVADProvider, SherpaOnnxLocalProvider
     
     # Test VAD cleanup
     logger.info("\n[Test 2] Testing VAD provider cleanup...")

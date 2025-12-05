@@ -4,7 +4,7 @@ Unit tests for authentication utilities
 
 import pytest
 import time
-from utils.auth import AuthManager, generate_password_signature
+from vixio.utils.auth import AuthManager, generate_password_signature
 
 
 class TestAuthManager:

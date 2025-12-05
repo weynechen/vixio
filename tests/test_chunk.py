@@ -3,7 +3,7 @@ Unit tests for Chunk classes
 """
 
 import pytest
-from core.chunk import (
+from vixio.core.chunk import (
     Chunk,
     ChunkType,
     AudioChunk,

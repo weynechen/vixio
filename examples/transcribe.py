@@ -18,7 +18,7 @@ Logger Configuration:
     Logger is auto-configured on import with INFO level, logging to logs/ directory.
     To customize, call configure_logger() before other imports:
     
-    from utils.logger_config import configure_logger, reset_logger
+    from vixio.utils.logger_config import configure_logger, reset_logger
     
     # Reset auto-configured logger first
     reset_logger()
@@ -36,48 +36,25 @@ Logger Configuration:
 
 import asyncio
 import os
-import sys
 import signal
-import atexit
 import argparse
-from pathlib import Path
 from loguru import logger
-from core.pipeline import Pipeline
-from core.session import SessionManager
-from transports.xiaozhi import XiaozhiTransport
-from stations import (
+from vixio.core.pipeline import Pipeline
+from vixio.core.session import SessionManager
+from vixio.transports.xiaozhi import XiaozhiTransport
+from vixio.stations import (
     VADStation,
     TurnDetectorStation,
     ASRStation,
     TextAggregatorStation,
 )
-from providers.factory import ProviderFactory
-from utils import get_local_ip
-from utils.service_manager import ServiceManager
+from vixio.providers.factory import ProviderFactory
+from vixio.utils import get_local_ip
+from vixio.config import get_default_config_path
 
 import dotenv
 
 dotenv.load_dotenv()
-
-# Global service manager for cleanup
-_global_service_manager: ServiceManager = None
-
-
-def cleanup_microservices():
-    """
-    Cleanup function called on exit.
-    Ensures microservices are stopped even if main process crashes.
-    """
-    global _global_service_manager
-    if _global_service_manager:
-        logger.info("🧹 Cleaning up microservices...")
-        try:
-            _global_service_manager.stop_all()
-            logger.info("✅ Microservices cleaned up")
-        except Exception as e:
-            logger.error(f"Error during cleanup: {e}")
-        _global_service_manager = None
-
 
 # Event to signal shutdown
 _shutdown_event = None
@@ -86,13 +63,11 @@ _shutdown_event = None
 def signal_handler(signum, frame):
     """Handle termination signals"""
     logger.info(f"\n⚠️  Received signal {signum}, shutting down gracefully...")
-    cleanup_microservices()
     if _shutdown_event:
         _shutdown_event.set()
 
 
-# Register cleanup handlers
-atexit.register(cleanup_microservices)
+# Register signal handlers
 signal.signal(signal.SIGTERM, signal_handler)
 signal.signal(signal.SIGINT, signal_handler)
 
@@ -116,7 +91,7 @@ async def main():
         "--env",
         type=str,
         default="dev",
-        choices=["dev", "docker", "k8s"],
+        choices=["dev", "dev-local-cn", "dev-qwen", "docker", "k8s"],
         help="Deployment environment (default: dev)"
     )
     parser.add_argument(
@@ -136,7 +111,7 @@ async def main():
     
     # Configure logger with debug components if specified
     if args.debug_components:
-        from utils.logger_config import reset_logger, configure_logger
+        from vixio.utils.logger_config import reset_logger, configure_logger
         reset_logger()
         configure_logger(
             level="INFO",
@@ -147,40 +122,10 @@ async def main():
     logger.info("=== Speech-to-Text Transcription ===")
     logger.info(f"Environment: {args.env}")
     
-    # Step 0: In dev mode, auto-start local microservices
-    service_manager = None
-    if args.env == "dev":
-        logger.info("")
-        logger.info("🚀 Dev Mode: Auto-managing local microservices...")
-        logger.info("")
-        
-        global _global_service_manager
-        service_manager = ServiceManager(
-            config_path=args.config or os.path.join(
-                Path(__file__).parent.parent,
-                "config/providers.yaml"
-            ),
-            env=args.env
-        )
-        _global_service_manager = service_manager  # Store globally for cleanup
-        
-        # Start services (only VAD and ASR needed for transcription)
-        if not service_manager.start_all():
-            logger.error("Failed to start microservices")
-            cleanup_microservices()  # Clean up on failure
-            sys.exit(1)
-        
-        # Print service info
-        service_manager.print_service_info()
-        logger.info("")
-    
     # Step 1: Load provider configurations from file
     logger.info("Loading provider configurations...")
     
-    config_path = args.config or os.path.join(
-        Path(__file__).parent.parent,
-        "config/providers.yaml"
-    )
+    config_path = args.config or get_default_config_path()
     
     if not os.path.exists(config_path):
         logger.error(f"Config file not found: {config_path}")
@@ -303,11 +248,10 @@ async def main():
     logger.info("=" * 70)
     
     # Show deployment-specific notes
-    if args.env == "dev":
+    if args.env in ("dev", "dev-local-cn", "dev-qwen"):
         logger.info("📌 Dev Mode Notes:")
-        logger.info("   - Ensure microservices are running: ./scripts/dev/start-all.sh")
-        logger.info("   - VAD service: localhost:50051")
-        logger.info("   - ASR service: localhost:50052")
+        logger.info(f"   - Using environment: {args.env}")
+        logger.info("   - Ensure gRPC services are running if configured")
         logger.info("")
     elif args.env == "docker":
         logger.info("📌 Docker Mode Notes:")
@@ -337,11 +281,6 @@ async def main():
         await manager.stop()
         logger.info("Server stopped")
         logger.info("Note: Each session's providers are cleaned up automatically")
-        
-        # Stop microservices (dev mode only)
-        if service_manager:
-            logger.info("")
-            cleanup_microservices()  # Use cleanup function
 
 
 if __name__ == "__main__":

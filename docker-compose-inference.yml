@@ -1,0 +1,137 @@
+# Docker Compose for Vixio Services
+# Mode: Docker (single-replica services)
+
+version: '3.8'
+
+services:
+  # Silero VAD gRPC Service
+  silero-vad-service:
+    build:
+      context: .
+      dockerfile: inference/silero_vad/Dockerfile
+    container_name: vixio-silero-vad-service
+    ports:
+      - "50051:50051"
+    environment:
+      - LOG_LEVEL=INFO
+    healthcheck:
+      test: ["CMD-SHELL", "python -c 'import socket; s=socket.socket(); s.connect((\"localhost\", 50051)); s.close()'"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - vixio-network
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 500M
+        reservations:
+          cpus: '0.5'
+          memory: 200M
+  
+  # Sherpa ONNX ASR gRPC Service
+  sherpa-asr-service:
+    build:
+      context: .
+      dockerfile: inference/sherpa_onnx_local/Dockerfile
+    container_name: vixio-sherpa-asr-service
+    ports:
+      - "50052:50052"
+    volumes:
+      - ./models:/app/models:ro  # Mount models directory (read-only)
+    environment:
+      - LOG_LEVEL=INFO
+    healthcheck:
+      test: ["CMD-SHELL", "python -c 'import socket; s=socket.socket(); s.connect((\"localhost\", 50052)); s.close()'"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+    networks:
+      - vixio-network
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 1G
+        reservations:
+          cpus: '1.0'
+          memory: 400M
+  
+  # Kokoro TTS gRPC Service
+  kokoro-tts-service:
+    build:
+      context: .
+      dockerfile: inference/kokoro_cn_tts_local/Dockerfile
+    container_name: vixio-kokoro-tts-service
+    ports:
+      - "50053:50053"
+    environment:
+      - LOG_LEVEL=INFO
+    healthcheck:
+      test: ["CMD-SHELL", "python -c 'import socket; s=socket.socket(); s.connect((\"localhost\", 50053)); s.close()'"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+    networks:
+      - vixio-network
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '1.0'
+          memory: 1G
+
+  # Main Vixio Service (placeholder - to be implemented)
+  # main:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile
+  #   container_name: vixio-main
+  #   ports:
+  #     - "8000:8000"
+  #   environment:
+  #     - ENV=docker
+  #     - CONFIG_FILE=config/providers.yaml
+  #     - OPENAI_API_KEY=${OPENAI_API_KEY}
+  #   depends_on:
+  #     vad-service:
+  #       condition: service_healthy
+  #   restart: unless-stopped
+  #   networks:
+  #     - vixio-network
+  #   deploy:
+  #     resources:
+  #       limits:
+  #         cpus: '2.0'
+  #         memory: 2G
+  #       reservations:
+  #         cpus: '1.0'
+  #         memory: 1G
+
+networks:
+  vixio-network:
+    driver: bridge
+
+# Usage:
+# ------
+# Start services:
+#   docker-compose up -d
+#
+# View logs:
+#   docker-compose logs -f vad-service
+#
+# Stop services:
+#   docker-compose down
+#
+# Rebuild:
+#   docker-compose up -d --build
+

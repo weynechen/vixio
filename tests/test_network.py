@@ -3,7 +3,7 @@ Unit tests for network utilities
 """
 
 import pytest
-from utils.network import get_local_ip
+from vixio.utils.network import get_local_ip
 
 
 class TestNetworkUtils:

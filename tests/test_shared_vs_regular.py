@@ -30,7 +30,7 @@ async def test_regular_providers():
     logger.info("TEST 1: Regular Providers (Each Session Loads Own Model)")
     logger.info("=" * 70)
     
-    from providers import SileroVADProvider, SherpaOnnxLocalProvider
+    from vixio.providers import SileroVADProvider, SherpaOnnxLocalProvider
     
     model_path = Path(__file__).parent.parent / "models" / "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17"
     
@@ -95,7 +95,7 @@ async def test_shared_providers():
     logger.info("TEST 2: Shared Model Providers (All Sessions Share Model)")
     logger.info("=" * 70)
     
-    from providers import SharedModelSileroVADProvider, SharedModelSherpaOnnxProvider
+    from vixio.providers import SharedModelSileroVADProvider, SharedModelSherpaOnnxProvider
     
     model_path = Path(__file__).parent.parent / "models" / "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17"
     

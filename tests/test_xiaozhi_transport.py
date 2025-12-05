@@ -6,8 +6,8 @@ import pytest
 import asyncio
 import json
 from httpx import AsyncClient, ASGITransport
-from transports.xiaozhi import XiaozhiTransport, XiaozhiProtocol, XiaozhiMessageType
-from core.chunk import ChunkType, AudioChunk, TextChunk, ControlChunk
+from vixio.transports.xiaozhi import XiaozhiTransport, XiaozhiProtocol, XiaozhiMessageType
+from vixio.core.chunk import ChunkType, AudioChunk, TextChunk, ControlChunk
 
 
 class TestXiaozhiProtocol:

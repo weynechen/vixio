@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 license = "MIT"
 authors = [
-    {name = "Vixio Team"}
+    {name = "Weyne Chen"}
 ]
 keywords = ["voice", "agent", "ai", "speech", "framework"]
 classifiers = [
@@ -18,43 +18,115 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 
+# ============================================================
+# Core dependencies (minimal: config + logging only)
+# ============================================================
 dependencies = [
-    # Web framework
-    "fastapi>=0.110.0",
-    "uvicorn[standard]>=0.27.0",
-    "websockets>=14.0,<15.0",
-    "httpx>=0.28.0",
-    "aiohttp>=3.13.0",
-    "aiohttp-cors>=0.8.0",
-    # Agent frameworks (Remote API)
-    "openai-agents[litellm]>=0.4.2",
-    "openai>=2.7.0",
-    # Audio processing (lightweight)
-    "numpy>=1.26.0,<1.27.0",
-    "opuslib_next>=1.1.5",
-    "pydub>=0.25.1",
-    # Remote TTS providers
-    "edge-tts>=7.2.3",
-    "dashscope>=1.24.6",
-    # MCP
-    "mcp>=1.20.0",
-    "mcp-proxy>=0.10.0",
-    # Configuration and logging
+    # Configuration
     "pydantic>=2.5.0",
     "pydantic-settings>=2.1.0",
     "ruamel.yaml>=0.18.16",
+    
+    # Logging
     "loguru>=0.7.3",
-    # Utilities
+]
+
+# ============================================================
+# Optional dependencies (modular installation)
+# ============================================================
+[project.optional-dependencies]
+
+# ------------ Transport implementations ------------
+# Xiaozhi protocol transport (WebSocket + HTTP)
+xiaozhi = [
+    "fastapi>=0.110.0",
+    "uvicorn[standard]>=0.27.0",
+    "websockets>=14.0,<15.0",
+    "opuslib_next>=1.1.5",
     "PyJWT>=2.10.0",
-    "psutil>=7.0.0",
-    "aioconsole>=0.8.2",
-    # gRPC client (for connecting to microservices)
+    "aiohttp>=3.13.0",
+    "aiohttp-cors>=0.8.0",
+]
+
+# ------------ gRPC providers (lightweight clients) ------------
+# These connect to external gRPC services
+# Deploy services via Docker/K8s from inference/ directory
+
+# VAD: Connect to Silero VAD gRPC service
+silero-vad-grpc = [
     "grpcio>=1.76.0",
     "grpcio-tools>=1.76.0",
 ]
 
-[project.optional-dependencies]
-dev = [
+# ASR: Connect to Sherpa-ONNX ASR gRPC service
+sherpa-onnx-asr-grpc = [
+    "grpcio>=1.76.0",
+    "grpcio-tools>=1.76.0",
+    "numpy>=1.26.0,<2.0.0",  # for audio data handling
+]
+
+# TTS: Connect to Kokoro TTS gRPC service
+kokoro-cn-tts-grpc = [
+    "grpcio>=1.76.0",
+    "grpcio-tools>=1.76.0",
+    "numpy>=1.26.0,<2.0.0",  # for audio data handling
+]
+
+# ------------in-process local inference-----------------------
+silero-vad-local = [
+    "onnxruntime-gpu>=1.16.0",
+    "numpy>=1.24.0",
+    "silero-vad>=5.0",
+]
+
+sherpa-onnx-asr-local = [
+    "onnxruntime-gpu>=1.16.0",
+    "numpy>=1.24.0",
+    "sherpa-onnx>=1.12.15",
+]
+
+kokoro-cn-tts-local = [
+    "torch>=2.0.0",
+    "numpy>=1.24.0",
+    "kokoro>=0.8.1",
+    "misaki[zh]>=0.8.1",
+]
+
+# ------------ Cloud/API providers ------------
+# Agent: OpenAI-compatible LLM (via LiteLLM)
+openai-agent = [
+    "openai-agents[litellm]>=0.4.2",
+    "openai>=2.7.0",
+    "httpx>=0.28.0",  # for vision describer API calls
+]
+
+# TTS: Microsoft Edge TTS (free, cloud-based)
+edge-tts = [
+    "edge-tts>=7.2.3",
+    "pydub>=0.25.0",
+]
+
+# qwen plantform provider(asr , tts)
+qwen = [
+    "dashscope"
+]
+
+# ----------convenience settings --------------
+
+# dev
+dev-local-cn = [
+    "vixio[xiaozhi,openai-agent,silero-vad-local,sherpa-onnx-asr-local,kokoro-cn-tts-local]",
+]
+
+# dev qwen
+dev-qwen = [
+    "vixio[xiaozhi,silero-vad-local,qwen]",
+    "qwen-agent"
+]
+
+
+# ------------ Development and test tools ------------
+test = [
     "pytest>=7.4.0",
     "pytest-asyncio>=0.21.0",
     "pytest-cov>=4.1.0",
@@ -62,41 +134,68 @@ dev = [
     "isort>=5.12.0",
     "mypy>=1.5.0",
     "ruff>=0.0.287",
+    "pydub",
+    "psutil>=7.0.0",  # for memory leak tests
 ]
 
-langchain = [
-    "langchain>=0.1.0",
-    "langchain-openai>=0.0.5",
-]
 
-langgraph = [
-    "langgraph>=0.0.20",
-]
-
-all = [
-    "vixio[dev,langchain,langgraph]",
-]
-
+# ============================================================
+# Project URLs
+# ============================================================
 [project.urls]
 Homepage = "https://github.com/weynechen/vixio"
 Repository = "https://github.com/weynechen/vixio"
 Issues = "https://github.com/weynechen/vixio/issues"
 
+# ============================================================
+# Entry points
+# ============================================================
 [project.scripts]
-vixio = "cli:main"
+vixio = "vixio.cli:main"
 
+# ============================================================
+# Build system
+# ============================================================
 [build-system]
 requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
+# ============================================================
+# uv workspace configuration (development only)
+# ============================================================
+[tool.uv.workspace]
+members = [
+    "inference/silero_vad",
+    "inference/sherpa_onnx_local",
+    "inference/kokoro_cn_tts_local",
+]
+
+[[tool.uv.index]]
+name="PyPI"
+url="https://pypi.org/simple/"
+
+# Development: use local workspace members for testing
+# Note: These are NOT published to PyPI
+# Users should deploy inference services via Docker
+[tool.uv.sources]
+vixio-silero-vad-service = { workspace = true }
+vixio-sherpa-asr-service = { workspace = true }
+vixio-kokoro-tts-service = { workspace = true }
+
+# ============================================================
+# setuptools configuration
+# ============================================================
 [tool.setuptools]
-package-dir = {"" = "."}
+package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
-where = ["."]
+where = ["src"]
 include = ["vixio*"]
-exclude = ["tests*", "docs*", "examples*"]
+exclude = ["tests*", "docs*", "examples*", "inference*"]
 
+# ============================================================
+# Tool configurations
+# ============================================================
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
@@ -123,4 +222,3 @@ disallow_untyped_defs = false
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-

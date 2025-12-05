@@ -7,9 +7,9 @@ Test that client abort messages correctly trigger interrupt mechanism.
 import pytest
 import asyncio
 from typing import AsyncIterator
-from core.chunk import Chunk, ChunkType, TextChunk, ControlChunk
-from core.control_bus import ControlBus
-from core.session import SessionManager
+from vixio.core.chunk import Chunk, ChunkType, TextChunk, ControlChunk
+from vixio.core.control_bus import ControlBus
+from vixio.core.session import SessionManager
 
 
 class MockTransport:

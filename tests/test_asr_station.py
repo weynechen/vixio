@@ -3,9 +3,9 @@ Unit tests for ASRStation
 """
 
 import pytest
-from core.chunk import Chunk, ChunkType, AudioChunk, EventChunk, ControlChunk, TextChunk
-from stations.asr import ASRStation
-from providers.asr import ASRProvider
+from vixio.core.chunk import Chunk, ChunkType, AudioChunk, EventChunk, ControlChunk, TextChunk
+from vixio.stations.asr import ASRStation
+from vixio.providers.asr import ASRProvider
 from typing import List
 
 

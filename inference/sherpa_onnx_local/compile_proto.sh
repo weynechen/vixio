@@ -1,5 +1,12 @@
 #!/bin/bash
 # Compile Sherpa ONNX ASR proto file
+#
+# IMPORTANT: After running this script, you must manually copy the generated
+# files to the vixio providers directory to keep client/server in sync:
+#
+#   cp asr_pb2.py asr_pb2_grpc.py ../../src/vixio/providers/sherpa_onnx_local/
+#
+# The client.py in providers/ may also need updates if the proto interface changed.
 
 set -e
 

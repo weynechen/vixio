@@ -4,7 +4,7 @@ Test audio format conversion utilities
 
 import pytest
 import numpy as np
-from utils.audio import (
+from vixio.utils.audio import (
     OpusCodec,
     get_opus_codec,
     opus_to_pcm,

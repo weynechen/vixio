@@ -1,15 +1,73 @@
 # Vixio Provider Configuration
-# Supports three deployment modes: dev, docker, k8s
+# Supports multiple deployment modes: dev, dev-local-cn, docker, k8s
 
 # ==============================================================================
-# Development Mode (uv run)
+# Development Mode - In-Process (No External Services)
 # ==============================================================================
-# Local processes without Docker
-# - VAD: localhost:50051 (1 replica)
-# - ASR: localhost:50052 (1 replica)
+# All inference runs in the same process. No Docker or gRPC services needed.
+# Requires installing the local inference dependencies.
 # 
 # Usage:
-#   ./scripts/dev/start-all.sh
+#   pip install vixio[dev-local-cn]  # or: uv pip install -e ".[dev-local-cn]"
+#   uv run python examples/agent_chat.py --env dev-local-cn
+# ==============================================================================
+dev-local-cn:
+  providers:
+    # VAD Provider (In-Process - ONNX Runtime)
+    vad:
+      provider: silero-vad-local
+      config:
+        threshold: 0.35
+        threshold_low: 0.15
+        frame_window_threshold: 8
+        use_gpu: true
+    
+    # ASR Provider (In-Process - Sherpa ONNX)
+    asr:
+      provider: sherpa-onnx-asr-local
+      config:
+        model_path: "models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17"
+        language: "auto"
+        num_threads: 4
+        use_itn: true
+    
+    # Agent Provider (Remote API)
+    agent:
+      provider: openai-agent
+      config:
+        api_key: ${API_KEY}
+        model: ${LITELLM_MODEL:deepseek/deepseek-chat}
+        base_url: ${BASE_URL:}
+        temperature: 0.7
+        max_tokens: 2000
+    
+    # TTS Provider (In-Process - Kokoro)
+    tts:
+      provider: kokoro-tts-local
+      config:
+        voice: "zf_001"
+        speed: 1.1
+        lang: "zh"
+        sample_rate: 16000
+        repo_id: "hexgrad/Kokoro-82M-v1.1-zh"
+
+    vlm:
+      provider: openai-compatible-vlm
+      config:
+        model: "glm-4v-flash"
+        api_key: "${GLM_API_KEY}"
+        base_url: "https://open.bigmodel.cn/api/paas/v4"
+
+# ==============================================================================
+# Development Mode - gRPC Services
+# ==============================================================================
+# Requires running gRPC services separately (Docker or local processes).
+# - VAD: localhost:50051 (1 replica)
+# - ASR: localhost:50052 (1 replica)
+# - TTS: localhost:50053 (1 replica)
+# 
+# Usage:
+#   docker-compose up -d vad asr tts  # Start services
 #   uv run python examples/agent_chat.py --env dev
 # ==============================================================================
 dev:

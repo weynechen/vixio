@@ -12,12 +12,12 @@ Tests:
 import pytest
 import asyncio
 from typing import AsyncIterator
-from core.chunk import Chunk, ChunkType, AudioChunk, EventChunk, ControlChunk, TextChunk
-from core.station import Station
-from core.pipeline import Pipeline
-from core.control_bus import ControlBus
-from core.session import SessionManager
-from stations.turn_detector import TurnDetectorStation
+from vixio.core.chunk import Chunk, ChunkType, AudioChunk, EventChunk, ControlChunk, TextChunk
+from vixio.core.station import Station
+from vixio.core.pipeline import Pipeline
+from vixio.core.control_bus import ControlBus
+from vixio.core.session import SessionManager
+from vixio.stations.turn_detector import TurnDetectorStation
 
 
 # Mock Stations for Testing

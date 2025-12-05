@@ -3,9 +3,9 @@ Unit tests for Pipeline
 """
 
 import pytest
-from core.chunk import Chunk, ChunkType, TextChunk, AudioChunk, ControlChunk
-from core.station import Station, PassthroughStation
-from core.pipeline import Pipeline
+from vixio.core.chunk import Chunk, ChunkType, TextChunk, AudioChunk, ControlChunk
+from vixio.core.station import Station, PassthroughStation
+from vixio.core.pipeline import Pipeline
 from typing import AsyncIterator
 
 

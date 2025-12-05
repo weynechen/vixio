@@ -3,8 +3,8 @@ Unit tests for SentenceAggregatorStation
 """
 
 import pytest
-from core.chunk import Chunk, ChunkType, TextChunk, TextDeltaChunk, EventChunk, ControlChunk
-from stations.sentence_aggregator import SentenceAggregatorStation, SentenceAggregator
+from vixio.core.chunk import Chunk, ChunkType, TextChunk, TextDeltaChunk, EventChunk, ControlChunk
+from vixio.stations.sentence_aggregator import SentenceAggregatorStation, SentenceAggregator
 
 
 class TestSentenceAggregator:

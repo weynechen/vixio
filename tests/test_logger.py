@@ -6,7 +6,7 @@ Run this to verify logger is working correctly:
 """
 
 from loguru import logger
-from utils import configure_logger
+from vixio.utils import configure_logger
 
 # Optional: Reconfigure with custom settings
 # configure_logger(level="DEBUG", log_dir="logs")

@@ -2,9 +2,10 @@
 - [x] transport 需要抽象和解耦 → 已完成: [transport_architecture.md](./transport_architecture.md)
 - [x] function tool 需要接入 → 已完成: [function_tool_design.md](./function_tool_design.md)
 - [ ] 接入video in , video 在语音驱动下做describe，辅助场景理解 → 已完成: [vision_design.md](./vision_design.md) 未测试
-- [ ] 实现xiaozhi的vision mcp 接口
+- [x] 实现xiaozhi的vision mcp 接口
 - [ ] 数字人station
 - [ ] 制作python 包
 - [ ] 更改pipeline为DAG，充分解耦各个station的依赖
 - [ ] 更新intranscribe
-
+- [ ] 更新realtimestation
+- [ ] 制作实时翻译示例

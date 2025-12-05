@@ -3,9 +3,9 @@ Unit tests for VADStation
 """
 
 import pytest
-from core.chunk import Chunk, ChunkType, AudioChunk, EventChunk, ControlChunk
-from stations.vad import VADStation
-from providers.vad import VADProvider
+from vixio.core.chunk import Chunk, ChunkType, AudioChunk, EventChunk, ControlChunk
+from vixio.stations.vad import VADStation
+from vixio.providers.vad import VADProvider
 
 
 class MockVADProvider(VADProvider):
@@ -151,7 +151,7 @@ async def test_vad_passthrough_non_audio(vad_station):
     session_id = "test-session"
     
     # Create text chunk (not audio)
-    from core.chunk import TextChunk
+    from vixio.core.chunk import TextChunk
     text_chunk = TextChunk(
         type=ChunkType.TEXT,
         content="Hello",

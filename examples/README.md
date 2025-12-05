@@ -226,7 +226,7 @@ tail -f logs/kokoro_tts.log
 修改日志级别：
 
 ```python
-from utils import configure_logger
+from vixio.utils import configure_logger
 
 # 在导入其他模块之前调用
 configure_logger(level="DEBUG", log_dir="my_logs")

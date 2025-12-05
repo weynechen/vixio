@@ -1,5 +1,12 @@
 #!/bin/bash
 # Compile Silero VAD proto file
+#
+# IMPORTANT: After running this script, you must manually copy the generated
+# files to the vixio providers directory to keep client/server in sync:
+#
+#   cp vad_pb2.py vad_pb2_grpc.py ../../src/vixio/providers/silero_vad/
+#
+# The client.py in providers/ may also need updates if the proto interface changed.
 
 set -e
 

@@ -12,7 +12,12 @@ dependencies = [
     "loguru>=0.7.0",
 ]
 
+[project.scripts]
+vixio-vad-server = "server:main"
 
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
 
 # UV package indexes (optional, for faster downloads in China)
 # [[tool.uv.index]]

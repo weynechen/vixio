@@ -1,0 +1,26 @@
+[project]
+name = "vixio-kokoro-tts-service"
+version = "1.0.0"
+description = "Kokoro TTS gRPC microservice for Vixio"
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.0.0",
+    "numpy>=1.24.0",
+    "kokoro>=0.8.1",
+    "misaki[zh]>=0.8.1",
+    "grpcio>=1.60.0",
+    "grpcio-tools>=1.60.0",
+    "loguru>=0.7.0",
+]
+
+[project.scripts]
+vixio-tts-server = "server:main"
+
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[[tool.uv.index]]
+url = "https://pypi.org/simple/"
+default = true
+

@@ -24,7 +24,7 @@ async def test_provider_isolation():
     logger.info("=== Testing Multi-Session Provider Isolation ===")
     
     # Import after path setup
-    from providers import (
+    from vixio.providers import (
         SileroVADProvider,
         OpenAIAgentProvider,
         EdgeTTSProvider
@@ -96,9 +96,9 @@ async def test_pipeline_factory():
     """
     logger.info("\n=== Testing Pipeline Factory Pattern ===")
     
-    from core.pipeline import Pipeline
-    from stations import VADStation, AgentStation, TTSStation
-    from providers import SileroVADProvider, OpenAIAgentProvider, EdgeTTSProvider
+    from vixio.core.pipeline import Pipeline
+    from vixio.stations import VADStation, AgentStation, TTSStation
+    from vixio.providers import SileroVADProvider, OpenAIAgentProvider, EdgeTTSProvider
     import os
     
     # Create pipeline factory (simulating agent_chat.py pattern)

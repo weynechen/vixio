@@ -144,7 +144,7 @@ class VADStation:
 ### 当前支持：Opus
 
 ```python
-from utils.audio import OpusCodec, opus_to_pcm, pcm_to_opus
+from vixio.utils.audio import OpusCodec, opus_to_pcm, pcm_to_opus
 
 # 方式1：使用 Codec 实例（推荐用于 Transport）
 codec = OpusCodec(sample_rate=16000, channels=1, frame_duration_ms=60)

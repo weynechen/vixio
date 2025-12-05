@@ -21,11 +21,11 @@ from loguru import logger
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from transports.xiaozhi.protocol import (
+from vixio.transports.xiaozhi.protocol import (
     XiaozhiMessageType,
     XiaozhiControlAction,
 )
-from utils.audio import OpusCodec, get_opus_codec
+from vixio.utils.audio import OpusCodec, get_opus_codec
 
 
 class AudioPlayer:
@@ -561,7 +561,7 @@ async def run_concurrent_test(
     else:
         logger.success("Test completed successfully! ✓")
 
-from utils.network import get_local_ip
+from vixio.utils.network import get_local_ip
 ip_address = get_local_ip()
 server_url = f"ws://{ip_address}:8000/xiaozhi/v1/"
 
