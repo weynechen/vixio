@@ -4,6 +4,8 @@ Audio format conversion utilities
 Provides common audio format conversions for Transport and Provider layers.
 """
 
+from __future__ import annotations
+
 from typing import Optional
 from loguru import logger
 
@@ -12,6 +14,7 @@ try:
     import opuslib_next
     OPUS_AVAILABLE = True
 except ImportError:
+    opuslib_next = None  # type: ignore
     OPUS_AVAILABLE = False
     logger.error("opuslib_next not available, Opus codec disabled")
     logger.warning("if you are in windows,please install opus from https://github.com/ShiftMediaProject/opus/releases")

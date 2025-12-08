@@ -33,7 +33,7 @@ class ProviderFactory:
             TypeError: Invalid configuration
             
         Example:
-            provider = ProviderFactory.create("silero-vad", {
+            provider = ProviderFactory.create("silero-vad-grpc", {
                 "service_url": "localhost:50051",
                 "threshold": 0.5
             })

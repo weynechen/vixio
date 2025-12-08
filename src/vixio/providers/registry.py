@@ -86,6 +86,11 @@ def register_provider(name: str):
     """
     Decorator for registering providers.
     
+    Naming convention:
+        - `-local`: In-process inference (e.g., silero-vad-local)
+        - `-grpc`: Connect to gRPC service (e.g., silero-vad-grpc)
+        - `-remote`: Connect to remote cloud API (e.g., edge-tts-remote)
+    
     Usage:
         @register_provider("silero-vad-grpc")
         class LocalSileroVADProvider(VADProvider):

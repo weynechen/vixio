@@ -42,16 +42,11 @@ class VixioSettings(BaseSettings):
     asr_service_url: str = "localhost:50052"
     tts_service_url: str = "localhost:50053"
     
-    # Default providers
-    default_vad: str = "silero-vad"
-    default_asr: str = "sherpa-asr"
-    default_tts: str = "edge-tts"
+    # Default providers (naming convention: -local for in-process, -grpc for gRPC, -remote for cloud API)
+    default_vad: str = "silero-vad-local"
+    default_asr: str = "sherpa-onnx-asr-local"
+    default_tts: str = "edge-tts-remote"
     default_agent: str = "openai-agent"
-    
-    # Provider modes
-    vad_mode: str = "auto"
-    asr_mode: str = "auto"
-    tts_mode: str = "grpc"
     
     class Config:
         env_prefix = "VIXIO_"
@@ -113,16 +108,11 @@ def load_config(
     if env_settings.log_file:
         config.log_file = env_settings.log_file
     
-    # Override VAD settings
+    # Override VAD settings (for gRPC mode)
     config.vad.service_url = env_settings.vad_service_url
-    config.vad.mode = env_settings.vad_mode
     
-    # Override ASR settings
+    # Override ASR settings (for gRPC mode)
     config.asr.service_url = env_settings.asr_service_url
-    config.asr.mode = env_settings.asr_mode
-    
-    # Override TTS settings (if using gRPC TTS)
-    # config.tts is for edge-tts by default, no service_url needed
     
     return config
 

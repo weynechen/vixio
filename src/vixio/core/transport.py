@@ -359,36 +359,45 @@ class TransportBase(ABC):
         """
         Stop workers and cleanup resources for session.
         
+        This method is idempotent - safe to call multiple times.
+        
         Args:
             session_id: Session ID
         """
+        # Check if already cleaned up (idempotent)
+        if session_id not in self._read_queues and session_id not in self._send_queues:
+            self.logger.debug(f"Session {session_id[:8]} already cleaned up, skipping")
+            return
+        
         # Call session end hook
         await self._on_session_end(session_id)
         
         # Stop read_worker
-        if session_id in self._read_workers:
-            self._read_workers[session_id].cancel()
+        read_worker = self._read_workers.pop(session_id, None)
+        if read_worker:
+            read_worker.cancel()
             try:
-                await self._read_workers[session_id]
+                await read_worker
             except asyncio.CancelledError:
                 pass
-            del self._read_workers[session_id]
         
         # Stop send_worker (send None signal)
-        if session_id in self._send_queues:
-            await self._send_queues[session_id].put(None)
+        send_queue = self._send_queues.get(session_id)
+        if send_queue:
+            await send_queue.put(None)
         
-        if session_id in self._send_workers:
+        send_worker = self._send_workers.pop(session_id, None)
+        if send_worker:
             try:
-                await asyncio.wait_for(self._send_workers[session_id], timeout=2.0)
+                await asyncio.wait_for(send_worker, timeout=2.0)
             except (asyncio.CancelledError, asyncio.TimeoutError):
-                self._send_workers[session_id].cancel()
-            del self._send_workers[session_id]
+                send_worker.cancel()
         
         # Cleanup resources
         self._read_queues.pop(session_id, None)
         self._send_queues.pop(session_id, None)
         self._priority_queues.pop(session_id, None)
+        self._video_queues.pop(session_id, None)
         self._output_controllers.pop(session_id, None)
         self._control_buses.pop(session_id, None)
         self._first_audio_sent_recorded.pop(session_id, None)
@@ -546,8 +555,16 @@ class TransportBase(ABC):
                 # 3. Send data
                 try:
                     await self._do_write(session_id, data)
+                except ConnectionError as e:
+                    # Connection closed - expected when client disconnects
+                    self.logger.debug(f"Connection closed, stopping send worker: {e}")
+                    break
                 except Exception as e:
-                    self.logger.error(f"Failed to send data: {e}")
+                    # Check if session is still active
+                    if session_id not in self._send_queues:
+                        self.logger.debug(f"Session {session_id[:8]} disconnected, stopping send worker")
+                        break
+                    self.logger.warning(f"Failed to send data: {e}")
                     continue
                 
                 # 4. Latency tracking: record first_audio_sent AFTER network send

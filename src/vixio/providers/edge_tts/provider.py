@@ -9,7 +9,7 @@ from vixio.providers.registry import register_provider
 from vixio.utils.audio import mp3_to_pcm, MP3_AVAILABLE
 
 
-@register_provider("edge-tts")
+@register_provider("edge-tts-remote")
 class EdgeTTSProvider(TTSProvider):
     """
     Edge TTS provider implementation.

@@ -4,16 +4,23 @@ Local Sherpa ONNX ASR Provider (In-Process Inference)
 This provider runs ASR inference directly in the current process
 without requiring a separate gRPC service.
 
+Model is automatically downloaded from HuggingFace on first use:
+- Default: csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09
+
 Requires: pip install vixio[sherpa-onnx-asr-local]
 """
 
 import asyncio
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 import numpy as np
 
 from vixio.providers.asr import ASRProvider
 from vixio.providers.registry import register_provider
+
+# Default HuggingFace repo for ASR model
+DEFAULT_ASR_REPO_ID = "csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09"
+DEFAULT_ASR_LOCAL_DIR = "sherpa-onnx-sense-voice"
 
 
 @register_provider("sherpa-onnx-asr-local")
@@ -26,13 +33,14 @@ class LocalSherpaASRInProcessProvider(ASRProvider):
     
     Features:
     - No external service dependency
+    - Automatic model download from HuggingFace
     - SenseVoice model support (multi-language)
     - Offline recognition (batch processing)
     - Low latency (no network overhead)
     
     Requirements:
         pip install vixio[sherpa-onnx-asr-local]
-        # or manually: pip install sherpa-onnx
+        # or manually: pip install sherpa-onnx huggingface_hub
     """
     
     @property
@@ -52,7 +60,8 @@ class LocalSherpaASRInProcessProvider(ASRProvider):
     
     def __init__(
         self,
-        model_path: str = "models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17",
+        model_path: Optional[str] = None,
+        repo_id: str = DEFAULT_ASR_REPO_ID,
         language: str = "auto",
         num_threads: int = 4,
         use_itn: bool = True
@@ -60,8 +69,12 @@ class LocalSherpaASRInProcessProvider(ASRProvider):
         """
         Initialize Local Sherpa ONNX ASR provider (in-process).
         
+        Model is automatically downloaded from HuggingFace if not found locally.
+        
         Args:
-            model_path: Path to Sherpa ONNX model directory
+            model_path: Path to Sherpa ONNX model directory. If None, downloads
+                        from HuggingFace to models/sherpa-onnx-sense-voice/
+            repo_id: HuggingFace repository ID for auto-download
             language: Language code ("auto", "zh", "en", etc.)
             num_threads: Number of threads for inference
             use_itn: Whether to use Inverse Text Normalization
@@ -69,7 +82,8 @@ class LocalSherpaASRInProcessProvider(ASRProvider):
         name = getattr(self.__class__, '_registered_name', self.__class__.__name__)
         super().__init__(name=name)
         
-        self.model_path = model_path
+        self.model_path = model_path  # Can be None, will be resolved in initialize()
+        self.repo_id = repo_id
         self.language = language
         self.num_threads = num_threads
         self.use_itn = use_itn
@@ -77,10 +91,11 @@ class LocalSherpaASRInProcessProvider(ASRProvider):
         # Recognizer (initialized lazily)
         self._recognizer = None
         self._inference_lock = asyncio.Lock()
+        self._resolved_model_path: Optional[str] = None
         
         self.logger.info(
             f"Initialized Local Sherpa ONNX ASR (in-process) "
-            f"(model={model_path}, language={language})"
+            f"(repo_id={repo_id}, language={language})"
         )
     
     @classmethod
@@ -89,8 +104,13 @@ class LocalSherpaASRInProcessProvider(ASRProvider):
         return {
             "model_path": {
                 "type": "string",
-                "default": "models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17",
-                "description": "Path to Sherpa ONNX model directory"
+                "default": None,
+                "description": "Path to Sherpa ONNX model directory. If None, auto-downloads from HuggingFace."
+            },
+            "repo_id": {
+                "type": "string",
+                "default": DEFAULT_ASR_REPO_ID,
+                "description": "HuggingFace repository ID for auto-download"
             },
             "language": {
                 "type": "string",
@@ -112,6 +132,8 @@ class LocalSherpaASRInProcessProvider(ASRProvider):
     async def initialize(self) -> None:
         """
         Initialize provider: load Sherpa ONNX model.
+        
+        Automatically downloads model from HuggingFace if not found locally.
         """
         try:
             import sherpa_onnx
@@ -122,25 +144,8 @@ class LocalSherpaASRInProcessProvider(ASRProvider):
             ) from e
         
         # Resolve model path
-        model_dir = Path(self.model_path)
-        if not model_dir.is_absolute():
-            # Try relative to cwd first, then package
-            if not model_dir.exists():
-                # Try looking up from cwd
-                import os
-                cwd = Path(os.getcwd())
-                for _ in range(5):
-                    candidate = cwd / self.model_path
-                    if candidate.exists():
-                        model_dir = candidate
-                        break
-                    cwd = cwd.parent
-        
-        if not model_dir.exists():
-            raise FileNotFoundError(
-                f"Model directory not found: {self.model_path}. "
-                "Please download the model first."
-            )
+        model_dir = self._resolve_model_path()
+        self._resolved_model_path = str(model_dir)
         
         model_file = model_dir / "model.int8.onnx"
         tokens_file = model_dir / "tokens.txt"
@@ -162,6 +167,48 @@ class LocalSherpaASRInProcessProvider(ASRProvider):
         )
         
         self.logger.info(f"Sherpa ONNX ASR model loaded from {model_dir}")
+    
+    def _resolve_model_path(self) -> Path:
+        """
+        Resolve model path, downloading from HuggingFace if necessary.
+        
+        Returns:
+            Path to the model directory.
+        """
+        # If model_path is explicitly specified and exists, use it
+        if self.model_path:
+            model_dir = Path(self.model_path)
+            if not model_dir.is_absolute():
+                # Try relative to cwd first
+                import os
+                cwd = Path(os.getcwd())
+                for _ in range(5):
+                    candidate = cwd / self.model_path
+                    if candidate.exists():
+                        return candidate
+                    cwd = cwd.parent
+                # If not found, check absolute path
+                if model_dir.exists():
+                    return model_dir
+            else:
+                if model_dir.exists():
+                    return model_dir
+            
+            # Model path specified but not found - try to download
+            self.logger.warning(
+                f"Model directory not found at {self.model_path}, "
+                f"will download from HuggingFace: {self.repo_id}"
+            )
+        
+        # Download from HuggingFace
+        from vixio.utils.model_downloader import ensure_model_downloaded
+        
+        downloaded_path = ensure_model_downloaded(
+            repo_id=self.repo_id,
+            local_dir=DEFAULT_ASR_LOCAL_DIR,
+        )
+        
+        return Path(downloaded_path)
     
     async def transcribe(self, audio_chunks: list[bytes]) -> str:
         """
@@ -219,6 +266,8 @@ class LocalSherpaASRInProcessProvider(ASRProvider):
         config = super().get_config()
         config.update({
             "model_path": self.model_path,
+            "repo_id": self.repo_id,
+            "resolved_model_path": self._resolved_model_path,
             "language": self.language,
             "num_threads": self.num_threads,
             "use_itn": self.use_itn,

@@ -1,9 +1,18 @@
 """
 Kokoro TTS Provider
 
-Supports multiple operation modes:
+Provider naming convention:
 - kokoro-tts-local: In-process inference (requires: pip install vixio[kokoro-cn-tts-local])
 - kokoro-tts-grpc: Connect to gRPC service (requires: pip install vixio[kokoro-cn-tts-grpc])
+
+Usage:
+    # In-process mode (no external service needed)
+    from vixio.providers.kokoro_cn_tts_local import LocalKokoroTTSInProcessProvider
+    provider = LocalKokoroTTSInProcessProvider(voice="zf_001")
+    
+    # gRPC mode (production)
+    from vixio.providers.kokoro_cn_tts_local import LocalKokoroTTSProvider
+    provider = LocalKokoroTTSProvider(service_url="localhost:50053")
 """
 
 # gRPC provider (connects to external service, requires grpc)
@@ -20,7 +29,7 @@ except ImportError:
     LocalKokoroTTSInProcessProvider = None
 
 __all__ = [
-    'LocalKokoroTTSProvider',  # gRPC client
-    'LocalKokoroTTSInProcessProvider',  # In-process inference
+    'LocalKokoroTTSProvider',  # kokoro-tts-grpc
+    'LocalKokoroTTSInProcessProvider',  # kokoro-tts-local
 ]
 

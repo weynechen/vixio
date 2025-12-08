@@ -16,9 +16,8 @@ class ProviderConfig(BaseModel):
 
 class VADConfig(BaseModel):
     """VAD Provider configuration"""
-    type: str = Field(default="silero-vad", description="VAD provider type")
-    mode: Literal["auto", "local", "grpc"] = Field(default="auto", description="Operation mode")
-    service_url: str = Field(default="localhost:50051", description="gRPC service URL")
+    type: str = Field(default="silero-vad-local", description="VAD provider type (silero-vad-local or silero-vad-grpc)")
+    service_url: str = Field(default="localhost:50051", description="gRPC service URL (for silero-vad-grpc)")
     threshold: float = Field(default=0.35, description="Voice detection threshold")
     threshold_low: float = Field(default=0.15, description="Lower threshold for hysteresis")
     frame_window_threshold: int = Field(default=8, description="Frames to confirm voice/silence")
@@ -26,14 +25,13 @@ class VADConfig(BaseModel):
 
 class ASRConfig(BaseModel):
     """ASR Provider configuration"""
-    type: str = Field(default="sherpa-asr", description="ASR provider type")
-    mode: Literal["auto", "local", "grpc"] = Field(default="auto", description="Operation mode")
-    service_url: str = Field(default="localhost:50052", description="gRPC service URL")
+    type: str = Field(default="sherpa-onnx-asr-local", description="ASR provider type (sherpa-onnx-asr-local or sherpa-onnx-asr-grpc)")
+    service_url: str = Field(default="localhost:50052", description="gRPC service URL (for sherpa-onnx-asr-grpc)")
 
 
 class TTSConfig(BaseModel):
     """TTS Provider configuration"""
-    type: str = Field(default="edge-tts", description="TTS provider type")
+    type: str = Field(default="edge-tts-remote", description="TTS provider type (edge-tts-remote, kokoro-tts-local, kokoro-tts-grpc)")
     voice: str = Field(default="zh-CN-XiaoxiaoNeural", description="Voice name")
     rate: str = Field(default="+0%", description="Speech rate")
     volume: str = Field(default="+0%", description="Speech volume")

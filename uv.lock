@@ -3672,7 +3672,7 @@ wheels = [
 
 [[package]]
 name = "vixio"
-version = "0.1.0"
+version = "0.1.2"
 source = { editable = "." }
 dependencies = [
     { name = "loguru" },
@@ -3687,6 +3687,7 @@ dev-local-cn = [
     { name = "aiohttp-cors" },
     { name = "fastapi" },
     { name = "httpx" },
+    { name = "huggingface-hub" },
     { name = "kokoro" },
     { name = "misaki", extra = ["zh"] },
     { name = "numpy" },
@@ -3744,6 +3745,7 @@ sherpa-onnx-asr-grpc = [
     { name = "numpy" },
 ]
 sherpa-onnx-asr-local = [
+    { name = "huggingface-hub" },
     { name = "numpy" },
     { name = "onnxruntime-gpu" },
     { name = "sherpa-onnx" },
@@ -3793,6 +3795,7 @@ requires-dist = [
     { name = "grpcio-tools", marker = "extra == 'sherpa-onnx-asr-grpc'", specifier = ">=1.76.0" },
     { name = "grpcio-tools", marker = "extra == 'silero-vad-grpc'", specifier = ">=1.76.0" },
     { name = "httpx", marker = "extra == 'openai-agent'", specifier = ">=0.28.0" },
+    { name = "huggingface-hub", marker = "extra == 'sherpa-onnx-asr-local'", specifier = ">=0.20.0" },
     { name = "isort", marker = "extra == 'test'", specifier = ">=5.12.0" },
     { name = "kokoro", marker = "extra == 'kokoro-cn-tts-local'", specifier = ">=0.8.1" },
     { name = "loguru", specifier = ">=0.7.3" },

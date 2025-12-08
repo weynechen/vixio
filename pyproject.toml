@@ -1,6 +1,6 @@
 [project]
 name = "vixio"
-version = "0.1.1"
+version = "0.1.2"
 description = "Voice-Powered Agent Framework"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -83,6 +83,7 @@ sherpa-onnx-asr-local = [
     "onnxruntime-gpu>=1.16.0",
     "numpy>=1.24.0",
     "sherpa-onnx>=1.12.15",
+    "huggingface_hub>=0.20.0",  # for auto-downloading models
 ]
 
 kokoro-cn-tts-local = [

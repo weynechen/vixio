@@ -1,17 +1,18 @@
 """
 Sherpa ONNX ASR Provider
 
-Supports multiple operation modes:
+Provider naming convention:
 - sherpa-onnx-asr-local: In-process inference (requires: pip install vixio[sherpa-onnx-asr-local])
 - sherpa-onnx-asr-grpc: Connect to gRPC service (requires: pip install vixio[sherpa-onnx-asr-grpc])
 
 Usage:
-    from vixio.providers.sherpa_onnx_local import LocalSherpaASRProvider
+    # In-process mode (no external service needed)
+    from vixio.providers.sherpa_onnx_local import LocalSherpaASRInProcessProvider
+    provider = LocalSherpaASRInProcessProvider(model_path="models/sherpa-onnx")
     
     # gRPC mode (production)
+    from vixio.providers.sherpa_onnx_local import LocalSherpaASRProvider
     provider = LocalSherpaASRProvider(service_url="localhost:50052")
-    await provider.initialize()
-    text = await provider.transcribe(audio_chunks)
 """
 
 # gRPC provider (connects to external service, requires grpc)
@@ -28,6 +29,6 @@ except ImportError:
     LocalSherpaASRInProcessProvider = None
 
 __all__ = [
-    "LocalSherpaASRProvider",  # gRPC client
-    "LocalSherpaASRInProcessProvider",  # In-process inference
+    "LocalSherpaASRProvider",  # sherpa-onnx-asr-grpc
+    "LocalSherpaASRInProcessProvider",  # sherpa-onnx-asr-local
 ]

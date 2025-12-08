@@ -22,7 +22,7 @@ except ImportError:
     HTTPX_AVAILABLE = False
 
 
-@register_provider("openai-compatible-vlm")
+@register_provider("openai-vlm-remote")
 class OpenAICompatibleVLM(VisionDescriber):
     """
     OpenAI-compatible VLM vision describer.

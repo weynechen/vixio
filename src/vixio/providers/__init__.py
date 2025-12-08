@@ -85,52 +85,88 @@ def get_openai_agent_provider():
         ) from e
 
 
-def get_silero_vad_provider():
+def get_silero_vad_local_provider():
     """
-    Load SileroVADProvider class.
+    Load LocalSileroVADInProcessProvider class (silero-vad-local).
     
-    This provider supports dual-mode operation:
-    - local: In-process inference (requires: pip install vixio[silero-vad-local])
-    - grpc: Connect to gRPC service (no extra deps, but requires running service)
-    - auto: Try gRPC first, fallback to local
+    In-process inference, runs VAD directly in the current process.
+    Requires: pip install vixio[silero-vad-local]
     
     Returns:
-        SileroVADProvider class
+        LocalSileroVADInProcessProvider class
     """
-    from vixio.providers.silero_vad.provider import SileroVADProvider
-    return SileroVADProvider
+    from vixio.providers.silero_vad.local_provider import LocalSileroVADInProcessProvider
+    return LocalSileroVADInProcessProvider
 
 
-def get_sherpa_asr_provider():
+def get_silero_vad_grpc_provider():
     """
-    Load SherpaASRProvider class.
+    Load LocalSileroVADProvider class (silero-vad-grpc).
     
-    This provider supports dual-mode operation:
-    - local: In-process inference (requires: pip install vixio[sherpa-asr-local])
-    - grpc: Connect to gRPC service (no extra deps, but requires running service)
-    - auto: Try gRPC first, fallback to local
+    Connects to external gRPC VAD service.
+    Requires: running VAD gRPC service
     
     Returns:
-        SherpaASRProvider class
+        LocalSileroVADProvider class
     """
-    from vixio.providers.sherpa_onnx_local.provider import SherpaASRProvider
-    return SherpaASRProvider
+    from vixio.providers.silero_vad.grpc_provider import LocalSileroVADProvider
+    return LocalSileroVADProvider
 
 
-def get_kokoro_tts_provider():
+def get_sherpa_asr_local_provider():
     """
-    Load KokoroTTSProvider class.
+    Load LocalSherpaASRInProcessProvider class (sherpa-onnx-asr-local).
     
-    This provider supports dual-mode operation:
-    - local: In-process inference (requires: pip install vixio[kokoro-tts-local])
-    - grpc: Connect to gRPC service (no extra deps, but requires running service)
-    - auto: Try gRPC first, fallback to local
+    In-process inference, runs ASR directly in the current process.
+    Requires: pip install vixio[sherpa-onnx-asr-local]
     
     Returns:
-        KokoroTTSProvider class
+        LocalSherpaASRInProcessProvider class
     """
-    from vixio.providers.kokoro_cn_tts_local.provider import KokoroTTSProvider
-    return KokoroTTSProvider
+    from vixio.providers.sherpa_onnx_local.local_provider import LocalSherpaASRInProcessProvider
+    return LocalSherpaASRInProcessProvider
+
+
+def get_sherpa_asr_grpc_provider():
+    """
+    Load LocalSherpaASRProvider class (sherpa-onnx-asr-grpc).
+    
+    Connects to external gRPC ASR service.
+    Requires: running ASR gRPC service
+    
+    Returns:
+        LocalSherpaASRProvider class
+    """
+    from vixio.providers.sherpa_onnx_local.grpc_provider import LocalSherpaASRProvider
+    return LocalSherpaASRProvider
+
+
+def get_kokoro_tts_local_provider():
+    """
+    Load LocalKokoroTTSInProcessProvider class (kokoro-tts-local).
+    
+    In-process inference, runs TTS directly in the current process.
+    Requires: pip install vixio[kokoro-cn-tts-local]
+    
+    Returns:
+        LocalKokoroTTSInProcessProvider class
+    """
+    from vixio.providers.kokoro_cn_tts_local.local_provider import LocalKokoroTTSInProcessProvider
+    return LocalKokoroTTSInProcessProvider
+
+
+def get_kokoro_tts_grpc_provider():
+    """
+    Load LocalKokoroTTSProvider class (kokoro-tts-grpc).
+    
+    Connects to external gRPC TTS service.
+    Requires: running TTS gRPC service
+    
+    Returns:
+        LocalKokoroTTSProvider class
+    """
+    from vixio.providers.kokoro_cn_tts_local.grpc_provider import LocalKokoroTTSProvider
+    return LocalKokoroTTSProvider
 
 
 def get_vision_describer():
@@ -170,13 +206,18 @@ __all__ = [
     "ProviderRegistry",
     "register_provider",
     "ProviderFactory",
-    # Lazy loaders
+    # Lazy loaders - Remote providers
     "get_edge_tts_provider",
     "get_openai_agent_provider",
-    "get_silero_vad_provider",
-    "get_sherpa_asr_provider",
-    "get_kokoro_tts_provider",
     "get_vision_describer",
+    # Lazy loaders - Local (in-process) providers
+    "get_silero_vad_local_provider",
+    "get_sherpa_asr_local_provider",
+    "get_kokoro_tts_local_provider",
+    # Lazy loaders - gRPC providers
+    "get_silero_vad_grpc_provider",
+    "get_sherpa_asr_grpc_provider",
+    "get_kokoro_tts_grpc_provider",
 ]
 
 

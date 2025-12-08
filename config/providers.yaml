@@ -23,10 +23,12 @@ dev-local-cn:
         use_gpu: true
     
     # ASR Provider (In-Process - Sherpa ONNX)
+    # Model auto-downloads from HuggingFace on first use
     asr:
       provider: sherpa-onnx-asr-local
       config:
-        model_path: "models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17"
+        # model_path: null  # Auto-download to models/sherpa-onnx-sense-voice/
+        # repo_id: "csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09"
         language: "auto"
         num_threads: 4
         use_itn: true
@@ -52,7 +54,7 @@ dev-local-cn:
         repo_id: "hexgrad/Kokoro-82M-v1.1-zh"
 
     vlm:
-      provider: openai-compatible-vlm
+      provider: openai-vlm-remote
       config:
         model: "glm-4v-flash"
         api_key: "${GLM_API_KEY}"
@@ -91,7 +93,7 @@ dev:
     
     # Agent Provider (Remote API)
     agent:
-      provider: openai-agent
+      provider: openai-agent-remote
       config:
         api_key: ${API_KEY}
         model: ${LITELLM_MODEL:deepseek/deepseek-chat}
@@ -99,9 +101,9 @@ dev:
         temperature: 0.7
         max_tokens: 2000
     
-    # TTS Provider (可选: edge-tts 或 kokoro-tts-grpc)
+    # TTS Provider (可选: edge-tts-remote 或 kokoro-tts-grpc)
     # tts:
-    #   provider: edge-tts
+    #   provider: edge-tts-remote
     #   config:
     #     voice: "zh-CN-XiaoxiaoNeural"
     #     rate: "+0%"
@@ -118,7 +120,7 @@ dev:
         sample_rate: 24000  # Kokoro 原生采样率
 
     vlm:
-      provider: openai-compatible-vlm
+      provider: openai-vlm-remote
       config:
         model: "glm-4v-flash"
         api_key: "${GLM_API_KEY}"
@@ -156,7 +158,7 @@ docker:
     
     # Agent Provider (Remote API)
     agent:
-      provider: openai-agent
+      provider: openai-agent-remote
       config:
         api_key: ${API_KEY}
         model: ${LITELLM_MODEL:deepseek/deepseek-chat}
@@ -166,7 +168,7 @@ docker:
     
     # TTS Provider (Remote API)
     tts:
-      provider: edge-tts
+      provider: edge-tts-remote
       config:
         voice: "zh-CN-XiaoxiaoNeural"
         rate: "+0%"
@@ -203,7 +205,7 @@ k8s:
     
     # Agent Provider (Remote API)
     agent:
-      provider: openai-agent
+      provider: openai-agent-remote
       config:
         api_key: ${API_KEY}
         model: ${LITELLM_MODEL:deepseek/deepseek-chat}
@@ -213,7 +215,7 @@ k8s:
     
     # TTS Provider (Remote API)
     tts:
-      provider: edge-tts
+      provider: edge-tts-remote
       config:
         voice: "zh-CN-XiaoxiaoNeural"
         rate: "+0%"
