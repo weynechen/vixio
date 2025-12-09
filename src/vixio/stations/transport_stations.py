@@ -278,14 +278,19 @@ class InputStation(Station):
 
 class OutputStation(Station):
     """
-    Output format conversion Station - Pipeline endpoint.
+    Output format conversion Station - Pipeline/DAG endpoint.
     
     Responsibilities (pure format conversion):
-    1. Receive Chunk from Pipeline
+    1. Receive Chunk from Pipeline/DAG
     2. Call AudioCodec to encode audio (if needed)
-    3. Call Protocol to convert to message
+    3. Call Protocol to convert to message (passing type + source for routing)
     4. Call Protocol to encode message
     5. Write to Transport's queues (priority_queue for control, send_queue for data)
+    
+    DAG decoupling:
+    - OutputStation does NOT check chunk.source
+    - Passes (chunk.type, chunk.source) to Protocol
+    - Protocol decides how to format the message based on type + source
     
     Dual queue design:
     - priority_queue: Control messages (TTS_STOP, STATE changes) - sent immediately
@@ -330,18 +335,22 @@ class OutputStation(Station):
         """
         Process Chunk: convert to protocol message and put into appropriate queue.
         
+        DAG routing rules:
+        - OutputStation does NOT check chunk.source
+        - Passes type + source to Protocol for message formatting
+        
         Queue selection based on ChunkType.is_high_priority():
         - High priority (CONTROL_INTERRUPT, STATE changes) -> priority_queue (immediate)
         - Normal (audio, TTS events) -> send_queue (may be delayed by flow control)
         
         Special handling:
-        - CONTROL_INTERRUPT: converted to TTS_STOP + STATE_LISTENING messages
+        - CONTROL_ABORT: converted to TTS_STOP + STATE_LISTENING messages
         - AUDIO_RAW: split into frames and encoded
         
         OutputStation is endpoint, doesn't produce new Chunks.
         """
         # Special handling for AUDIO_RAW: split into frames, encode, and send
-        if chunk.type == ChunkType.AUDIO_RAW and "tts" in chunk.source.lower() and chunk.data:
+        if chunk.type == ChunkType.AUDIO_RAW and chunk.data:
             await self._send_audio_frames(chunk.data, chunk.turn_id)
             return
             yield  # Keep as generator
@@ -421,17 +430,24 @@ class OutputStation(Station):
     
     async def _chunk_to_message(self, chunk: Chunk) -> Optional[Dict[str, Any]]:
         """
-        Convert Chunk to protocol message (calling Protocol business methods).
+        Convert Chunk to protocol message.
+        
+        DAG decoupling:
+        - Does NOT check chunk.source for routing decisions
+        - Passes type + source to Protocol methods
+        - Protocol decides message format based on type + source
         """
-        # TEXT chunks - determine type based on source
+        # TEXT chunks - pass source to Protocol for routing decision
         if chunk.type == ChunkType.TEXT:
             text = chunk.data
-            
-            if "asr" in chunk.source.lower():
-                return self.protocol.send_stt(self._session_id, text)
-            
-            elif "agent" in chunk.source.lower():
-                return self.protocol.send_llm(self._session_id, text)
+            source = chunk.source or ""
+            return self.protocol.send_text(self._session_id, text, source)
+        
+        # TEXT_DELTA chunks - pass source to Protocol
+        elif chunk.type == ChunkType.TEXT_DELTA:
+            text = chunk.data
+            source = chunk.source or ""
+            return self.protocol.send_text_delta(self._session_id, text, source)
         
         # AUDIO chunks - skip here, handled separately in process_chunk
         elif chunk.type == ChunkType.AUDIO_RAW:

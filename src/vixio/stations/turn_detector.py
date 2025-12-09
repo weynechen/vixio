@@ -78,132 +78,109 @@ class TurnDetectorStation(DetectorStation):
         """
         Process chunk for turn detection and interrupt handling.
         
+        DAG routing rules:
+        - Only process chunks matching ALLOWED_INPUT_TYPES (VAD/BOT events)
+        - Do NOT passthrough - DAG handles routing to downstream nodes
+        - Output: EVENT_TURN_END
+        
         Logic:
         - On EVENT_VAD_START: Check if user interrupted (bot speaking)
-          * If yes: send interrupt signal to ControlBus (Session will handle turn increment)
+          * If yes: send interrupt signal to ControlBus
           * Cancel pending turn end if any
         - On EVENT_VAD_END: Wait for silence threshold, emit TURN_END (if not cancelled)
         - On EVENT_BOT_STARTED_SPEAKING: Set bot speaking flag
         - On EVENT_BOT_STOPPED_SPEAKING: Clear bot speaking flag
-        - On CONTROL_INTERRUPT: Cancel waiting and reset
         
         Turn Management:
         - Sends interrupt signal when user interrupts bot (speaks during bot speaking)
         - Session's interrupt handler increments turn_id for all interrupts
         - TTS station increments turn_id when bot finishes
         """
-        # Handle signals
-        if chunk.is_signal():
-            # Bot speaking state tracking
-            if chunk.type == ChunkType.EVENT_BOT_STARTED_SPEAKING:
-                self._bot_is_speaking = True
-                self.logger.debug("Bot started speaking")
-                yield chunk
-                return
-            
-            elif chunk.type == ChunkType.EVENT_BOT_STOPPED_SPEAKING:
-                self._bot_is_speaking = False
-                self.logger.debug("Bot stopped speaking")
-                yield chunk
-                return
-            
-            # Voice started - check for interrupt
-            elif chunk.type == ChunkType.EVENT_VAD_START:
-                # Cancel pending turn end
-                if self._should_emit_turn_end:
-                    self.logger.debug("Turn end cancelled (voice resumed)")
-                    self._should_emit_turn_end = False
-                    self._waiting_session_id = None
-                
-                # Check if should send interrupt (user speaking during bot speaking)
-                if self.interrupt_enabled and self._bot_is_speaking and self.control_bus:
-                    self.logger.warning("User interrupt detected (speaking during bot speaking)")
-                    
-                    # Send interrupt signal via ControlBus
-                    # Session will handle turn increment for all interrupts
-                    await self.control_bus.send_interrupt(
-                        source=self.name,
-                        reason="user_speaking_during_bot_speaking",
-                        metadata={"session_id": chunk.session_id}
-                    )
-                    
-                    # Note: Don't emit CONTROL_INTERRUPT chunk here anymore
-                    # Session's interrupt handler will send it after incrementing turn
-                    # This ensures proper turn_id synchronization
-                
-                # Passthrough VAD_START
-                yield chunk
-                return
-            
-            # Voice ended - wait for silence then emit turn end
-            elif chunk.type == ChunkType.EVENT_VAD_END:
-                # Wait for silence threshold and emit TURN_END
-                # Turn increment happens when bot finishes (TTS) or user interrupts (above)
-                
-                # Record T0: user_speech_end (VAD_END received)
-                self._latency_monitor.record(
-                    chunk.session_id,
-                    chunk.turn_id,
-                    "user_speech_end",
-                    chunk.timestamp
-                )
-                
-                # Passthrough VAD_END first
-                yield chunk
-                
-                # Set flag to emit TURN_END
-                self._should_emit_turn_end = True
-                self._waiting_session_id = chunk.session_id
-                waiting_turn_id = chunk.turn_id  # Capture turn_id for TURN_END event
-                
-                # Wait for silence threshold
-                try:
-                    await asyncio.sleep(self.silence_threshold)
-                    
-                    # If flag still set (not cancelled), emit TURN_END
-                    if self._should_emit_turn_end and self._waiting_session_id == chunk.session_id:
-                        self.logger.info(f"Turn ended after {self.silence_threshold:.2f}s silence")
-                        
-                        # Record T1: turn_end_detected (TURN_END emitted)
-                        self._latency_monitor.record(
-                            chunk.session_id,
-                            waiting_turn_id,
-                            "turn_end_detected"
-                        )
-                        
-                        yield EventChunk(
-                            type=ChunkType.EVENT_TURN_END,
-                            event_data={"silence_duration": self.silence_threshold},
-                            source=self.name,
-                            session_id=chunk.session_id,
-                            turn_id=waiting_turn_id
-                        )
-                
-                except asyncio.CancelledError:
-                    # Sleep was cancelled externally
-                    self.logger.debug("Turn detector sleep cancelled")
-                    raise
-                
-                finally:
-                    # Clear state
-                    self._should_emit_turn_end = False
-                    self._waiting_session_id = None
-                
-                return
-            
-            # Reset on interrupt
-            elif chunk.type == ChunkType.CONTROL_INTERRUPT:
-                self._should_emit_turn_end = False
-                self._waiting_session_id = None
-                self._bot_is_speaking = False
-                self.logger.debug("Turn detector reset by interrupt")
-            
-            # Passthrough all signals
-            yield chunk
+        # Bot speaking state tracking
+        if chunk.type == ChunkType.EVENT_BOT_STARTED_SPEAKING:
+            self._bot_is_speaking = True
+            self.logger.debug("Bot started speaking")
             return
         
-        # Passthrough all data chunks
-        yield chunk
+        elif chunk.type == ChunkType.EVENT_BOT_STOPPED_SPEAKING:
+            self._bot_is_speaking = False
+            self.logger.debug("Bot stopped speaking")
+            return
+        
+        # Voice started - check for interrupt
+        elif chunk.type == ChunkType.EVENT_VAD_START:
+            # Cancel pending turn end
+            if self._should_emit_turn_end:
+                self.logger.debug("Turn end cancelled (voice resumed)")
+                self._should_emit_turn_end = False
+                self._waiting_session_id = None
+            
+            # Check if should send interrupt (user speaking during bot speaking)
+            if self.interrupt_enabled and self._bot_is_speaking and self.control_bus:
+                self.logger.warning("User interrupt detected (speaking during bot speaking)")
+                
+                # Send interrupt signal via ControlBus
+                await self.control_bus.send_interrupt(
+                    source=self.name,
+                    reason="user_speaking_during_bot_speaking",
+                    metadata={"session_id": chunk.session_id}
+                )
+            return
+        
+        # Voice ended - wait for silence then emit turn end
+        elif chunk.type == ChunkType.EVENT_VAD_END:
+            # Record T0: user_speech_end (VAD_END received)
+            self._latency_monitor.record(
+                chunk.session_id,
+                chunk.turn_id,
+                "user_speech_end",
+                chunk.timestamp
+            )
+            
+            # Set flag to emit TURN_END
+            self._should_emit_turn_end = True
+            self._waiting_session_id = chunk.session_id
+            waiting_turn_id = chunk.turn_id
+            
+            # Wait for silence threshold
+            try:
+                await asyncio.sleep(self.silence_threshold)
+                
+                # If flag still set (not cancelled), emit TURN_END
+                if self._should_emit_turn_end and self._waiting_session_id == chunk.session_id:
+                    self.logger.info(f"Turn ended after {self.silence_threshold:.2f}s silence")
+                    
+                    # Record T1: turn_end_detected (TURN_END emitted)
+                    self._latency_monitor.record(
+                        chunk.session_id,
+                        waiting_turn_id,
+                        "turn_end_detected"
+                    )
+                    
+                    yield EventChunk(
+                        type=ChunkType.EVENT_TURN_END,
+                        event_data={"silence_duration": self.silence_threshold},
+                        source=self.name,
+                        session_id=chunk.session_id,
+                        turn_id=waiting_turn_id
+                    )
+            
+            except asyncio.CancelledError:
+                self.logger.debug("Turn detector sleep cancelled")
+                raise
+            
+            finally:
+                self._should_emit_turn_end = False
+                self._waiting_session_id = None
+            
+            return
+        
+        # Reset on interrupt (from ControlBus via middleware)
+        elif chunk.type == ChunkType.CONTROL_INTERRUPT:
+            self._should_emit_turn_end = False
+            self._waiting_session_id = None
+            self._bot_is_speaking = False
+            self.logger.debug("Turn detector reset by interrupt")
     
     async def reset_state(self) -> None:
         """Reset turn detector state for new turn."""

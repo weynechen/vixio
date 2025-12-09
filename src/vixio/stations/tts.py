@@ -25,15 +25,14 @@ from vixio.providers.tts import TTSProvider
     # Handle multiple signals (CONTROL_INTERRUPT, EVENT_AGENT_STOP)
     MultiSignalHandlerMiddleware(
         signal_handlers={},  # Will be configured in _configure_middlewares_hook
-        passthrough_signals=True
+        passthrough_signals=False  # DAG handles routing, no passthrough
     ),
-    # Validate input (only TEXT from SentenceAggregator, non-empty)
-    # Note: Overrides default InputValidator to add required_source="SentenceAggregator"
+    # Validate input (only TEXT, non-empty)
+    # Note: No source check - DAG routing ensures correct data flow
     InputValidatorMiddleware(
         allowed_types=[ChunkType.TEXT],
         check_empty=True,
-        required_source="SentenceAggregator",
-        passthrough_on_invalid=True
+        passthrough_on_invalid=False  # DAG handles routing
     )
     # Note: StreamStation base class automatically provides:
     # - SignalHandlerMiddleware (handles CONTROL_INTERRUPT)
@@ -138,28 +137,28 @@ class TTSStation(StreamStation):
         """
         Process chunk through TTS - CORE LOGIC ONLY.
         
-        Middlewares handle:
-        - MultiSignalHandlerMiddleware: handles CONTROL_INTERRUPT, EVENT_AGENT_STOP
-        - InputValidatorMiddleware: validates TEXT from agent, non-empty
-        - InterruptDetectorMiddleware: detects turn_id changes during synthesis
-        - LatencyMonitorMiddleware: records first audio
-        - ErrorHandlerMiddleware: handles exceptions
+        DAG routing rules:
+        - Only process chunks matching ALLOWED_INPUT_TYPES (TEXT)
+        - Do NOT passthrough - DAG handles routing to downstream nodes
+        - Output: AUDIO_RAW + TTS events
         
         Core logic:
         - Synthesize text to audio
         - Emit TTS events (START, SENTENCE_START)
         - Stream audio chunks
         
-        Note: All signal handling is done by MultiSignalHandlerMiddleware
+        Note: Middlewares handle signal processing, validation, interrupt detection,
+        latency monitoring, and error handling.
         """
-        # Handle other signals (passthrough)
-        if chunk.is_signal():
-            yield chunk
+        # Only process TEXT chunks
+        if chunk.type != ChunkType.TEXT:
             return
         
-        # Data processing - CORE BUSINESS LOGIC
-        # Extract text from data attribute (unified API)
+        # Extract text from data attribute
         text = chunk.data if isinstance(chunk.data, str) else (str(chunk.data) if chunk.data else "")
+        
+        if not text:
+            return
         
         self.logger.info(f"TTS synthesizing: '{text[:50]}...'")
         
@@ -184,9 +183,6 @@ class TTSStation(StreamStation):
         )
         
         # Synthesize text to audio
-        # Note: InterruptDetectorMiddleware detects turn_id changes
-        # Note: LatencyMonitorMiddleware records first audio automatically
-        # Note: ErrorHandlerMiddleware catches exceptions
         audio_count = 0
         async for audio_data in self.tts.synthesize(text):
             if audio_data:
@@ -203,6 +199,3 @@ class TTSStation(StreamStation):
                 )
         
         self.logger.info(f"TTS generated {audio_count} audio chunks")
-        
-        # Passthrough original text chunk
-        yield chunk

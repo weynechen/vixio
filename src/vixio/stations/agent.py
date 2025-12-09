@@ -186,22 +186,22 @@ class AgentStation(StreamStation):
         """
         Process chunk through Agent - CORE LOGIC ONLY.
         
-        All cross-cutting concerns (signal handling, validation, events, timeout,
-        interrupt detection, latency monitoring, error handling) are handled by
-        middlewares via the @with_middlewares decorator.
+        DAG routing rules:
+        - Only process chunks matching ALLOWED_INPUT_TYPES (TEXT)
+        - Do NOT passthrough - DAG handles routing to downstream nodes
+        - Output: TEXT_DELTA (streaming)
         
-        This method now contains ONLY the core business logic:
+        Core logic:
         - Extract text from chunk
         - Extract visual context from metadata
         - Process through VisionStrategy
         - Stream agent response as TEXT_DELTA chunks
         
-        Note: Middlewares handle the rest automatically in the correct order.
+        Note: Middlewares handle signal processing, validation, events, timeout,
+        interrupt detection, latency monitoring, and error handling.
         """
-        
-        if chunk.is_signal():
-            # Passthrough signal without processing
-            yield chunk
+        # Only process TEXT chunks
+        if chunk.type != ChunkType.TEXT:
             return
         
         # Extract text content (unified using chunk.data)
@@ -219,7 +219,6 @@ class AgentStation(StreamStation):
         # Check if agent is initialized
         if not self.agent.is_initialized():
             self.logger.error("Agent not initialized, cannot process text")
-            # ErrorHandlerMiddleware will catch and emit error event
             raise RuntimeError("Agent not initialized")
         
         self.logger.info(
@@ -227,33 +226,25 @@ class AgentStation(StreamStation):
             f"(turn_id={chunk.turn_id})"
         )
         
-        # Passthrough input TEXT first for immediate client feedback
-        yield chunk
-        
         # Process through VisionStrategy
-        # This converts (text, images) to MultimodalMessage
         multimodal_msg = await self.vision_strategy.process(text, images)
         
-        # Stream agent response - CORE BUSINESS LOGIC
-        # Store generator reference for cleanup on interrupt
+        # Stream agent response
         agent_stream = self.agent.chat(multimodal_msg)
         self._streaming_generator = agent_stream
         
         try:
             async for delta in agent_stream:
                 if delta:
-                    # Yield text delta
-                    # Note: LatencyMonitorMiddleware automatically records first token
                     yield TextDeltaChunk(
                         type=ChunkType.TEXT_DELTA,
                         data=delta,
-                        source=self.name,  # Use station name for consistent source tracking
+                        source=self.name,
                         session_id=chunk.session_id,
                         turn_id=chunk.turn_id
                     )
         
         finally:
-            # Ensure generator is properly closed
             await agent_stream.aclose()
             self._streaming_generator = None
             self.logger.debug("Agent stream closed")

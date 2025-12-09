@@ -91,23 +91,20 @@ class VADStation(DetectorStation):
         """
         Process chunk through VAD - CORE LOGIC ONLY.
         
-        Middlewares handle: signal processing (CONTROL_INTERRUPT), error handling.
+        DAG routing rules:
+        - Only process chunks matching ALLOWED_INPUT_TYPES (AUDIO_RAW)
+        - Do NOT passthrough - DAG handles routing to downstream nodes
+        - Output: AUDIO_RAW (for ASR) + EVENT_VAD_START/END
         
         Core logic:
         - Detect voice activity in AUDIO_RAW chunks
         - Emit EVENT_VAD_START/END on state change
-        - Passthrough all chunks
+        - Output audio for downstream processing
         
         Note: SignalHandlerMiddleware handles CONTROL_INTERRUPT (resets VAD via _handle_interrupt)
         """
-        # Handle signals (passthrough)
-        if chunk.is_signal():
-            yield chunk
-            return
-        
         # Only process audio data (PCM)
-        if not is_audio_chunk(chunk) or chunk.type != ChunkType.AUDIO_RAW:
-            yield chunk
+        if chunk.type != ChunkType.AUDIO_RAW:
             return
         
         # Detect voice activity
@@ -143,5 +140,6 @@ class VADStation(DetectorStation):
                 turn_id=chunk.turn_id
             )
         
-        # Always passthrough audio
+        # Output audio with source set to this station
+        chunk.source = self.name
         yield chunk

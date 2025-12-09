@@ -163,17 +163,19 @@ class SentenceAggregatorStation(BufferStation):
         """
         Process chunk through sentence aggregator - CORE LOGIC ONLY.
         
-        Middlewares handle: signal processing (CONTROL_INTERRUPT), latency monitoring, error handling.
+        DAG routing rules:
+        - Only process chunks matching ALLOWED_INPUT_TYPES (TEXT_DELTA)
+        - Do NOT passthrough - DAG handles routing to downstream nodes
+        - Do NOT check chunk.source - only care about chunk type
         
         Core logic:
         - Accumulate TEXT_DELTA chunks and aggregate into sentences
         - On EVENT_AGENT_STOP: Flush remaining buffer as final sentence
-        - Passthrough all chunks
         
         Note: SignalHandlerMiddleware handles CONTROL_INTERRUPT (resets aggregator via _handle_interrupt)
         Note: LatencyMonitorMiddleware automatically records first sentence output
         """
-        # Handle EVENT_AGENT_STOP signal (flush remaining text)
+        # Handle EVENT_AGENT_STOP signal (flush remaining text, then propagate)
         if chunk.type == ChunkType.EVENT_AGENT_STOP:
             remaining = self._aggregator.flush()
             if remaining:
@@ -181,45 +183,32 @@ class SentenceAggregatorStation(BufferStation):
                 yield TextChunk(
                     type=ChunkType.TEXT,
                     data=remaining,
-                    source=self.name,  # Use station name for source tracking
+                    source=self.name,
                     session_id=chunk.session_id,
                     turn_id=chunk.turn_id
                 )
-        
-            # Passthrough signal
+            # Propagate EVENT_AGENT_STOP to downstream (TTS needs it to emit TTS_STOP)
             yield chunk
             return
         
-        # Handle other signals (passthrough)
-        if chunk.is_signal():
-            yield chunk
-            return
-        
-        # Process TEXT_DELTA chunks (typically from agent)
+        # Process TEXT_DELTA chunks
         if chunk.type == ChunkType.TEXT_DELTA:
             # Extract text from data attribute (unified API)
             delta = chunk.data if isinstance(chunk.data, str) else (str(chunk.data) if chunk.data else "")
             
-            if delta and chunk.source == "agent":
+            if delta:
                 # Add delta to aggregator and get complete sentences
                 sentences = self._aggregator.add_chunk(delta)
                 
                 # Yield each complete sentence as TEXT chunk
-                # Note: LatencyMonitorMiddleware records first sentence automatically
                 for sentence in sentences:
                     self.logger.info(f"Complete sentence: '{sentence[:50]}...'")
                     
                     yield TextChunk(
                         type=ChunkType.TEXT,
                         data=sentence,
-                        source=self.name,  # Use station name for source tracking
+                        source=self.name,
                         session_id=chunk.session_id,
                         turn_id=chunk.turn_id
                     )
-            
-            # Passthrough TEXT_DELTA
-            yield chunk
-        else:
-            # Passthrough all other chunks
-            yield chunk
 

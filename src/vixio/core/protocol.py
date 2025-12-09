@@ -105,6 +105,84 @@ class ProtocolBase(ABC):
         """
         return None
     
+    def send_text(
+        self, 
+        session_id: str, 
+        text: str, 
+        source: str = "",
+        **params
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Create TEXT message with source information.
+        
+        DAG decoupling: OutputStation passes type + source to Protocol.
+        Protocol decides message format based on source.
+        
+        Default implementation routes based on source:
+        - "asr" or similar -> send_stt()
+        - "agent" or similar -> send_llm()
+        - others -> generic text message
+        
+        Subclasses can override for custom routing.
+        
+        Args:
+            session_id: Session ID
+            text: Text content
+            source: Source station name (e.g., "asr", "agent", "TextAggregator")
+            **params: Protocol-specific parameters
+            
+        Returns:
+            Text message dictionary
+        """
+        source_lower = source.lower() if source else ""
+        
+        if "asr" in source_lower:
+            return self.send_stt(session_id, text, **params)
+        elif "agent" in source_lower:
+            return self.send_llm(session_id, text, **params)
+        else:
+            # Default: try send_llm as fallback
+            return self.send_llm(session_id, text, **params)
+    
+    def send_text_delta(
+        self, 
+        session_id: str, 
+        text: str, 
+        source: str = "",
+        **params
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Create TEXT_DELTA (streaming text) message with source information.
+        
+        DAG decoupling: OutputStation passes type + source to Protocol.
+        Protocol decides message format based on source.
+        
+        Default implementation routes based on source:
+        - "asr" -> send_stt() for streaming ASR
+        - "agent" -> send_llm() for streaming LLM
+        - others -> generic text delta message
+        
+        Subclasses can override for custom routing.
+        
+        Args:
+            session_id: Session ID
+            text: Text delta content
+            source: Source station name (e.g., "asr", "agent")
+            **params: Protocol-specific parameters
+            
+        Returns:
+            Text delta message dictionary
+        """
+        source_lower = source.lower() if source else ""
+        
+        if "asr" in source_lower:
+            return self.send_stt(session_id, text, is_delta=True, **params)
+        elif "agent" in source_lower:
+            return self.send_llm(session_id, text, is_delta=True, **params)
+        else:
+            # Default: try send_llm as fallback
+            return self.send_llm(session_id, text, is_delta=True, **params)
+    
     def send_stt(self, session_id: str, text: str, **params) -> Optional[Dict[str, Any]]:
         """
         Create STT (speech recognition) message.
@@ -114,7 +192,7 @@ class ProtocolBase(ABC):
         Args:
             session_id: Session ID
             text: Recognized text
-            **params: Protocol-specific parameters (e.g., is_final, confidence)
+            **params: Protocol-specific parameters (e.g., is_final, confidence, is_delta)
             
         Returns:
             STT message dictionary, or None if protocol doesn't support
@@ -130,7 +208,7 @@ class ProtocolBase(ABC):
         Args:
             session_id: Session ID
             text: Agent response text
-            **params: Protocol-specific parameters
+            **params: Protocol-specific parameters (e.g., is_delta)
             
         Returns:
             LLM message dictionary, or None if protocol doesn't support

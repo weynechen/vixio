@@ -49,19 +49,28 @@ class ControlBus:
     - All subsequent chunks naturally carry the new turn_id
     - No "lazy increment" or "ready to start" states needed
     
+    DAG Signal Handling:
+    - CONTROL signals (CONTROL_INTERRUPT) go through ControlBus
+    - EVENT signals go through DAG data flow
+    - Components can register interrupt handlers via register_interrupt_handler()
+    
     Features:
     - Any component can send interrupt signals
     - Simple, immediate turn_id increment on completion/interrupt
     - Provides current turn_id for all components
+    - Supports handler registration for interrupt callbacks
     - Thread-safe and async-friendly
     
     Usage:
         bus = ControlBus()
         
+        # Register interrupt handler
+        bus.register_interrupt_handler(my_handler)
+        
         # Increment turn when complete/interrupted
         new_turn = await bus.increment_turn(source="TTS", reason="bot_finished")
         
-        # Send interrupt signal
+        # Send interrupt signal (triggers handlers + increments turn)
         await bus.send_interrupt(source="TurnDetector", reason="user_interrupted")
         
         # Get current turn ID (used by Stations)
@@ -74,6 +83,7 @@ class ControlBus:
         self._interrupt_queue = asyncio.Queue()
         self._interrupt_event = asyncio.Event()
         self._latest_interrupt: Optional[InterruptSignal] = None
+        self._interrupt_handlers: list = []  # List of async/sync interrupt handlers
         self._lock = asyncio.Lock()
         self.logger = logger.bind(component="ControlBus")
     
@@ -86,6 +96,31 @@ class ControlBus:
         """
         return self._current_turn_id
     
+    def register_interrupt_handler(self, handler) -> None:
+        """
+        Register an interrupt handler.
+        
+        Handlers are called when send_interrupt() is invoked.
+        Handlers can be sync or async functions.
+        
+        Args:
+            handler: Callable that takes InterruptSignal as argument
+        """
+        if handler not in self._interrupt_handlers:
+            self._interrupt_handlers.append(handler)
+            self.logger.debug(f"Registered interrupt handler: {handler.__name__ if hasattr(handler, '__name__') else handler}")
+    
+    def unregister_interrupt_handler(self, handler) -> None:
+        """
+        Unregister an interrupt handler.
+        
+        Args:
+            handler: Previously registered handler
+        """
+        if handler in self._interrupt_handlers:
+            self._interrupt_handlers.remove(handler)
+            self.logger.debug(f"Unregistered interrupt handler: {handler.__name__ if hasattr(handler, '__name__') else handler}")
+    
     async def send_interrupt(
         self,
         source: str,
@@ -96,6 +131,12 @@ class ControlBus:
         Send an interrupt signal.
         
         This can be called from any component (VAD, Turn Detector, Agent, Transport, etc.)
+        
+        When called:
+        1. Creates InterruptSignal with current turn_id
+        2. Notifies all registered handlers
+        3. Increments turn_id
+        4. Sets interrupt event for waiters
         
         Args:
             source: Component sending the interrupt
@@ -109,9 +150,22 @@ class ControlBus:
             metadata=metadata or {}
         )
         
-        self.logger.info(f"Interrupt signal received: {signal}")
+        self.logger.info(f"Interrupt signal: {signal}")
         
-        # Queue the interrupt for processing
+        # Notify all registered handlers
+        for handler in self._interrupt_handlers:
+            try:
+                if asyncio.iscoroutinefunction(handler):
+                    await handler(signal)
+                else:
+                    handler(signal)
+            except Exception as e:
+                self.logger.error(f"Error in interrupt handler: {e}")
+        
+        # Increment turn_id
+        await self.increment_turn(source=source, reason=reason)
+        
+        # Queue the interrupt for session processing
         await self._interrupt_queue.put(signal)
         
         # Set event flag for immediate notification

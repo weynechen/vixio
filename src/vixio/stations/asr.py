@@ -110,20 +110,19 @@ class ASRStation(StreamStation):
         """
         Process chunk through ASR - CORE LOGIC ONLY.
         
-        Middlewares handle: signal processing (CONTROL_INTERRUPT), latency monitoring, error handling.
+        DAG routing rules:
+        - Only process chunks matching ALLOWED_INPUT_TYPES (AUDIO_RAW)
+        - Do NOT passthrough - DAG handles routing to downstream nodes
+        - Output: TEXT_DELTA + EVENT_TEXT_COMPLETE
         
         Core logic:
         - Collect AUDIO_RAW chunks into buffer
-        - On EVENT_TURN_END: Transcribe buffered audio, yield TEXT_DELTA (source="asr"), clear buffer
-        - Passthrough all other chunks
+        - On EVENT_TURN_END: Transcribe buffered audio, yield TEXT_DELTA, clear buffer
         
         Note: SignalHandlerMiddleware handles CONTROL_INTERRUPT (clears buffer via _handle_interrupt)
         """
         # Handle EVENT_TURN_END signal (trigger transcription)
         if chunk.type == ChunkType.EVENT_TURN_END:
-            # Passthrough signal first (important for downstream)
-            yield chunk
-            
             # Transcribe buffered audio
             if self._audio_buffer:
                 self.logger.info(f"Transcribing {len(self._audio_buffer)} audio chunks...")
@@ -133,12 +132,11 @@ class ASRStation(StreamStation):
                 if text:
                     self.logger.info(f"ASR result: '{text}'")
                     
-                    # Output as TEXT_DELTA with source=self.name for latency monitoring
-            # Note: LatencyMonitorMiddleware automatically records this output
+                    # Output as TEXT_DELTA
                     yield TextDeltaChunk(
                         type=ChunkType.TEXT_DELTA,
                         data=text,
-                        source=self.name,  # Use station name for consistent source tracking
+                        source=self.name,
                         session_id=chunk.session_id,
                         turn_id=chunk.turn_id
                     )
@@ -156,31 +154,20 @@ class ASRStation(StreamStation):
                     # Still emit complete event even if text is empty
                     yield EventChunk(
                         type=ChunkType.EVENT_TEXT_COMPLETE,
-                        event_data={"source": "asr", "text_length": 0},
+                        event_data={"source": self.name, "text_length": 0},
                         source=self.name,
                         session_id=chunk.session_id
                     )
-            
-        # Clear buffer
+                
+                # Clear buffer
                 self._audio_buffer.clear()
             else:
                 self.logger.warning("EVENT_TURN_END received but no audio in buffer")
             
             return
         
-        # Handle other signals (passthrough)
-        if chunk.is_signal():
-            yield chunk
-            return
-        
         # Collect AUDIO_RAW chunks
-        if is_audio_chunk(chunk) and chunk.type == ChunkType.AUDIO_RAW:
+        if chunk.type == ChunkType.AUDIO_RAW:
             if chunk.data:
                 self._audio_buffer.append(chunk.data)
                 self.logger.debug(f"Buffered audio chunk, total: {len(self._audio_buffer)}")
-            
-            # Passthrough audio for downstream
-            yield chunk
-        else:
-            # Passthrough other data types
-            yield chunk

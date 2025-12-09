@@ -4,8 +4,9 @@
 - [ ] 接入video in , video 在语音驱动下做describe，辅助场景理解 → 已完成: [vision_design.md](./vision_design.md) 未测试
 - [x] 实现xiaozhi的vision mcp 接口
 - [ ] 数字人station
-- [ ] 制作python 包
+- [x] 制作python 包
 - [ ] 更改pipeline为DAG，充分解耦各个station的依赖
 - [ ] 更新intranscribe
 - [ ] 更新realtimestation
 - [ ] 制作实时翻译示例
+- [ ] 使用https://github.com/antvis/x6 或者 https://github.com/microsoft/react-dag-editor 制作DAG前端图展示数据流，延时，调试信息等等

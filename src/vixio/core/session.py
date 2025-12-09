@@ -1,19 +1,20 @@
 """
-Session manager - connects Transport to Pipelines
+Session manager - connects Transport to DAG/Pipeline
 
 Responsibilities:
 1. Listen for new connections from Transport
-2. Create a Pipeline instance for each connection
-3. Route chunks: Transport input -> Pipeline -> Transport output
-4. Manage pipeline lifecycle
+2. Create a DAG (or Pipeline) instance for each connection
+3. Route chunks: Transport input -> DAG -> Transport output
+4. Manage DAG lifecycle
 5. Handle interrupts via ControlBus
 6. Handle device tools registration
 """
 
 import asyncio
-from typing import Callable, Dict, Optional, AsyncIterator, List, TYPE_CHECKING
+from typing import Callable, Dict, Optional, AsyncIterator, List, Union, TYPE_CHECKING
 from vixio.core.transport import TransportBase
 from vixio.core.pipeline import Pipeline
+from vixio.core.dag import DAG, CompiledDAG
 from vixio.core.control_bus import ControlBus
 from vixio.core.chunk import Chunk, ChunkType
 from loguru import logger
@@ -25,40 +26,61 @@ if TYPE_CHECKING:
 
 class SessionManager:
     """
-    Session manager - connects Transport to Pipelines.
+    Session manager - connects Transport to DAG (or Pipeline).
     
     Responsibilities:
     1. Listen for new connections from Transport
-    2. Create a Pipeline instance for each connection
-    3. Route chunks: Transport input -> Pipeline -> Transport output
-    4. Manage pipeline lifecycle
+    2. Create a DAG instance for each connection
+    3. Route chunks: Transport input -> DAG -> Transport output
+    4. Manage DAG lifecycle
     5. Handle interrupts via ControlBus
     
     Design:
-    - Each connection gets its own Pipeline and ControlBus instance
-    - Pipeline runs as long as connection is alive
+    - Each connection gets its own DAG and ControlBus instance
+    - DAG runs as long as connection is alive
     - ControlBus handles interrupts and turn transitions
     - Automatically cleanup on disconnect
+    
+    DAG Mode:
+    - Uses DAG for flexible non-linear processing
+    - Supports branching and merging data flows
+    - Automatic routing based on ALLOWED_INPUT_TYPES
     """
     
     def __init__(
         self,
         transport: TransportBase,
-        pipeline_factory: Callable[[], Pipeline]
+        dag_factory: Optional[Callable[[], DAG]] = None,
+        pipeline_factory: Optional[Callable[[], Pipeline]] = None,
     ):
         """
         Initialize session manager.
         
         Args:
             transport: Transport to manage connections for
-            pipeline_factory: Factory function (sync or async) that creates a fresh Pipeline for each connection
+            dag_factory: Factory function that creates a fresh DAG for each connection
+            pipeline_factory: (Legacy) Factory function that creates a Pipeline
+            
+        Note: Prefer dag_factory. pipeline_factory is for backward compatibility.
         """
         self.transport = transport
+        self.dag_factory = dag_factory
         self.pipeline_factory = pipeline_factory
-        self._is_async_factory = asyncio.iscoroutinefunction(pipeline_factory)
-        self._sessions: Dict[str, asyncio.Task] = {}  # connection_id -> pipeline task
+        
+        # Determine factory type
+        if dag_factory:
+            self._use_dag = True
+            self._factory = dag_factory
+        elif pipeline_factory:
+            self._use_dag = False
+            self._factory = pipeline_factory
+        else:
+            raise ValueError("Either dag_factory or pipeline_factory must be provided")
+        
+        self._is_async_factory = asyncio.iscoroutinefunction(self._factory)
+        self._sessions: Dict[str, asyncio.Task] = {}  # connection_id -> task
         self._control_buses: Dict[str, ControlBus] = {}  # connection_id -> control bus
-        self._pipelines: Dict[str, Pipeline] = {}  # connection_id -> pipeline
+        self._dags: Dict[str, Union[CompiledDAG, Pipeline]] = {}  # connection_id -> dag/pipeline
         self._input_stations: Dict[str, 'Station'] = {}  # connection_id -> input station
         self._interrupt_tasks: Dict[str, asyncio.Task] = {}  # connection_id -> interrupt handler task
         self.logger = logger.bind(component="SessionManager")
@@ -123,8 +145,7 @@ class SessionManager:
         """
         Handle new client connection.
         
-        Creates pipeline, control bus, and interrupt handler for this connection.
-        Auto-adds InputStation and OutputStation to Pipeline.
+        Creates DAG (or Pipeline), control bus, and interrupt handler for this connection.
         
         Args:
             connection_id: Unique identifier for the connection
@@ -140,61 +161,136 @@ class SessionManager:
         self.logger.debug(f"ControlBus set for connection {connection_id[:8]}")
         
         # Start Transport workers (read_worker + send_worker)
-        # This starts framework-level common capabilities (Turn management, Latency tracking, etc.)
         if hasattr(self.transport, 'start_workers'):
             await self.transport.start_workers(connection_id)
             self.logger.debug(f"Transport workers started for connection {connection_id[:8]}")
         
-        # Create fresh business pipeline (support both sync and async factories)
+        # Create fresh DAG or Pipeline (support both sync and async factories)
         if self._is_async_factory:
-            business_pipeline = await self.pipeline_factory()
+            dag_or_pipeline = await self._factory()
         else:
-            business_pipeline = self.pipeline_factory()
+            dag_or_pipeline = self._factory()
         
         # Get InputStation and OutputStation from Transport
         input_station = self.transport.get_input_station(connection_id)
         output_station = self.transport.get_output_station(connection_id)
         
-        # Assemble complete Pipeline (only OutputStation is added, InputStation is the data source)
-        full_stations = business_pipeline.stations + [output_station]
-        
-        # Create complete Pipeline with ControlBus
-        pipeline = Pipeline(
-            stations=full_stations,
-            control_bus=control_bus,
-            session_id=connection_id
-        )
-        self._pipelines[connection_id] = pipeline
-        
-        # Store InputStation separately (it's not part of the pipeline, it's the data source)
+        # Store InputStation (it's the data source, not part of DAG/Pipeline)
         self._input_stations[connection_id] = input_station
-        
-        # Set ControlBus for InputStation manually (since it's not in the pipeline)
         input_station.control_bus = control_bus
         input_station.set_session_id(connection_id)
         
-        self.logger.debug(f"Created complete pipeline for connection {connection_id[:8]} with {len(full_stations)} stations (InputStation as source)")
+        if self._use_dag:
+            # DAG mode: add OutputStation as a node and compile
+            dag = dag_or_pipeline
+            dag.add_node("transport_out", output_station)
+            
+            # Compile DAG with ControlBus
+            compiled_dag = dag.compile(control_bus=control_bus)
+            compiled_dag.set_session_id(connection_id)
+            self._dags[connection_id] = compiled_dag
+            
+            self.logger.debug(
+                f"Created DAG for connection {connection_id[:8]} with "
+                f"{len(compiled_dag.nodes)} nodes"
+            )
+            
+            # Start interrupt handler
+            interrupt_task = asyncio.create_task(
+                self._handle_interrupts_dag(connection_id, compiled_dag, control_bus),
+                name=f"interrupt-handler-{connection_id[:8]}"
+            )
+        else:
+            # Legacy Pipeline mode
+            full_stations = dag_or_pipeline.stations + [output_station]
+            pipeline = Pipeline(
+                stations=full_stations,
+                control_bus=control_bus,
+                session_id=connection_id
+            )
+            self._dags[connection_id] = pipeline
+            
+            self.logger.debug(
+                f"Created Pipeline for connection {connection_id[:8]} with "
+                f"{len(full_stations)} stations"
+            )
+            
+            # Start interrupt handler
+            interrupt_task = asyncio.create_task(
+                self._handle_interrupts(connection_id, pipeline, control_bus),
+                name=f"interrupt-handler-{connection_id[:8]}"
+            )
         
-        # Start interrupt handler task
-        interrupt_task = asyncio.create_task(
-            self._handle_interrupts(connection_id, pipeline, control_bus),
-            name=f"interrupt-handler-{connection_id[:8]}"
-        )
         self._interrupt_tasks[connection_id] = interrupt_task
         
-        # Notify transport that pipeline is ready (so it can send handshake signal)
+        # Notify transport that DAG/Pipeline is ready
         await self.transport.on_pipeline_ready(connection_id)
         
-        # Run pipeline in background task (InputStation provides the data stream)
-        task = asyncio.create_task(
-            self._run_pipeline(connection_id, pipeline),
-            name=f"pipeline-{connection_id[:8]}"
-        )
+        # Run DAG/Pipeline in background task
+        if self._use_dag:
+            task = asyncio.create_task(
+                self._run_dag(connection_id, self._dags[connection_id]),
+                name=f"dag-{connection_id[:8]}"
+            )
+        else:
+            task = asyncio.create_task(
+                self._run_pipeline(connection_id, self._dags[connection_id]),
+                name=f"pipeline-{connection_id[:8]}"
+            )
         
         self._sessions[connection_id] = task
         
         # Cleanup when done
         task.add_done_callback(lambda _: self._cleanup_session(connection_id))
+    
+    async def _handle_interrupts_dag(
+        self,
+        connection_id: str,
+        dag: CompiledDAG,
+        control_bus: ControlBus
+    ) -> None:
+        """
+        Handle interrupt signals for a DAG connection.
+        
+        DAG interrupt handling:
+        - ControlBus already notifies all registered handlers
+        - Just need to log and clear event flag
+        
+        Args:
+            connection_id: Connection ID
+            dag: CompiledDAG instance
+            control_bus: ControlBus instance
+        """
+        self.logger.info(f"Starting DAG interrupt handler for connection {connection_id[:8]}")
+        
+        try:
+            while True:
+                # Wait for interrupt signal
+                interrupt = await control_bus.wait_for_interrupt()
+                
+                self.logger.warning(
+                    f"[{connection_id[:8]}] DAG interrupt received: {interrupt.source} - {interrupt.reason}"
+                )
+                
+                # Note: ControlBus.send_interrupt() already:
+                # 1. Notifies all registered handlers (middlewares subscribed)
+                # 2. Increments turn_id
+                # So we just need to log and clear the event
+                
+                # Clear interrupt event flag
+                control_bus.clear_interrupt_event()
+                
+                self.logger.info(
+                    f"[{connection_id[:8]}] DAG interrupt handled, turn_id={control_bus.get_current_turn_id()}"
+                )
+        
+        except asyncio.CancelledError:
+            self.logger.info(f"DAG interrupt handler cancelled for connection {connection_id[:8]}")
+        except Exception as e:
+            self.logger.error(
+                f"Error in DAG interrupt handler for connection {connection_id[:8]}: {e}",
+                exc_info=True
+            )
     
     async def _handle_interrupts(
         self,
@@ -318,6 +414,58 @@ class SessionManager:
                 exc_info=True
             )
     
+    async def _run_dag(self, connection_id: str, dag: CompiledDAG) -> None:
+        """
+        Run DAG for a connection.
+        
+        Flow:
+        1. Get input stream from InputStation
+        2. Wrap input stream to detect CONTROL_INTERRUPT chunks
+        3. Run DAG (chunks flow through nodes to OutputStation)
+        
+        Args:
+            connection_id: Connection ID to run DAG for
+            dag: CompiledDAG instance to run
+        """
+        self.logger.info(f"Starting DAG for connection {connection_id[:8]}")
+        
+        try:
+            # Get InputStation
+            input_station = self._input_stations.get(connection_id)
+            if not input_station:
+                self.logger.error(f"InputStation not found for connection {connection_id[:8]}")
+                return
+            
+            # Get input stream from InputStation
+            raw_input_stream = input_station._generate_chunks()
+            
+            # Get ControlBus for this connection
+            control_bus = self._control_buses.get(connection_id)
+            
+            # Wrap input stream to detect CONTROL_INTERRUPT
+            input_stream = self._wrap_input_stream(raw_input_stream, control_bus, connection_id)
+            
+            # Run DAG (OutputStation is part of DAG, handles output)
+            chunk_count = 0
+            async for _ in dag.run(input_stream):
+                # OutputStation handles sending, nothing to do here
+                chunk_count += 1
+            
+            self.logger.info(
+                f"DAG completed for connection {connection_id[:8]}, "
+                f"processed {chunk_count} output chunks"
+            )
+        
+        except asyncio.CancelledError:
+            self.logger.info(f"DAG cancelled for connection {connection_id[:8]}")
+            dag.stop()
+        
+        except Exception as e:
+            self.logger.error(f"DAG error for connection {connection_id[:8]}: {e}", exc_info=True)
+        
+        finally:
+            self._cleanup_session(connection_id)
+    
     async def _run_pipeline(self, connection_id: str, pipeline: Pipeline) -> None:
         """
         Run pipeline for a connection.
@@ -417,7 +565,7 @@ class SessionManager:
         Handle device tools becoming available.
         
         Called by Transport when MCP initialization completes and device tools are ready.
-        Finds the AgentStation in the pipeline and updates its tools.
+        Finds the AgentStation in the DAG/Pipeline and updates its tools.
         
         Args:
             connection_id: Connection ID
@@ -428,21 +576,29 @@ class SessionManager:
             f"{len(tool_definitions)} tools"
         )
         
-        # Find pipeline for this connection
-        pipeline = self._pipelines.get(connection_id)
-        if not pipeline:
+        # Find DAG/Pipeline for this connection
+        dag_or_pipeline = self._dags.get(connection_id)
+        if not dag_or_pipeline:
             self.logger.warning(
-                f"No pipeline found for connection {connection_id[:8]}, "
+                f"No DAG/Pipeline found for connection {connection_id[:8]}, "
                 f"cannot update tools"
             )
             return
         
-        # Find AgentStation in pipeline
+        # Find AgentStation in DAG or Pipeline
         agent_station = None
-        for station in pipeline.stations:
-            if hasattr(station, 'agent') and hasattr(station.agent, 'add_tools'):
-                agent_station = station
-                break
+        if isinstance(dag_or_pipeline, CompiledDAG):
+            # DAG mode: search in nodes
+            for node in dag_or_pipeline.nodes.values():
+                if hasattr(node.station, 'agent') and hasattr(node.station.agent, 'add_tools'):
+                    agent_station = node.station
+                    break
+        else:
+            # Pipeline mode: search in stations
+            for station in dag_or_pipeline.stations:
+                if hasattr(station, 'agent') and hasattr(station.agent, 'add_tools'):
+                    agent_station = station
+                    break
         
         if not agent_station:
             self.logger.warning(
@@ -518,24 +674,24 @@ class SessionManager:
                 task.cancel()
             del self._interrupt_tasks[connection_id]
         
-        # Cleanup pipeline resources (including provider cleanup)
-        if connection_id in self._pipelines:
-            pipeline = self._pipelines[connection_id]
+        # Cleanup DAG/Pipeline resources
+        if connection_id in self._dags:
+            dag_or_pipeline = self._dags[connection_id]
             # Schedule async cleanup in background
             asyncio.create_task(
-                self._cleanup_pipeline(connection_id, pipeline),
-                name=f"cleanup-pipeline-{connection_id[:8]}"
+                self._cleanup_dag_or_pipeline(connection_id, dag_or_pipeline),
+                name=f"cleanup-{connection_id[:8]}"
             )
-            del self._pipelines[connection_id]
+            del self._dags[connection_id]
         
-        # Stop Transport workers (Transport handles ControlBus cleanup, etc.)
+        # Stop Transport workers
         if hasattr(self.transport, 'stop_workers'):
             asyncio.create_task(
                 self.transport.stop_workers(connection_id),
                 name=f"stop-workers-{connection_id[:8]}"
             )
         else:
-            # Legacy interface compatibility: manual cleanup
+            # Legacy interface compatibility
             if hasattr(self.transport, '_control_buses'):
                 self.transport._control_buses.pop(connection_id, None)
         
@@ -550,20 +706,25 @@ class SessionManager:
         if connection_id in self._input_stations:
             del self._input_stations[connection_id]
     
-    async def _cleanup_pipeline(self, connection_id: str, pipeline: Pipeline) -> None:
+    async def _cleanup_dag_or_pipeline(
+        self, 
+        connection_id: str, 
+        dag_or_pipeline: Union[CompiledDAG, Pipeline]
+    ) -> None:
         """
-        Async cleanup for pipeline resources.
+        Async cleanup for DAG or Pipeline resources.
         
         Args:
             connection_id: Connection ID (for logging)
-            pipeline: Pipeline to cleanup
+            dag_or_pipeline: DAG or Pipeline to cleanup
         """
         try:
-            await pipeline.cleanup()
-            self.logger.debug(f"Pipeline cleaned up for connection {connection_id[:8]}")
+            await dag_or_pipeline.cleanup()
+            resource_type = "DAG" if isinstance(dag_or_pipeline, CompiledDAG) else "Pipeline"
+            self.logger.debug(f"{resource_type} cleaned up for connection {connection_id[:8]}")
         except Exception as e:
             self.logger.error(
-                f"Error cleaning up pipeline for connection {connection_id[:8]}: {e}",
+                f"Error cleaning up for connection {connection_id[:8]}: {e}",
                 exc_info=True
             )
     

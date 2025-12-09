@@ -79,12 +79,14 @@ class TextAggregatorStation(BufferStation):
         """
         Process chunk through text aggregator - CORE LOGIC ONLY.
         
-        Middlewares handle: signal processing (CONTROL_INTERRUPT), error handling.
+        DAG routing rules:
+        - Only process chunks matching ALLOWED_INPUT_TYPES (TEXT_DELTA)
+        - Do NOT passthrough - DAG handles routing to downstream nodes
+        - Do NOT check chunk.source - only care about chunk type
         
         Core logic:
         - Accumulate TEXT_DELTA chunks into buffer
         - On EVENT_TEXT_COMPLETE: Emit complete TEXT chunk, clear buffer
-        - Passthrough all chunks
         
         Note: SignalHandlerMiddleware handles CONTROL_INTERRUPT (clears buffer via _handle_interrupt)
         """
@@ -93,29 +95,19 @@ class TextAggregatorStation(BufferStation):
             if self._text_buffer.strip():
                 self.logger.info(f"Aggregated text: '{self._text_buffer[:50]}...'")
                 
-                # Emit complete text as TEXT for Agent
-            # Use data instead of content (step towards unified Chunk API)
+                # Emit complete text as TEXT
                 yield TextChunk(
                     type=ChunkType.TEXT,
-                    data=self._text_buffer,  # ← Use data
-                    source=self._source or "aggregator",
+                    data=self._text_buffer,
+                    source=self.name,
                     session_id=chunk.session_id,
                     turn_id=chunk.turn_id
                 )
                 
                 # Clear buffer
                 self._text_buffer = ""
-                self._source = ""
             else:
                 self.logger.debug("No text to aggregate - buffer is empty, not emitting TEXT chunk")
-        
-            # Passthrough signal
-            yield chunk
-            return
-        
-        # Handle other signals (passthrough)
-        if chunk.is_signal():
-            yield chunk
             return
         
         # Accumulate TEXT_DELTA chunks
@@ -125,16 +117,5 @@ class TextAggregatorStation(BufferStation):
             
             if delta:
                 self._text_buffer += delta
-                
-                # Remember source of first chunk
-                if not self._source and chunk.source:
-                    self._source = chunk.source
-                
                 self.logger.debug(f"Accumulated {len(delta)} chars, total: {len(self._text_buffer)} chars")
-            
-            # Passthrough TEXT_DELTA
-            yield chunk
-        else:
-            # Passthrough all other chunks
-            yield chunk
 

@@ -1,8 +1,14 @@
 """
-Example 3: Complete voice conversation with AI Agent
+Example 3: Complete voice conversation with AI Agent (DAG Architecture)
 
-A full voice chat pipeline with VAD, ASR, Agent, sentence splitting, and TTS.
-Demonstrates the complete integration of all components including LLM.
+A full voice chat DAG with VAD, ASR, Agent, sentence splitting, and TTS.
+Demonstrates the complete integration of all components using DAG architecture.
+
+DAG Architecture Benefits:
+- Automatic routing based on ALLOWED_INPUT_TYPES
+- No explicit passthrough logic needed
+- Flexible branching and merging support
+- Better separation of concerns
 
 Usage:
     # Development mode - In-process inference (no external services needed)
@@ -42,7 +48,7 @@ import os
 import signal
 import argparse
 from loguru import logger
-from vixio.core.pipeline import Pipeline
+from vixio.core.dag import DAG
 from vixio.core.session import SessionManager
 from vixio.core.tools import get_builtin_local_tools
 from vixio.providers.agent import Tool
@@ -82,17 +88,23 @@ signal.signal(signal.SIGINT, signal_handler)
 
 async def main():
     """
-    Complete voice conversation server with AI Agent.
+    Complete voice conversation server with AI Agent using DAG architecture.
     
-    Pipeline flow:
-    1. Client sends audio via WebSocket
-    2. VAD detects voice activity
-    3. TurnDetector waits for silence
-    4. ASR transcribes to text
-    5. Agent processes text and generates response (streaming)
-    6. SentenceAggregator splits streaming text into sentences
-    7. TTS synthesizes each sentence to audio
-    8. Audio sent back to client via WebSocket
+    DAG data flow:
+    1. Client sends audio via WebSocket (transport_in)
+    2. VAD detects voice activity -> outputs AUDIO + VAD events
+    3. TurnDetector waits for silence -> outputs EVENT_TURN_END
+    4. ASR transcribes to text -> outputs TEXT_DELTA + EVENT_TEXT_COMPLETE
+    5. TextAggregator collects deltas -> outputs TEXT
+    6. Agent processes text -> outputs TEXT_DELTA (streaming)
+    7. SentenceAggregator splits streaming -> outputs TEXT (sentences)
+    8. TTS synthesizes -> outputs AUDIO + TTS events
+    9. Audio sent back to client (transport_out)
+    
+    DAG routing:
+    - Each node only processes chunks matching ALLOWED_INPUT_TYPES
+    - No explicit passthrough needed
+    - DAG handles automatic type-based routing
     """
     # Parse command-line arguments
     parser = argparse.ArgumentParser(description="Vixio AI Agent Voice Chat Server")
@@ -196,26 +208,25 @@ async def main():
         config=raw_config,  # Pass config for VLM and other settings
     )
     
-    # Step 3: Create async pipeline factory
-    async def create_pipeline():
+    # Step 3: Create async DAG factory
+    async def create_dag():
         """
-        Async factory function to create a fresh pipeline for each connection.
+        Async factory function to create a fresh DAG for each connection.
         
         Each session gets NEW provider instances created from the config,
         ensuring complete isolation between concurrent sessions.
         
-        For gRPC providers (VAD, ASR, TTS):
-        - Each instance creates its own gRPC client connection
-        - Server-side session isolation via session IDs
-        - VAD-cycle locking for stateful operations
+        DAG Architecture:
+        - Nodes process only chunks matching their ALLOWED_INPUT_TYPES
+        - No explicit passthrough needed - DAG handles routing
+        - Automatic type-based filtering at each node
         
         Returns:
-            Pipeline: New pipeline with independent provider instances
+            DAG: New DAG with independent provider instances
         """
-        logger.debug("Creating new pipeline with isolated providers...")
+        logger.debug("Creating new DAG with isolated providers...")
         
         # Create fresh provider instances for this session
-        # Load providers from config again to get new instances
         session_providers = ProviderFactory.create_from_config_file(
             config_path=config_path,
             env=args.env
@@ -249,43 +260,44 @@ async def main():
         )
         
         tts_provider = session_providers["tts"]
-        # TTS providers may not need explicit initialization
         if hasattr(tts_provider, "initialize"):
             await tts_provider.initialize()
         
-        # Build station list
-        stations = [
-            # Stage 1: Voice detection
-            VADStation(vad_provider),
-            TurnDetectorStation(silence_threshold_ms=100),
-        ]
+        # Build DAG
+        dag = DAG("AgentVoiceChat")
         
-        # Stage 2: Speech recognition (if available)
+        # Add nodes
+        dag.add_node("vad", VADStation(vad_provider))
+        dag.add_node("turn_detector", TurnDetectorStation(silence_threshold_ms=100))
+        
         if asr_provider:
-            stations.append(ASRStation(asr_provider))
-            # Text aggregator: Aggregate TEXT_DELTA from ASR into complete TEXT for Agent
-            stations.append(TextAggregatorStation())
+            dag.add_node("asr", ASRStation(asr_provider))
+            dag.add_node("text_agg", TextAggregatorStation())
         
-        # Stage 3: AI Agent processing (requires TEXT input)
-        stations.append(AgentStation(agent_provider))
+        dag.add_node("agent", AgentStation(agent_provider))
+        dag.add_node("sentence_agg", SentenceAggregatorStation(min_sentence_length=5))
+        dag.add_node("tts", TTSStation(tts_provider))
         
-        # Stage 4: Sentence splitting for streaming TTS
-        stations.append(SentenceAggregatorStation(min_sentence_length=5))
+        # Define edges (data flow)
+        # DAG automatically routes based on ALLOWED_INPUT_TYPES
+        if asr_provider:
+            # Main flow: transport_in -> vad -> turn_detector -> asr -> ... -> transport_out
+            dag.add_edge("transport_in", "vad", "turn_detector", "asr", "text_agg", "agent", "sentence_agg", "tts", "transport_out")
+            # Audio branch: vad -> asr (audio data directly to ASR)
+            dag.add_edge("vad", "asr")
+            # STT result branch: asr -> transport_out (show STT text to client)
+            dag.add_edge("asr", "transport_out")
+        else:
+            raise ValueError("ASR provider not configured")
         
-        # Stage 5: Speech synthesis
-        stations.append(TTSStation(tts_provider))
+        logger.debug("✓ DAG created with isolated providers")
         
-        logger.debug("✓ Pipeline created with isolated providers")
-        
-        return Pipeline(
-            stations=stations,
-            name="AgentVoiceChat"
-        )
+        return dag
     
-    # Step 4: Create session manager
+    # Step 4: Create session manager with DAG factory
     manager = SessionManager(
         transport=transport,
-        pipeline_factory=create_pipeline
+        dag_factory=create_dag
     )
     
     # Step 5: Start server
@@ -320,12 +332,12 @@ async def main():
     logger.info(f"  - Vision analysis: http://{local_ip}:{transport.port}/mcp/vision/explain")
     logger.info("")
     
-    # Build pipeline description
-    pipeline_stages = ["VAD", "TurnDetector"]
+    # Build DAG description
+    dag_nodes = ["VAD", "TurnDetector"]
     if has_asr:
-        pipeline_stages.extend(["ASR", "TextAggregator"])
-    pipeline_stages.extend(["Agent", "SentenceAggregator", "TTS"])
-    logger.info(f"Pipeline: {' -> '.join(pipeline_stages)}")
+        dag_nodes.extend(["ASR", "TextAggregator"])
+    dag_nodes.extend(["Agent", "SentenceAggregator", "TTS"])
+    logger.info(f"DAG: {' -> '.join(dag_nodes)}")
     logger.info("=" * 70)
     
     # Show deployment-specific notes

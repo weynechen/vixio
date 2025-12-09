@@ -1,22 +1,34 @@
 """
 Signal Handler Middleware
 
-Handles signal chunks (CONTROL_INTERRUPT, etc.) and triggers appropriate actions.
+Handles interrupt signals via ControlBus subscription (DAG architecture).
+
+DAG Signal Handling:
+- CONTROL signals (CONTROL_INTERRUPT) come from ControlBus, not data stream
+- EVENT signals come from DAG data stream
+- This middleware subscribes to ControlBus when attached to a Station
 """
 
 import asyncio
-from typing import AsyncIterator, Callable, Optional, Awaitable
+from typing import AsyncIterator, Callable, Optional, Awaitable, TYPE_CHECKING
 from vixio.core.middleware import SignalMiddleware, NextHandler
 from vixio.core.chunk import Chunk, ChunkType
+
+if TYPE_CHECKING:
+    from vixio.core.station import Station
+    from vixio.core.control_bus import InterruptSignal
 
 
 class SignalHandlerMiddleware(SignalMiddleware):
     """
-    Handles signal chunks and triggers callbacks.
+    Handles interrupt signals via ControlBus subscription.
     
-    Data chunks are passed through unchanged.
+    DAG architecture:
+    - CONTROL signals (CONTROL_INTERRUPT) come from ControlBus
+    - This middleware subscribes to ControlBus via register_interrupt_handler()
+    - EVENT signals still flow through DAG data stream
     
-    Signals trigger side effects like:
+    Triggers side effects like:
     - Resetting state on CONTROL_INTERRUPT
     - Closing streaming tasks
     - Cleaning up resources
@@ -40,21 +52,71 @@ class SignalHandlerMiddleware(SignalMiddleware):
         self.on_interrupt = on_interrupt
         self.cancel_streaming = cancel_streaming
         self._streaming_task: Optional[asyncio.Task] = None
+        self._station: Optional["Station"] = None
+    
+    def attach(self, station: "Station") -> None:
+        """
+        Attach middleware to a station and subscribe to ControlBus.
+        
+        Called by Station when middleware is configured.
+        
+        Args:
+            station: Station this middleware is attached to
+        """
+        super().attach(station)
+        self._station = station
+        
+        # Subscribe to ControlBus for interrupt signals
+        if station.control_bus:
+            station.control_bus.register_interrupt_handler(self._handle_controlbus_interrupt)
+            self.logger.debug(f"Subscribed to ControlBus for {station.name}")
+    
+    async def _handle_controlbus_interrupt(self, signal: "InterruptSignal") -> None:
+        """
+        Handle interrupt signal from ControlBus.
+        
+        Args:
+            signal: InterruptSignal from ControlBus
+        """
+        self.logger.info(f"Received interrupt from ControlBus: {signal}")
+        
+        # Cancel active streaming if enabled
+        if self.cancel_streaming and self._streaming_task is not None:
+            try:
+                self._streaming_task.cancel()
+                self.logger.info("Cancelled active streaming task")
+            except Exception as e:
+                self.logger.warning(f"Error cancelling stream: {e}")
+            finally:
+                self._streaming_task = None
+        
+        # Call interrupt callback if provided
+        if self.on_interrupt:
+            try:
+                await self.on_interrupt()
+                self.logger.debug("Interrupt callback executed")
+            except Exception as e:
+                self.logger.error(f"Error in interrupt callback: {e}")
     
     async def process_signal(self, chunk: Chunk, next_handler: NextHandler) -> AsyncIterator[Chunk]:
         """
-        Process signal chunk and passthrough.
+        Process signal chunk.
+        
+        DAG architecture:
+        - CONTROL_INTERRUPT signals now come from ControlBus, not data stream
+        - This method handles EVENT signals that flow through DAG
         
         Args:
             chunk: Signal chunk (not data)
             next_handler: Next handler in chain
             
         Yields:
-            Signal chunk (passed through) and any additional chunks from vixio.core logic
+            Signal chunk and any additional chunks from core logic
         """
-        # Handle CONTROL_INTERRUPT signal
+        # CONTROL_INTERRUPT is now handled via ControlBus subscription
+        # But still support legacy data stream path for backward compatibility
         if chunk.type == ChunkType.CONTROL_INTERRUPT:
-            self.logger.info("Received CONTROL_INTERRUPT signal")
+            self.logger.debug("CONTROL_INTERRUPT received via data stream (legacy path)")
             
             # Cancel active streaming if enabled
             if self.cancel_streaming and self._streaming_task is not None:
@@ -74,8 +136,7 @@ class SignalHandlerMiddleware(SignalMiddleware):
                 except Exception as e:
                     self.logger.error(f"Error in interrupt callback: {e}")
         
-        # Always pass through to next handler (for all chunks, including signals)
-        # This allows core logic to handle signals like EVENT_TURN_END
+        # Pass to next handler (for all signals including EVENT_*)
         async for result in next_handler(chunk):
             yield result
     

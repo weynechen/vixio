@@ -18,18 +18,21 @@ class InputValidatorMiddleware(DataMiddleware):
     Can validate:
     - Chunk type (e.g., only TEXT chunks)
     - Content presence (non-empty)
-    - Source attribute (e.g., only from "agent")
     - Custom validation logic
+    
+    Note: Source checking is NOT supported in DAG architecture.
+    Stations should only care about chunk type, not source.
+    DAG routing handles data flow based on ALLOWED_INPUT_TYPES.
     """
     
     def __init__(
         self,
         allowed_types: Optional[list[ChunkType]] = None,
         check_empty: bool = True,
-        required_source: Optional[str] = None,
         custom_validator: Optional[Callable[[Chunk], bool]] = None,
-        passthrough_on_invalid: bool = True,
-        name: str = "InputValidator"
+        passthrough_on_invalid: bool = False,
+        name: str = "InputValidator",
+        **kwargs  # Accept but ignore deprecated parameters
     ):
         """
         Initialize input validator middleware.
@@ -37,17 +40,22 @@ class InputValidatorMiddleware(DataMiddleware):
         Args:
             allowed_types: List of allowed chunk types (None = all types)
             check_empty: Whether to check for empty content
-            required_source: Required source attribute value (None = any source)
             custom_validator: Custom validation function (returns True if valid)
-            passthrough_on_invalid: Whether to passthrough invalid chunks
+            passthrough_on_invalid: Whether to passthrough invalid chunks (default: False for DAG)
             name: Middleware name
         """
         super().__init__(name)
         self.allowed_types = allowed_types
         self.check_empty = check_empty
-        self.required_source = required_source
         self.custom_validator = custom_validator
         self.passthrough_on_invalid = passthrough_on_invalid
+        
+        # Warn about deprecated parameters
+        if 'required_source' in kwargs and kwargs['required_source']:
+            self.logger.warning(
+                "required_source is deprecated in DAG architecture. "
+                "Stations should not check chunk.source. Ignoring."
+            )
     
     async def process_data(self, chunk: Chunk, next_handler: NextHandler) -> AsyncIterator[Chunk]:
         """
@@ -58,25 +66,21 @@ class InputValidatorMiddleware(DataMiddleware):
             next_handler: Next handler in chain
             
         Yields:
-            Validated chunks or passthrough on invalid
+            Validated chunks
         """
         
-        # ⚠️ IMPORTANT: Check empty content FIRST, before type checking!
-        # Empty content should ALWAYS be dropped, regardless of type matching.
-        # This prevents empty text from bypassing validation via passthrough_on_invalid.
+        # Check empty content FIRST, before type checking
+        # Empty content should ALWAYS be dropped
         if self.check_empty and is_text_chunk(chunk):
-            # Extract text from unified data attribute
             text = chunk.data if isinstance(chunk.data, str) else (str(chunk.data) if chunk.data else "")
             
             self.logger.debug(f"[InputValidator] Text chunk detected, extracted text: {repr(text)[:100]}")
             
             if not text or not text.strip():
-                self.logger.warning(f"[InputValidator] ❌ DROPPING empty text chunk: {chunk}")
-                # ⚠️ Do NOT passthrough - discard completely
-                # Empty content is invalid data, not just "wrong type for this station"
+                self.logger.warning(f"[InputValidator] Dropping empty text chunk: {chunk}")
                 return
             else:
-                self.logger.debug(f"[InputValidator] ✅ Text chunk has content, continuing validation")
+                self.logger.debug(f"[InputValidator] Text chunk has content, continuing validation")
         
         # Check chunk type
         if self.allowed_types and chunk.type not in self.allowed_types:
@@ -84,16 +88,6 @@ class InputValidatorMiddleware(DataMiddleware):
             if self.passthrough_on_invalid:
                 yield chunk
             return
-        
-        # Check source
-        if self.required_source and hasattr(chunk, 'source'):
-            if chunk.source != self.required_source:
-                self.logger.debug(
-                    f"Chunk source '{chunk.source}' != required '{self.required_source}', skipping"
-                )
-                if self.passthrough_on_invalid:
-                    yield chunk
-                return
         
         # Custom validation
         if self.custom_validator:

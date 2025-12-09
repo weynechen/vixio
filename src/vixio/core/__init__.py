@@ -41,6 +41,24 @@ from vixio.core.tools import (
     func_to_tool_definition,
     get_builtin_local_tools,
 )
+from vixio.core.dag import (
+    DAG,
+    DAGNode,
+    CompiledDAG,
+    NodeStats,
+    DAGValidationError,
+)
+from vixio.core.dag_events import (
+    DAGEvent,
+    DAGEventType,
+    DAGEventEmitter,
+)
+from vixio.core.dag_monitor import (
+    DAGMonitor,
+    DAGMonitorRegistry,
+    get_monitor_registry,
+    get_dag_monitor,
+)
 
 __all__ = [
     # Chunk types
@@ -66,6 +84,21 @@ __all__ = [
     "TransportBase",
     "ProtocolBase",
     "SessionManager",
+    # DAG classes
+    "DAG",
+    "DAGNode",
+    "CompiledDAG",
+    "NodeStats",
+    "DAGValidationError",
+    # DAG events
+    "DAGEvent",
+    "DAGEventType",
+    "DAGEventEmitter",
+    # DAG monitoring
+    "DAGMonitor",
+    "DAGMonitorRegistry",
+    "get_monitor_registry",
+    "get_dag_monitor",
     # Output controllers
     "FlowControllerBase",
     "PlayoutTrackerBase",
