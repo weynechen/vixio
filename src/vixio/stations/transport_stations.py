@@ -1,5 +1,5 @@
 """
-Transport Stations - Bridge between Pipeline and Transport
+Transport Stations - Bridge between DAG and Transport
 
 InputStation: Read from read_queue -> Chunk stream (supports audio + optional video)
 OutputStation: Chunk stream -> Write to send_queue
@@ -27,15 +27,15 @@ from loguru import logger
 
 class InputStation(Station):
     """
-    Input format conversion Station - Pipeline starting point.
-    
+    Input format conversion Station - DAG starting point.
+
     Responsibilities (pure format conversion):
     1. Read raw data from Transport's read_queue
     2. Call Protocol to decode message
     3. Call Protocol to convert to Chunk
     4. Call AudioCodec to decode audio (if needed)
     5. Inject visual context into audio chunks (if video_queue provided)
-    6. Output Chunk to Pipeline
+    6. Output Chunk to DAG
     
     Vision Support:
     - Optionally receives video frames via video_queue
@@ -278,10 +278,10 @@ class InputStation(Station):
 
 class OutputStation(Station):
     """
-    Output format conversion Station - Pipeline/DAG endpoint.
-    
+    Output format conversion Station - DAG endpoint.
+
     Responsibilities (pure format conversion):
-    1. Receive Chunk from Pipeline/DAG
+    1. Receive Chunk from DAG
     2. Call AudioCodec to encode audio (if needed)
     3. Call Protocol to convert to message (passing type + source for routing)
     4. Call Protocol to encode message

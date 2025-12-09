@@ -19,7 +19,6 @@ from vixio.core.chunk import (
     HIGH_PRIORITY_TYPES,
 )
 from vixio.core.station import Station, PassthroughStation
-from vixio.core.pipeline import Pipeline
 from vixio.core.transport import TransportBase
 from vixio.core.session import SessionManager
 from vixio.core.protocol import ProtocolBase
@@ -80,7 +79,6 @@ __all__ = [
     # Core classes
     "Station",
     "PassthroughStation",
-    "Pipeline",
     "TransportBase",
     "ProtocolBase",
     "SessionManager",

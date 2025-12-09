@@ -1,9 +1,9 @@
 """
-Session manager - connects Transport to DAG/Pipeline
+Session manager - connects Transport to DAG
 
 Responsibilities:
 1. Listen for new connections from Transport
-2. Create a DAG (or Pipeline) instance for each connection
+2. Create a DAG instance for each connection
 3. Route chunks: Transport input -> DAG -> Transport output
 4. Manage DAG lifecycle
 5. Handle interrupts via ControlBus
@@ -11,9 +11,8 @@ Responsibilities:
 """
 
 import asyncio
-from typing import Callable, Dict, Optional, AsyncIterator, List, Union, TYPE_CHECKING
+from typing import Callable, Dict, Optional, AsyncIterator, List, TYPE_CHECKING
 from vixio.core.transport import TransportBase
-from vixio.core.pipeline import Pipeline
 from vixio.core.dag import DAG, CompiledDAG
 from vixio.core.control_bus import ControlBus
 from vixio.core.chunk import Chunk, ChunkType
@@ -26,7 +25,7 @@ if TYPE_CHECKING:
 
 class SessionManager:
     """
-    Session manager - connects Transport to DAG (or Pipeline).
+    Session manager - connects Transport to DAG.
     
     Responsibilities:
     1. Listen for new connections from Transport
@@ -50,8 +49,7 @@ class SessionManager:
     def __init__(
         self,
         transport: TransportBase,
-        dag_factory: Optional[Callable[[], DAG]] = None,
-        pipeline_factory: Optional[Callable[[], Pipeline]] = None,
+        dag_factory: Callable[[], DAG],
     ):
         """
         Initialize session manager.
@@ -59,28 +57,14 @@ class SessionManager:
         Args:
             transport: Transport to manage connections for
             dag_factory: Factory function that creates a fresh DAG for each connection
-            pipeline_factory: (Legacy) Factory function that creates a Pipeline
-            
-        Note: Prefer dag_factory. pipeline_factory is for backward compatibility.
         """
         self.transport = transport
         self.dag_factory = dag_factory
-        self.pipeline_factory = pipeline_factory
         
-        # Determine factory type
-        if dag_factory:
-            self._use_dag = True
-            self._factory = dag_factory
-        elif pipeline_factory:
-            self._use_dag = False
-            self._factory = pipeline_factory
-        else:
-            raise ValueError("Either dag_factory or pipeline_factory must be provided")
-        
-        self._is_async_factory = asyncio.iscoroutinefunction(self._factory)
+        self._is_async_factory = asyncio.iscoroutinefunction(dag_factory)
         self._sessions: Dict[str, asyncio.Task] = {}  # connection_id -> task
         self._control_buses: Dict[str, ControlBus] = {}  # connection_id -> control bus
-        self._dags: Dict[str, Union[CompiledDAG, Pipeline]] = {}  # connection_id -> dag/pipeline
+        self._dags: Dict[str, CompiledDAG] = {}  # connection_id -> compiled dag
         self._input_stations: Dict[str, 'Station'] = {}  # connection_id -> input station
         self._interrupt_tasks: Dict[str, asyncio.Task] = {}  # connection_id -> interrupt handler task
         self.logger = logger.bind(component="SessionManager")
@@ -116,7 +100,7 @@ class SessionManager:
         """
         Stop the session manager.
         
-        This cancels all active pipelines, interrupt handlers, and stops transport.
+        This cancels all active DAGs, interrupt handlers, and stops transport.
         """
         self.logger.info("Stopping session manager...")
         
@@ -125,7 +109,7 @@ class SessionManager:
             self.logger.debug(f"Cancelling interrupt handler for connection {connection_id[:8]}")
             task.cancel()
         
-        # Cancel all pipeline tasks
+        # Cancel all DAG tasks
         for connection_id, task in self._sessions.items():
             self.logger.debug(f"Cancelling session for connection {connection_id[:8]}")
             task.cancel()
@@ -145,7 +129,7 @@ class SessionManager:
         """
         Handle new client connection.
         
-        Creates DAG (or Pipeline), control bus, and interrupt handler for this connection.
+        Creates DAG, control bus, and interrupt handler for this connection.
         
         Args:
             connection_id: Unique identifier for the connection
@@ -165,85 +149,55 @@ class SessionManager:
             await self.transport.start_workers(connection_id)
             self.logger.debug(f"Transport workers started for connection {connection_id[:8]}")
         
-        # Create fresh DAG or Pipeline (support both sync and async factories)
+        # Create fresh DAG (support both sync and async factories)
         if self._is_async_factory:
-            dag_or_pipeline = await self._factory()
+            dag = await self.dag_factory()
         else:
-            dag_or_pipeline = self._factory()
+            dag = self.dag_factory()
         
         # Get InputStation and OutputStation from Transport
         input_station = self.transport.get_input_station(connection_id)
         output_station = self.transport.get_output_station(connection_id)
         
-        # Store InputStation (it's the data source, not part of DAG/Pipeline)
+        # Store InputStation (it's the data source, not part of DAG)
         self._input_stations[connection_id] = input_station
         input_station.control_bus = control_bus
         input_station.set_session_id(connection_id)
         
-        if self._use_dag:
-            # DAG mode: add OutputStation as a node and compile
-            dag = dag_or_pipeline
-            dag.add_node("transport_out", output_station)
-            
-            # Compile DAG with ControlBus
-            compiled_dag = dag.compile(control_bus=control_bus)
-            compiled_dag.set_session_id(connection_id)
-            self._dags[connection_id] = compiled_dag
-            
-            self.logger.debug(
-                f"Created DAG for connection {connection_id[:8]} with "
-                f"{len(compiled_dag.nodes)} nodes"
-            )
-            
-            # Start interrupt handler
-            interrupt_task = asyncio.create_task(
-                self._handle_interrupts_dag(connection_id, compiled_dag, control_bus),
-                name=f"interrupt-handler-{connection_id[:8]}"
-            )
-        else:
-            # Legacy Pipeline mode
-            full_stations = dag_or_pipeline.stations + [output_station]
-            pipeline = Pipeline(
-                stations=full_stations,
-                control_bus=control_bus,
-                session_id=connection_id
-            )
-            self._dags[connection_id] = pipeline
-            
-            self.logger.debug(
-                f"Created Pipeline for connection {connection_id[:8]} with "
-                f"{len(full_stations)} stations"
-            )
-            
-            # Start interrupt handler
-            interrupt_task = asyncio.create_task(
-                self._handle_interrupts(connection_id, pipeline, control_bus),
-                name=f"interrupt-handler-{connection_id[:8]}"
-            )
+        # Add OutputStation as a node and compile DAG
+        dag.add_node("transport_out", output_station)
         
+        # Compile DAG with ControlBus
+        compiled_dag = dag.compile(control_bus=control_bus)
+        compiled_dag.set_session_id(connection_id)
+        self._dags[connection_id] = compiled_dag
+        
+        self.logger.debug(
+            f"Created DAG for connection {connection_id[:8]} with "
+            f"{len(compiled_dag.nodes)} nodes"
+        )
+        
+        # Start interrupt handler
+        interrupt_task = asyncio.create_task(
+            self._handle_interrupts(connection_id, compiled_dag, control_bus),
+            name=f"interrupt-handler-{connection_id[:8]}"
+        )
         self._interrupt_tasks[connection_id] = interrupt_task
         
-        # Notify transport that DAG/Pipeline is ready
+        # Notify transport that DAG is ready
         await self.transport.on_pipeline_ready(connection_id)
         
-        # Run DAG/Pipeline in background task
-        if self._use_dag:
-            task = asyncio.create_task(
-                self._run_dag(connection_id, self._dags[connection_id]),
-                name=f"dag-{connection_id[:8]}"
-            )
-        else:
-            task = asyncio.create_task(
-                self._run_pipeline(connection_id, self._dags[connection_id]),
-                name=f"pipeline-{connection_id[:8]}"
-            )
-        
+        # Run DAG in background task
+        task = asyncio.create_task(
+            self._run_dag(connection_id, compiled_dag),
+            name=f"dag-{connection_id[:8]}"
+        )
         self._sessions[connection_id] = task
         
         # Cleanup when done
         task.add_done_callback(lambda _: self._cleanup_session(connection_id))
     
-    async def _handle_interrupts_dag(
+    async def _handle_interrupts(
         self,
         connection_id: str,
         dag: CompiledDAG,
@@ -289,128 +243,6 @@ class SessionManager:
         except Exception as e:
             self.logger.error(
                 f"Error in DAG interrupt handler for connection {connection_id[:8]}: {e}",
-                exc_info=True
-            )
-    
-    async def _handle_interrupts(
-        self,
-        connection_id: str,
-        pipeline: Pipeline,
-        control_bus: ControlBus
-    ) -> None:
-        """
-        Handle interrupt signals for a connection.
-        
-        Listens for interrupts on ControlBus and:
-        1. Clears pipeline queues (except input queue)
-        2. Cancels slow tasks (Agent, TTS)
-        3. Logs the interrupt
-        
-        Args:
-            connection_id: Connection ID
-            pipeline: Pipeline instance
-            control_bus: ControlBus instance
-        """
-        self.logger.info(f"Starting interrupt handler for connection {connection_id[:8]}")
-        
-        try:
-            while True:
-                # Wait for interrupt signal
-                interrupt = await control_bus.wait_for_interrupt()
-                
-                self.logger.warning(
-                    f"[{connection_id[:8]}] Interrupt received: {interrupt.source} - {interrupt.reason}"
-                )
-                
-                # Increment turn FIRST to invalidate old chunks (unified handling for all interrupts)
-                # This ensures any streaming output from Agent/TTS with old turn_id gets discarded
-                old_turn = control_bus.get_current_turn_id()
-                new_turn = await control_bus.increment_turn(
-                    source="SessionManager", 
-                    reason=interrupt.reason
-                )
-                self.logger.info(
-                    f"[{connection_id[:8]}] Turn incremented {old_turn} -> {new_turn} due to {interrupt.reason}"
-                )
-                
-                # Clear pipeline queues (keep input queue)
-                # This removes pending chunks from all queues
-                pipeline.clear_queues(from_stage=1)
-                
-                # Tasks continue running and will automatically discard old chunks
-                # based on turn_id. This ensures they can process new chunks.
-                
-                # Inject CONTROL_INTERRUPT into input queue for stations to reset state
-                # This must be done after clear_queues to ensure it's not cleared
-                try:
-                    from vixio.core.chunk import ControlChunk, ChunkType
-                    
-                    interrupt_chunk = ControlChunk(
-                        type=ChunkType.CONTROL_INTERRUPT,
-                        command="interrupt",
-                        params={"reason": interrupt.reason, "interrupt_source": interrupt.source},
-                        source="SessionManager", 
-                        session_id=connection_id,
-                        turn_id=new_turn
-                    )
-                    
-                    # Put into input queue (queue[0]) for stations to process
-                    if pipeline.queues and len(pipeline.queues) > 0:
-                        await pipeline.queues[0].put(interrupt_chunk)
-                        self.logger.debug(f"Injected CONTROL_INTERRUPT into pipeline (turn={new_turn})")
-                    
-                except Exception as e:
-                    self.logger.warning(f"Failed to inject CONTROL_INTERRUPT: {e}")
-                
-
-                # Send CONTROL_INTERRUPT to OutputStation for immediate client notification
-                # OutputStation will convert it to TTS_STOP + STATE_LISTENING protocol messages
-                try:
-                    from vixio.core.chunk import ControlChunk, ChunkType
-                    
-                    # Create interrupt chunk for OutputStation
-                    output_interrupt = ControlChunk(
-                        type=ChunkType.CONTROL_ABORT,
-                        command="interrupt",
-                        params={"reason": interrupt.reason, "source": "SessionManager"},
-                        source="SessionManager",
-                        session_id=connection_id,
-                        turn_id=new_turn
-                    )
-                    
-                    # Inject into OutputStation's input queue for immediate sending
-                    # Pipeline has n+1 queues for n stations:
-                    # - Queue[0-n-1]: between stations
-                    # - Queue[n]: OutputStation's output (pipeline output)
-                    # So OutputStation's input is Queue[n-1] (or queues[-2])
-                    if pipeline.queues and len(pipeline.queues) >= 2:
-                        output_station_input_queue = pipeline.queues[-2]
-                        await output_station_input_queue.put(output_interrupt)
-                        self.logger.info(
-                            f"[{connection_id[:8]}] Injected CONTROL_ABORT to OutputStation"
-                        )
-                    else:
-                        self.logger.warning(
-                            f"[{connection_id[:8]}] Cannot inject CONTROL_ABORT: "
-                            f"queues={len(pipeline.queues) if pipeline.queues else 0}, "
-                            f"stations={len(pipeline.stations)}"
-                        )
-                        
-                except Exception as e:
-                    self.logger.warning(f"Failed to inject CONTROL_ABORT: {e}", exc_info=True)
-                
-                # Clear interrupt event flag
-                control_bus.clear_interrupt_event()
-                
-                self.logger.info(
-                    f"[{connection_id[:8]}] Interrupt handled, new turn_id={control_bus.get_current_turn_id()}"
-                )
-        
-        except asyncio.CancelledError:
-            self.logger.info(f"Interrupt handler cancelled for connection {connection_id[:8]}")
-        except Exception as e:
-            self.logger.error(
-                f"Error in interrupt handler for connection {connection_id[:8]}: {e}",
                 exc_info=True
             )
     
@@ -466,57 +298,6 @@ class SessionManager:
         finally:
             self._cleanup_session(connection_id)
     
-    async def _run_pipeline(self, connection_id: str, pipeline: Pipeline) -> None:
-        """
-        Run pipeline for a connection.
-        
-        Flow:
-        1. Get input stream from InputStation (via _generate_chunks())
-        2. Wrap input stream to detect CONTROL_INTERRUPT chunks
-        3. Run pipeline (all chunks flow through business stations and OutputStation)
-        
-        Args:
-            connection_id: Connection ID to run pipeline for
-            pipeline: Pipeline instance to run
-        """
-        self.logger.info(f"Starting pipeline for connection {connection_id[:8]}")
-        
-        try:
-            # Get InputStation from stored instances
-            input_station = self._input_stations.get(connection_id)
-            if not input_station:
-                self.logger.error(f"InputStation not found for connection {connection_id[:8]}")
-                return
-            
-            # Get input stream from InputStation (acts as data source)
-            raw_input_stream = input_station._generate_chunks()
-            
-            # Get ControlBus for this connection
-            control_bus = self._control_buses.get(connection_id)
-            
-            # Wrap input stream to detect CONTROL_INTERRUPT and send to ControlBus
-            input_stream = self._wrap_input_stream(raw_input_stream, control_bus, connection_id)
-            
-            # Run pipeline (OutputStation handles sending)
-            chunk_count = 0
-            async for _ in pipeline.run(input_stream):
-                # OutputStation already handles output, nothing to do here
-                chunk_count += 1
-            
-            self.logger.info(f"Pipeline completed for connection {connection_id[:8]}, processed {chunk_count} chunks")
-        
-        except asyncio.CancelledError:
-            # Session cancelled (normal shutdown)
-            self.logger.info(f"Pipeline cancelled for connection {connection_id[:8]}")
-        
-        except Exception as e:
-            # Pipeline error
-            self.logger.error(f"Pipeline error for connection {connection_id[:8]}: {e}", exc_info=True)
-        
-        finally:
-            # Ensure cleanup
-            self._cleanup_session(connection_id)
-    
     async def _wrap_input_stream(
         self,
         input_stream: AsyncIterator[Chunk],
@@ -553,7 +334,7 @@ class SessionManager:
                     }
                 )
             
-            # Always yield the chunk (so pipeline can process it too)
+            # Always yield the chunk (so DAG can process it too)
             yield chunk
     
     async def _on_device_tools_ready(
@@ -565,7 +346,7 @@ class SessionManager:
         Handle device tools becoming available.
         
         Called by Transport when MCP initialization completes and device tools are ready.
-        Finds the AgentStation in the DAG/Pipeline and updates its tools.
+        Finds the AgentStation in the DAG and updates its tools.
         
         Args:
             connection_id: Connection ID
@@ -576,33 +357,25 @@ class SessionManager:
             f"{len(tool_definitions)} tools"
         )
         
-        # Find DAG/Pipeline for this connection
-        dag_or_pipeline = self._dags.get(connection_id)
-        if not dag_or_pipeline:
+        # Find DAG for this connection
+        dag = self._dags.get(connection_id)
+        if not dag:
             self.logger.warning(
-                f"No DAG/Pipeline found for connection {connection_id[:8]}, "
+                f"No DAG found for connection {connection_id[:8]}, "
                 f"cannot update tools"
             )
             return
         
-        # Find AgentStation in DAG or Pipeline
+        # Find AgentStation in DAG
         agent_station = None
-        if isinstance(dag_or_pipeline, CompiledDAG):
-            # DAG mode: search in nodes
-            for node in dag_or_pipeline.nodes.values():
-                if hasattr(node.station, 'agent') and hasattr(node.station.agent, 'add_tools'):
-                    agent_station = node.station
-                    break
-        else:
-            # Pipeline mode: search in stations
-            for station in dag_or_pipeline.stations:
-                if hasattr(station, 'agent') and hasattr(station.agent, 'add_tools'):
-                    agent_station = station
-                    break
+        for node in dag.nodes.values():
+            if hasattr(node.station, 'agent') and hasattr(node.station.agent, 'add_tools'):
+                agent_station = node.station
+                break
         
         if not agent_station:
             self.logger.warning(
-                f"No AgentStation found in pipeline for connection {connection_id[:8]}"
+                f"No AgentStation found in DAG for connection {connection_id[:8]}"
             )
             return
         
@@ -674,12 +447,12 @@ class SessionManager:
                 task.cancel()
             del self._interrupt_tasks[connection_id]
         
-        # Cleanup DAG/Pipeline resources
+        # Cleanup DAG resources
         if connection_id in self._dags:
-            dag_or_pipeline = self._dags[connection_id]
+            dag = self._dags[connection_id]
             # Schedule async cleanup in background
             asyncio.create_task(
-                self._cleanup_dag_or_pipeline(connection_id, dag_or_pipeline),
+                self._cleanup_dag(connection_id, dag),
                 name=f"cleanup-{connection_id[:8]}"
             )
             del self._dags[connection_id]
@@ -706,25 +479,24 @@ class SessionManager:
         if connection_id in self._input_stations:
             del self._input_stations[connection_id]
     
-    async def _cleanup_dag_or_pipeline(
+    async def _cleanup_dag(
         self, 
         connection_id: str, 
-        dag_or_pipeline: Union[CompiledDAG, Pipeline]
+        dag: CompiledDAG
     ) -> None:
         """
-        Async cleanup for DAG or Pipeline resources.
+        Async cleanup for DAG resources.
         
         Args:
             connection_id: Connection ID (for logging)
-            dag_or_pipeline: DAG or Pipeline to cleanup
+            dag: CompiledDAG to cleanup
         """
         try:
-            await dag_or_pipeline.cleanup()
-            resource_type = "DAG" if isinstance(dag_or_pipeline, CompiledDAG) else "Pipeline"
-            self.logger.debug(f"{resource_type} cleaned up for connection {connection_id[:8]}")
+            await dag.cleanup()
+            self.logger.debug(f"DAG cleaned up for connection {connection_id[:8]}")
         except Exception as e:
             self.logger.error(
-                f"Error cleaning up for connection {connection_id[:8]}: {e}",
+                f"Error cleaning up DAG for connection {connection_id[:8]}: {e}",
                 exc_info=True
             )
     
@@ -755,7 +527,7 @@ class SessionManager:
         """
         self.logger.info(f"Cancelling session for connection {connection_id[:8]}")
         
-        # Cancel pipeline task
+        # Cancel DAG task
         if connection_id in self._sessions:
             task = self._sessions[connection_id]
             if not task.done():
@@ -765,7 +537,7 @@ class SessionManager:
                 except (asyncio.CancelledError, asyncio.TimeoutError):
                     pass
                 except Exception as e:
-                    self.logger.error(f"Error waiting for pipeline cancellation: {e}")
+                    self.logger.error(f"Error waiting for DAG cancellation: {e}")
         
         # Cancel interrupt handler
         if connection_id in self._interrupt_tasks:

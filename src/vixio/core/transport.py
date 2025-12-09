@@ -40,7 +40,7 @@ class TransportBase(ABC):
     to implement _do_read / _do_write and other abstract methods.
     
     Design principles:
-    1. Pipeline and Transport decoupled through queues
+    1. DAG and Transport decoupled through queues
     2. Common capabilities (Turn management, Latency tracking) unified by framework
     3. Protocol implementers only care about connection read/write and protocol encoding
     """
@@ -99,7 +99,7 @@ class TransportBase(ABC):
         """
         pass
     
-    # ============ Interfaces exposed to Pipeline ============
+    # ============ Interfaces exposed to DAG ============
     
     def get_read_queue(self, session_id: str) -> asyncio.Queue:
         """
@@ -304,7 +304,7 @@ class TransportBase(ABC):
     
     async def on_pipeline_ready(self, session_id: str) -> None:
         """
-        Pipeline ready callback (send handshake message, etc.).
+        DAG ready callback (send handshake message, etc.).
         
         Framework implementation: Calls protocol.handshake() and sends.
         Protocol can override this method to add custom logic.
@@ -411,7 +411,7 @@ class TransportBase(ABC):
         Responsibilities:
         1. Call _do_read() to read from connection
         2. Call _on_message_received() hook for special message handling
-        3. Put unhandled messages into read_queue for Pipeline
+        3. Put unhandled messages into read_queue for DAG
         
         Subclasses should NOT override this method. Instead, override
         _on_message_received() to handle protocol-specific messages.
@@ -428,11 +428,11 @@ class TransportBase(ABC):
                     break
                 
                 # Hook: let subclass handle special messages (e.g., MCP, control)
-                # Returns True if message was handled and should NOT go to Pipeline
+                # Returns True if message was handled and should NOT go to DAG
                 if await self._on_message_received(session_id, data):
                     continue
-                
-                # Normal messages go to Pipeline
+
+                # Normal messages go to DAG
                 await read_queue.put(data)
         
         except asyncio.CancelledError:
@@ -448,31 +448,31 @@ class TransportBase(ABC):
     
     async def _on_message_received(self, session_id: str, data: Union[bytes, str]) -> bool:
         """
-        Hook for handling special messages before they enter Pipeline.
-        
+        Hook for handling special messages before they enter DAG.
+
         Override in subclass to handle protocol-specific messages that:
         - Need special routing (e.g., MCP messages to DeviceToolClient)
-        - Should bypass the Pipeline entirely
-        - Require side effects before Pipeline processing
-        
+        - Should bypass the DAG entirely
+        - Require side effects before DAG processing
+
         Args:
             session_id: Session ID
             data: Raw message data (bytes for audio, str for JSON)
             
         Returns:
-            True if message was fully handled (skip Pipeline)
-            False if message should continue to Pipeline
-            
+            True if message was fully handled (skip DAG)
+            False if message should continue to DAG
+
         Example:
             async def _on_message_received(self, session_id, data):
                 if isinstance(data, str):
                     msg = json.loads(data)
                     if msg.get("type") == "mcp":
                         self._route_mcp_message(session_id, msg)
-                        return True  # Handled, skip Pipeline
-                return False  # Pass to Pipeline
+                        return True  # Handled, skip DAG
+                return False  # Pass to DAG
         """
-        return False  # Default: pass all messages to Pipeline
+        return False  # Default: pass all messages to DAG
     
     async def _send_worker(self, session_id: str) -> None:
         """

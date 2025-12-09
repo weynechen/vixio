@@ -2,15 +2,15 @@
 Vixio - A streaming audio processing framework
 
 Design philosophy:
-- Pipeline: Assembly line connecting multiple stations
+- DAG: Directed Acyclic Graph connecting multiple stations with flexible routing
 - Station: Workstation handling specific tasks (VAD/ASR/Agent/TTS)
-- Chunk: Carrier on the pipeline (Data or Signal)
+- Chunk: Carrier on the DAG (Data or Signal)
 - Transport: Input/output interface, completely decoupled from transport details
 
 Supported Providers:
 - VAD: Silero VAD
 - ASR: Sherpa-ONNX (local)
-- TTS: Edge TTS
+- TTS: Edge TTS, Kokoro TTS
 """
 
 __version__ = "0.1.0"
@@ -36,9 +36,9 @@ from vixio.core.chunk import (
     is_event_chunk,
 )
 from vixio.core.station import Station, PassthroughStation
-from vixio.core.pipeline import Pipeline
 from vixio.core.transport import TransportBase
 from vixio.core.session import SessionManager
+from vixio.core.dag import DAG, CompiledDAG
 
 __all__ = [
     # Version
@@ -61,8 +61,10 @@ __all__ = [
     # Core classes
     "Station",
     "PassthroughStation",
-    "Pipeline",
     "TransportBase",
     "SessionManager",
+    # DAG
+    "DAG",
+    "CompiledDAG",
 ]
 
