@@ -611,7 +611,7 @@ class CompiledDAG:
         async def feed_input():
             try:
                 async for chunk in input_stream:
-                    # Handle CONTROL_STATE_RESET: send interrupt + notify client
+                    # Handle CONTROL_STATE_RESET: send interrupt + notify client immediately
                     if chunk.type == ChunkType.CONTROL_STATE_RESET:
                         if self.control_bus:
                             await self.control_bus.send_interrupt(
@@ -619,22 +619,9 @@ class CompiledDAG:
                                 reason=chunk.type.value,
                             )
                         
-                        # Also send CONTROL_TURN_SWITCH to OutputStation
-                        # This notifies client to stop playback (TTS_STOP + STATE_LISTENING)
-                        from vixio.core.chunk import ControlChunk
-                        turn_switch_chunk = ControlChunk(
-                            type=ChunkType.CONTROL_TURN_SWITCH,
-                            command="turn_switch",
-                            params=chunk.params if hasattr(chunk, 'params') else {},
-                            session_id=chunk.session_id,
-                            turn_id=chunk.turn_id,
-                            source="ControlBus",
-                        )
-                        # Send to exit nodes (OutputStation)
-                        for exit_node_name in self._exit_nodes:
-                            exit_node = self.nodes.get(exit_node_name)
-                            if exit_node:
-                                await exit_node.input_queue.put(turn_switch_chunk)
+                        # Send TTS_STOP directly to Transport's priority_queue
+                        # This bypasses DAG input_queue to avoid waiting behind queued audio
+                        await self._send_immediate_turn_switch(chunk)
                         continue
                     
                     # Skip other CONTROL signals (CONTROL_HANDSHAKE, etc.)
@@ -682,6 +669,66 @@ class CompiledDAG:
         finally:
             self._running = False
             await self._cleanup(input_task)
+
+    def clear_queues(self) -> int:
+        """
+        Clear all node input queues.
+        
+        Called during interrupt handling to discard pending chunks.
+        This mirrors Pipeline.clear_queues() behavior.
+        
+        Returns:
+            Number of chunks cleared
+        """
+        cleared_count = 0
+        
+        for node in self.nodes.values():
+            while not node.input_queue.empty():
+                try:
+                    node.input_queue.get_nowait()
+                    cleared_count += 1
+                except asyncio.QueueEmpty:
+                    break
+        
+        if cleared_count > 0:
+            self.logger.info(f"Cleared {cleared_count} chunks from DAG queues")
+        
+        return cleared_count
+
+    async def _send_immediate_turn_switch(self, chunk: Chunk) -> None:
+        """
+        Handle interrupt: clear queues and notify client immediately.
+        
+        Steps:
+        1. Clear all DAG node queues (discard pending chunks)
+        2. Clear Transport send_queue (via OutputStation)
+        3. Send TTS_STOP via priority_queue
+        
+        Args:
+            chunk: CONTROL_STATE_RESET chunk with session info
+        """
+        from vixio.stations.transport_stations import OutputStation
+        
+        # 1. Clear all DAG node queues
+        self.clear_queues()
+        
+        # OutputStation is registered as 'transport_out' node
+        transport_out_node = self.nodes.get(DAG.TRANSPORT_OUT)
+        if not transport_out_node:
+            self.logger.warning("transport_out node not found, cannot send immediate turn switch")
+            return
+        
+        station = transport_out_node.station
+        
+        # 2 & 3. Clear send_queue + send TTS_STOP via priority_queue
+        if isinstance(station, OutputStation):
+            try:
+                await station.handle_turn_switch()
+                self.logger.info("Called OutputStation.handle_turn_switch() for interrupt")
+            except Exception as e:
+                self.logger.error(f"Failed to send immediate turn switch: {e}")
+        else:
+            self.logger.warning(f"transport_out node is not OutputStation: {type(station).__name__}")
 
     async def _cleanup(self, input_task: asyncio.Task) -> None:
         """Cleanup all tasks"""

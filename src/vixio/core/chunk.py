@@ -63,13 +63,8 @@ class ChunkType(str, Enum):
     EVENT_STREAM_COMPLETE = "event.stream.complete"  # Upstream finished, trigger downstream flush
     
     # ============ Client Events (for OutputStation -> Client display) ============
-    # State events - notify client of state changes
-    EVENT_STATE_IDLE = "event.state.idle"
-    EVENT_STATE_LISTENING = "event.state.listening"
-    EVENT_STATE_PROCESSING = "event.state.processing"
-    EVENT_STATE_SPEAKING = "event.state.speaking"
-    
     # TTS events - for client audio sync and subtitle display
+    # Per protocol: tts state: start/stop controls client speaking/listening state
     EVENT_TTS_START = "event.tts.start"
     EVENT_TTS_SENTENCE_START = "event.tts.sentence.start"
     EVENT_TTS_SENTENCE_END = "event.tts.sentence.end"
@@ -104,17 +99,11 @@ class ChunkType(str, Enum):
 
 
 # High priority chunk types (for immediate sending, not blocked by audio queue)
-# These are typically control commands and state changes that need immediate delivery
+# These are typically control commands that need immediate delivery
 HIGH_PRIORITY_TYPES = {
-    # Control signals - always high priority
     ChunkType.CONTROL_HANDSHAKE,
     ChunkType.CONTROL_STATE_RESET,
     ChunkType.CONTROL_TURN_SWITCH,
-    
-    # State events - client needs immediate feedback
-    ChunkType.EVENT_STATE_LISTENING,
-    ChunkType.EVENT_STATE_IDLE,
-    ChunkType.EVENT_STATE_SPEAKING,
 }
 
 

@@ -344,20 +344,23 @@ class OutputStation(Station):
         - Normal (audio, TTS events) -> send_queue (may be delayed by flow control)
         
         Special handling:
-        - CONTROL_TURN_SWITCH: converted to TTS_STOP + STATE_LISTENING messages
+        - CONTROL_TURN_SWITCH: converted to TTS_STOP message
         - AUDIO_RAW: split into frames and encoded
         
         OutputStation is endpoint, doesn't produce new Chunks.
         """
+        # Log chunk reception for debugging
+        self.logger.debug(f"OutputStation.process_chunk: type={chunk.type.value}, turn={chunk.turn_id}")
+        
         # Special handling for AUDIO_RAW: split into frames, encode, and send
         if chunk.type == ChunkType.AUDIO_RAW and chunk.data:
             await self._send_audio_frames(chunk.data, chunk.turn_id)
             return
             yield  # Keep as generator
         
-        # Special handling for CONTROL_STATE_RESET: send TTS_STOP + STATE_LISTENING
+        # Special handling for CONTROL_TURN_SWITCH: send TTS_STOP
         if chunk.type == ChunkType.CONTROL_TURN_SWITCH:
-            await self._handle_turn_switch(chunk)
+            await self.handle_turn_switch()
             return
             yield  # Keep as generator
         
@@ -398,35 +401,39 @@ class OutputStation(Station):
         return
         yield  # Keep as generator
     
-    async def _handle_turn_switch(self, chunk: Chunk) -> None:
+    async def handle_turn_switch(self) -> None:
         """
-        Handle CONTROL_TURN_SWITCH: send TTS_STOP and STATE_LISTENING messages.
+        Handle turn switch: clear queues and send TTS_STOP.
         
-        This converts the semantic interrupt signal into protocol-specific messages.
-        Both messages are sent via priority_queue for immediate delivery.
+        Steps:
+        1. Clear send_queue (discard pending audio frames)
+        2. Send TTS_STOP via priority_queue (immediate delivery)
         
-        Args:
-            chunk: CONTROL_TURN_SWITCH chunk
+        Can be called:
+        - From process_chunk() when receiving CONTROL_TURN_SWITCH chunk
+        - Directly from DAG when handling CONTROL_STATE_RESET (bypasses queue)
         """
-        # 1. Send TTS_STOP to stop client playback
+        # 1. Clear send_queue to discard pending audio frames
+        cleared_count = 0
+        while not self._send_queue.empty():
+            try:
+                self._send_queue.get_nowait()
+                cleared_count += 1
+            except asyncio.QueueEmpty:
+                break
+        
+        if cleared_count > 0:
+            self.logger.info(f"Cleared {cleared_count} items from send_queue")
+        
+        # 2. Send TTS_STOP via priority_queue for immediate delivery
         tts_stop_msg = self.protocol.send_tts_event(self._session_id, "stop")
         if tts_stop_msg:
             try:
                 encoded = self.protocol.encode_message(tts_stop_msg)
                 await self._priority_queue.put(encoded)
-                self.logger.debug("Sent TTS_STOP via priority queue (abort)")
+                self.logger.debug("Sent TTS_STOP via priority queue")
             except Exception as e:
                 self.logger.error(f"Failed to send TTS_STOP: {e}")
-        
-        # 2. Send STATE_LISTENING to activate client microphone
-        listen_msg = self.protocol.start_listen(self._session_id)
-        if listen_msg:
-            try:
-                encoded = self.protocol.encode_message(listen_msg)
-                await self._priority_queue.put(encoded)
-                self.logger.debug("Sent STATE_LISTENING via priority queue (abort)")
-            except Exception as e:
-                self.logger.error(f"Failed to send STATE_LISTENING: {e}")
     
     async def _chunk_to_message(self, chunk: Chunk) -> Optional[Dict[str, Any]]:
         """
@@ -458,6 +465,7 @@ class OutputStation(Station):
             text = None
             if hasattr(chunk, 'event_data') and isinstance(chunk.event_data, dict):
                 text = chunk.event_data.get("text")
+            self.logger.info(f"OutputStation received EVENT_TTS_START (turn={chunk.turn_id})")
             return self.protocol.send_tts_event(self._session_id, "start", text)
         
         elif chunk.type == ChunkType.EVENT_TTS_SENTENCE_START:
@@ -470,17 +478,8 @@ class OutputStation(Station):
             return self.protocol.send_tts_event(self._session_id, "sentence_end")
         
         elif chunk.type == ChunkType.EVENT_TTS_STOP:
+            self.logger.info(f"OutputStation received EVENT_TTS_STOP (turn={chunk.turn_id})")
             return self.protocol.send_tts_event(self._session_id, "stop")
-        
-        # State events - notify client of state changes
-        elif chunk.type == ChunkType.EVENT_STATE_LISTENING:
-            return self.protocol.start_listen(self._session_id)
-        
-        elif chunk.type == ChunkType.EVENT_STATE_IDLE:
-            return self.protocol.stop_listen(self._session_id)
-        
-        elif chunk.type == ChunkType.EVENT_STATE_SPEAKING:
-            return self.protocol.start_speaker(self._session_id)
         
         # Other Chunks - try default conversion
         else:

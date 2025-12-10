@@ -94,15 +94,17 @@ class TTSStation(StreamStation):
         Cancel TTS synthesis and reset state.
         Note: TTS_STOP is NOT emitted here - OutputStation handles client notification via CONTROL_TURN_SWITCH.
         """
+        self.logger.info(f"TTS _handle_interrupt called, _is_speaking={self._is_speaking}")
         if self._is_speaking:
             self.tts.cancel()
             self._is_speaking = False
-            self.logger.info("TTS cancelled by interrupt")
+            self.logger.info("TTS cancelled by interrupt, _is_speaking set to False")
     
     async def reset_state(self) -> None:
         """Reset TTS state for new turn."""
+        old_speaking = self._is_speaking
         self._is_speaking = False
-        self.logger.debug("TTS state reset for new turn")
+        self.logger.info(f"TTS reset_state called, _is_speaking: {old_speaking} -> False")
     
     async def on_completion(self, event: EventChunk) -> AsyncIterator[Chunk]:
         """
@@ -146,7 +148,7 @@ class TTSStation(StreamStation):
             session_id=event.session_id,
             turn_id=event.turn_id
         )
-            
+    
     async def process_chunk(self, chunk: Chunk) -> AsyncIterator[Chunk]:
         """
         Process chunk through TTS - CORE LOGIC ONLY.
@@ -180,6 +182,7 @@ class TTSStation(StreamStation):
         
         # Emit TTS START event (first time only)
         if not self._is_speaking:
+            self.logger.info(f"TTS emitting EVENT_TTS_START (turn={chunk.turn_id}), _is_speaking: False -> True")
             yield EventChunk(
                 type=ChunkType.EVENT_TTS_START,
                 event_data={"text_length": len(text)},
@@ -188,6 +191,8 @@ class TTSStation(StreamStation):
                 turn_id=chunk.turn_id
             )
             self._is_speaking = True
+        else:
+            self.logger.debug(f"TTS skipping EVENT_TTS_START (already speaking, turn={chunk.turn_id})")
         
         # Emit SENTENCE_START event (for client sync)
         yield EventChunk(

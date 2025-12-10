@@ -546,7 +546,7 @@ class TransportBase(ABC):
                 is_first_audio_frame = metadata and metadata.get("is_first_frame", False)
                 turn_id = metadata.get("turn_id") if metadata else None
                 is_tts_stop = metadata and metadata.get("is_tts_stop", False)
-                
+
                 # 2. Output control (Strategy A: Upper layer active control)
                 # Only apply to audio data, not priority messages
                 if not is_priority and is_flow_control and is_audio:

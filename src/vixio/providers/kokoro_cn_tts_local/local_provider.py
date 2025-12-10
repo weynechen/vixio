@@ -169,51 +169,76 @@ class LocalKokoroTTSInProcessProvider(TTSProvider):
         
         try:
             async with self._inference_lock:
-                # Create pipeline
-                lang_code = 'z' if self.lang == 'zh' else 'a'
-                pipeline = KPipeline(
-                    lang_code=lang_code,
-                    repo_id=self.repo_id,
-                    model=self._model
+                # Run TTS inference in thread pool to avoid blocking event loop
+                audio_data = await asyncio.get_event_loop().run_in_executor(
+                    None,  # Use default executor (ThreadPoolExecutor)
+                    self._synthesize_sync,
+                    text
                 )
-                
-                # Speed adjustment for long text
-                def speed_callable(len_ps):
-                    speed = self.speed * 0.8
-                    if len_ps <= 83:
-                        speed = self.speed
-                    elif len_ps < 183:
-                        speed = self.speed * (1 - (len_ps - 83) / 500)
-                    return speed * 1.1
-                
-                # Generate audio
-                generator = pipeline(text, voice=self.voice, speed=speed_callable)
-                result = next(generator)
             
-            # Get audio data
-            audio_data = result.audio
-            if hasattr(audio_data, 'cpu'):
-                audio_np = audio_data.cpu().numpy()
-            else:
-                audio_np = audio_data
+            yield audio_data
             
-            # Kokoro outputs at 24kHz, resample if needed
-            if self.sample_rate != 24000:
-                target_length = int(len(audio_np) * self.sample_rate / 24000)
-                indices = np.linspace(0, len(audio_np) - 1, target_length)
-                audio_np = np.interp(indices, np.arange(len(audio_np)), audio_np)
-            
-            # Convert to int16 PCM bytes
-            audio_int16 = (audio_np * 32767).astype(np.int16)
-            audio_bytes = audio_int16.tobytes()
-            
-            yield audio_bytes
-            
-            self.logger.info(f"Synthesis completed: {len(audio_np)} samples")
+            # Log sample count (audio_data is already bytes)
+            sample_count = len(audio_data) // 2  # 16-bit samples
+            self.logger.info(f"Synthesis completed: {sample_count} samples")
         
         except Exception as e:
             self.logger.error(f"TTS synthesis failed: {e}")
             raise
+    
+    def _synthesize_sync(self, text: str) -> bytes:
+        """
+        Synchronous TTS synthesis (runs in thread pool).
+        
+        This method contains the CPU-intensive TTS inference and is designed
+        to be called via run_in_executor() to avoid blocking the event loop.
+        
+        Args:
+            text: Text to synthesize
+            
+        Returns:
+            Audio bytes (PCM format, 16-bit, mono)
+        """
+        from kokoro import KPipeline
+        import numpy as np
+        
+        # Create pipeline
+        lang_code = 'z' if self.lang == 'zh' else 'a'
+        pipeline = KPipeline(
+            lang_code=lang_code,
+            repo_id=self.repo_id,
+            model=self._model
+        )
+        
+        # Speed adjustment for long text
+        def speed_callable(len_ps):
+            speed = self.speed * 0.8
+            if len_ps <= 83:
+                speed = self.speed
+            elif len_ps < 183:
+                speed = self.speed * (1 - (len_ps - 83) / 500)
+            return speed * 1.1
+        
+        # Generate audio
+        generator = pipeline(text, voice=self.voice, speed=speed_callable)
+        result = next(generator)
+        
+        # Get audio data
+        audio_data = result.audio
+        if hasattr(audio_data, 'cpu'):
+            audio_np = audio_data.cpu().numpy()
+        else:
+            audio_np = audio_data
+        
+        # Kokoro outputs at 24kHz, resample if needed
+        if self.sample_rate != 24000:
+            target_length = int(len(audio_np) * self.sample_rate / 24000)
+            indices = np.linspace(0, len(audio_np) - 1, target_length)
+            audio_np = np.interp(indices, np.arange(len(audio_np)), audio_np)
+        
+        # Convert to int16 PCM bytes
+        audio_int16 = (audio_np * 32767).astype(np.int16)
+        return audio_int16.tobytes()
     
     def cancel(self) -> None:
         """Cancel ongoing synthesis (no-op for in-process)"""
