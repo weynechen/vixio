@@ -11,14 +11,17 @@ from vixio.core.chunk import (
     VideoChunk,
     ControlChunk,
     EventChunk,
+    CompletionSignal,
+    CompletionChunk,
     is_audio_chunk,
     is_text_chunk,
     is_video_chunk,
     is_control_chunk,
     is_event_chunk,
+    is_completion_chunk,
     HIGH_PRIORITY_TYPES,
 )
-from vixio.core.station import Station, PassthroughStation
+from vixio.core.station import Station, PassthroughStation, StationRole
 from vixio.core.transport import TransportBase
 from vixio.core.session import SessionManager
 from vixio.core.protocol import ProtocolBase
@@ -69,16 +72,20 @@ __all__ = [
     "VideoChunk",
     "ControlChunk",
     "EventChunk",
+    "CompletionSignal",
+    "CompletionChunk",
     # Chunk type guards
     "is_audio_chunk",
     "is_text_chunk",
     "is_video_chunk",
     "is_control_chunk",
     "is_event_chunk",
+    "is_completion_chunk",
     "HIGH_PRIORITY_TYPES",
     # Core classes
     "Station",
     "PassthroughStation",
+    "StationRole",
     "TransportBase",
     "ProtocolBase",
     "SessionManager",

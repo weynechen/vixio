@@ -5,15 +5,39 @@ Processing rules:
 1. Data chunks: Transform and yield processed results
 2. Signal chunks: Immediately passthrough + optionally yield response chunks
 3. Turn-aware: Discard chunks from old turns, reset state on new turns
+
+Completion Contract:
+- EMITS_COMPLETION: Station declares it emits completion signal when done
+- AWAITS_COMPLETION: Station declares it needs completion signal to trigger output
+- DAG automatically binds completion signals between adjacent stations
 """
 
 from abc import ABC, abstractmethod
-from typing import AsyncIterator, Optional, TYPE_CHECKING
-from vixio.core.chunk import Chunk
+from enum import Enum
+from typing import AsyncIterator, List, Optional, TYPE_CHECKING
+from vixio.core.chunk import Chunk, ChunkType, CompletionChunk, CompletionSignal
 from loguru import logger
 
 if TYPE_CHECKING:
     from vixio.core.control_bus import ControlBus
+
+
+class StationRole(str, Enum):
+    """
+    Station behavior role - helps DAG understand station characteristics
+    
+    Roles:
+    - STREAM: One-to-one/many transformation, emits completion when done
+    - BUFFER: Accumulates data, needs completion signal to trigger output
+    - DETECTOR: State machine, emits state change events
+    - SOURCE: Input source (e.g., InputStation)
+    - SINK: Output endpoint (e.g., OutputStation)
+    """
+    STREAM = "stream"           # Streaming processor (Agent, TTS)
+    BUFFER = "buffer"           # Buffer aggregator (TextAggregator, ASR)
+    DETECTOR = "detector"       # State detector (VAD, TurnDetector)
+    SOURCE = "source"           # Input source
+    SINK = "sink"               # Output endpoint
 
 
 class Station(ABC):
@@ -25,8 +49,23 @@ class Station(ABC):
     2. Signal chunks: Immediately passthrough + optionally yield response chunks
     3. Turn-aware: Discard chunks from old turns, reset state on new turns
     
-    Subclasses override process_chunk() to implement custom logic.
+    Completion Contract:
+    - ROLE: Station behavior type (STREAM, BUFFER, DETECTOR, SOURCE, SINK)
+    - INPUT_TYPES: List of ChunkTypes this station accepts
+    - OUTPUT_TYPES: List of ChunkTypes this station produces
+    - EMITS_COMPLETION: True if station emits completion signal when done
+    - AWAITS_COMPLETION: True if station needs completion signal to trigger output
+    
+    Subclasses override process_chunk() to implement core logic.
+    Subclasses can override on_completion() to handle completion signals.
     """
+    
+    # ============ Completion Contract (subclasses should override) ============
+    ROLE: StationRole = StationRole.STREAM
+    INPUT_TYPES: List[ChunkType] = []       # Accepted input types
+    OUTPUT_TYPES: List[ChunkType] = []      # Produced output types
+    EMITS_COMPLETION: bool = False          # Emits completion signal when done
+    AWAITS_COMPLETION: bool = False         # Needs completion signal to trigger
     
     def __init__(self, name: Optional[str] = None):
         """
@@ -52,6 +91,10 @@ class Station(ABC):
         - Reset state when new turn starts (turn_id > current_turn_id)
         - Process chunks from current turn normally
         
+        Completion handling:
+        - If chunk is CompletionChunk and this station AWAITS_COMPLETION,
+          call on_completion() instead of process_chunk()
+        
         This method should NOT be overridden by subclasses.
         
         Args:
@@ -60,6 +103,8 @@ class Station(ABC):
         Yields:
             Processed chunks
         """
+        from vixio.core.chunk import is_completion_chunk
+        
         async for chunk in input_stream:
             # Check turn ID
             if chunk.turn_id < self.current_turn_id:
@@ -73,7 +118,21 @@ class Station(ABC):
                 self.current_turn_id = chunk.turn_id
                 await self.reset_state()
             
-            # Process chunk
+            # Handle CompletionChunk specially
+            if is_completion_chunk(chunk) and self.AWAITS_COMPLETION:
+                try:
+                    self.logger.debug(f"[{self.name}] Processing completion signal from {chunk.from_station}")
+                    async for output_chunk in self.on_completion(chunk):
+                        # Propagate turn ID
+                        output_chunk.turn_id = self.current_turn_id
+                        self.logger.debug(f"[{self.name}] Yield from on_completion: {output_chunk}")
+                        yield output_chunk
+                except Exception as e:
+                    chunk_str = str(chunk).replace('{', '{{').replace('}', '}}')
+                    self.logger.error(f"[{self.name}] Error in on_completion {chunk_str}: {e}", exc_info=True)
+                continue  # Don't call process_chunk for CompletionChunk
+            
+            # Process chunk normally
             try:
                 async for output_chunk in self.process_chunk(chunk):
                     # Propagate turn ID
@@ -95,6 +154,56 @@ class Station(ABC):
         Example: ASR station clears audio buffer, Agent clears conversation history.
         """
         self.logger.debug(f"[{self.name}] State reset for turn {self.current_turn_id}")
+    
+    async def on_completion(self, signal: CompletionChunk) -> AsyncIterator[Chunk]:
+        """
+        Handle completion signal from upstream station.
+        
+        Called by DAG when upstream station emits completion signal.
+        Only called if this station has AWAITS_COMPLETION = True.
+        
+        Default behavior: do nothing (subclasses override for buffer flush, etc.)
+        
+        Args:
+            signal: CompletionChunk from upstream
+            
+        Yields:
+            Output chunks (e.g., aggregated text from buffer)
+        
+        Example:
+            class TextAggregatorStation(BufferStation):
+                AWAITS_COMPLETION = True
+                
+                async def on_completion(self, signal):
+                    if self._buffer:
+                        yield TextChunk(data=self._buffer)
+                        self._buffer = ""
+        """
+        # Default: do nothing
+        return
+        yield  # Make this a generator
+    
+    def emit_completion(self, session_id: Optional[str] = None, turn_id: int = 0) -> CompletionChunk:
+        """
+        Create a completion signal chunk.
+        
+        Helper method for stations that emit completion signals.
+        Only meaningful if EMITS_COMPLETION = True.
+        
+        Args:
+            session_id: Session ID (optional)
+            turn_id: Turn ID
+            
+        Returns:
+            CompletionChunk ready to yield
+        """
+        return CompletionChunk(
+            signal=CompletionSignal.COMPLETE,
+            from_station=self.name,
+            source=self.name,
+            session_id=session_id or self._session_id,
+            turn_id=turn_id
+        )
     
     def should_process(self, chunk: Chunk) -> bool:
         """
@@ -136,7 +245,7 @@ class Station(ABC):
         For signal chunks:
         - Must yield the signal to pass it through (yield chunk)
         - Can update internal state
-        - Can optionally yield additional chunks (e.g., ASR yields TEXT on EVENT_USER_STOPPED_SPEAKING)
+        - Can optionally yield additional chunks (e.g., ASR yields TEXT on completion signal)
         
         Args:
             chunk: Input chunk (data or signal)
@@ -169,7 +278,7 @@ class Station(ABC):
             class ASRStation(StreamStation):
                 def _setup_handlers(self):
                     self.register_handler(ChunkType.AUDIO_RAW, self._handle_audio)
-                    self.register_handler(ChunkType.EVENT_USER_STOPPED_SPEAKING, self._handle_turn_end)
+                    self.register_handler(CompletionSignal.COMPLETE, self._handle_turn_end)
                 
                 async def process_chunk(self, chunk):
                     # Clean: delegate to registered handlers
@@ -215,8 +324,9 @@ class StreamStation(Station):
     - One-to-one or one-to-many transformations
     - May process for extended time (requires timeout, interrupt handling)
     - Async streaming output
+    - Typically EMITS_COMPLETION = True (emits completion when stream ends)
     
-    Use cases: Agent, ASR, TTS
+    Use cases: Agent, TTS
     
     Default middlewares (auto-applied via decorator):
     - InputValidatorMiddleware: Validate input types (subclass specifies allowed_types)
@@ -226,15 +336,23 @@ class StreamStation(Station):
     - ErrorHandlerMiddleware: Error handling
     
     Subclasses should define:
-    - ALLOWED_INPUT_TYPES: List[ChunkType] - Allowed input chunk types
+    - ALLOWED_INPUT_TYPES: List[ChunkType] - Allowed input chunk types (alias for INPUT_TYPES)
     - LATENCY_METRIC_NAME: str - Latency metric name (default: station name)
     - LATENCY_OUTPUT_TYPES: List[ChunkType] (optional) - Output types to monitor (default: all)
+    - EMITS_COMPLETION: bool - Whether to emit completion when stream ends
     """
     
+    # Station role
+    ROLE = StationRole.STREAM
+    
     # Subclasses should override these
-    ALLOWED_INPUT_TYPES: list = []  # e.g., [ChunkType.TEXT]
+    ALLOWED_INPUT_TYPES: list = []  # e.g., [ChunkType.TEXT] (alias for INPUT_TYPES)
     LATENCY_METRIC_NAME: str = ""  # e.g., "agent_first_token"
     LATENCY_OUTPUT_TYPES: list = None  # e.g., [ChunkType.AUDIO_RAW] (None = all types)
+    
+    # Stream stations typically emit completion when done
+    EMITS_COMPLETION: bool = True
+    AWAITS_COMPLETION: bool = False
     
     def __init__(
         self,
@@ -259,6 +377,11 @@ class StreamStation(Station):
         # Set latency metric name from class attribute if not overridden
         if not self.LATENCY_METRIC_NAME:
             self.LATENCY_METRIC_NAME = f"{self.name.lower()}_first_output"
+    
+    @property
+    def INPUT_TYPES(self) -> list:
+        """Alias for ALLOWED_INPUT_TYPES for compatibility"""
+        return self.ALLOWED_INPUT_TYPES
 
 
 class BufferStation(Station):
@@ -266,11 +389,13 @@ class BufferStation(Station):
     Buffer/aggregation station base class.
     
     Characteristics:
-    - Collects data, outputs on specific signal trigger
+    - Collects data, outputs on completion signal trigger
     - Has internal buffer
     - Processing usually instantaneous
+    - AWAITS_COMPLETION = True (needs upstream completion to flush)
+    - May EMITS_COMPLETION = True (if downstream also needs trigger)
     
-    Use cases: TextAggregator, SentenceAggregator
+    Use cases: TextAggregator, SentenceAggregator, ASR (buffer audio, trigger on completion)
     
     Default middlewares (auto-applied via decorator):
     - InputValidatorMiddleware: Validate input types (subclass specifies allowed_types)
@@ -279,10 +404,21 @@ class BufferStation(Station):
     
     Subclasses should define:
     - ALLOWED_INPUT_TYPES: List[ChunkType] - Allowed input chunk types
+    - EMITS_COMPLETION: bool - Whether to emit completion after flush
+    
+    Subclasses should implement:
+    - on_completion(): Handle completion signal (flush buffer)
     """
+    
+    # Station role
+    ROLE = StationRole.BUFFER
     
     # Subclasses should override these
     ALLOWED_INPUT_TYPES: list = []  # e.g., [ChunkType.TEXT_DELTA]
+    
+    # Buffer stations await completion to flush, may also emit completion
+    EMITS_COMPLETION: bool = False  # Subclass can override
+    AWAITS_COMPLETION: bool = True  # Buffer stations need completion signal
     
     def __init__(self, name: Optional[str] = None, **kwargs):
         """
@@ -293,6 +429,11 @@ class BufferStation(Station):
             **kwargs: Additional arguments for base Station
         """
         super().__init__(name=name, **kwargs)
+    
+    @property
+    def INPUT_TYPES(self) -> list:
+        """Alias for ALLOWED_INPUT_TYPES for compatibility"""
+        return self.ALLOWED_INPUT_TYPES
 
 
 class DetectorStation(Station):
@@ -301,8 +442,9 @@ class DetectorStation(Station):
     
     Characteristics:
     - State machine logic
-    - Detects pattern changes, emits events
-    - Passthrough data + emit events
+    - Detects pattern changes, emits completion signals
+    - Passthrough data + emit signals on state change
+    - EMITS_COMPLETION = True (emits completion when state changes, e.g., VAD_END)
     
     Use cases: VAD, TurnDetector
     
@@ -315,8 +457,15 @@ class DetectorStation(Station):
     - ALLOWED_INPUT_TYPES: List[ChunkType] - Allowed input chunk types
     """
     
+    # Station role
+    ROLE = StationRole.DETECTOR
+    
     # Subclasses should override these
     ALLOWED_INPUT_TYPES: list = []  # e.g., [ChunkType.AUDIO_RAW]
+    
+    # Detectors emit completion signals on state change
+    EMITS_COMPLETION: bool = True
+    AWAITS_COMPLETION: bool = False
     
     def __init__(self, name: Optional[str] = None, **kwargs):
         """
@@ -327,3 +476,8 @@ class DetectorStation(Station):
             **kwargs: Additional arguments for base Station
         """
         super().__init__(name=name, **kwargs)
+    
+    @property
+    def INPUT_TYPES(self) -> list:
+        """Alias for ALLOWED_INPUT_TYPES for compatibility"""
+        return self.ALLOWED_INPUT_TYPES

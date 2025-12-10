@@ -58,7 +58,7 @@ class LatencyMonitorMiddleware(Middleware):
         
         Monitors ALL outputs regardless of input chunk type (data or signal).
         This is important because stations like ASR output data chunks (TEXT_DELTA)
-        in response to signal inputs (EVENT_USER_STOPPED_SPEAKING).
+        in response to completion signals.
         
         Only records latency for:
         1. First output of this turn (turn_id > last_recorded_turn_id)

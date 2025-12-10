@@ -1,11 +1,12 @@
 """
 TextAggregatorStation - Aggregates TEXT_DELTA into complete TEXT
 
-Input: TEXT_DELTA (streaming)
-Output: TEXT (aggregated complete text)
+Input: TEXT_DELTA (streaming), CompletionSignal (trigger from ASR)
+Output: TEXT (aggregated complete text) + CompletionSignal
 
-This station aggregates streaming text deltas and emits complete text
-as a single TEXT chunk when a termination signal is received.
+Completion Contract:
+- AWAITS_COMPLETION: True (triggered by ASR's completion signal)
+- EMITS_COMPLETION: True (emits completion after aggregation, triggers Agent)
 
 Use case: Aggregate ASR streaming output before sending to Agent.
 
@@ -13,8 +14,8 @@ Refactored with middleware pattern for clean separation of concerns.
 """
 
 from typing import AsyncIterator
-from vixio.core.station import BufferStation
-from vixio.core.chunk import Chunk, ChunkType, TextChunk
+from vixio.core.station import BufferStation, StationRole
+from vixio.core.chunk import Chunk, ChunkType, TextChunk, CompletionChunk, CompletionSignal
 from vixio.core.middleware import with_middlewares
 
 
@@ -28,28 +29,27 @@ class TextAggregatorStation(BufferStation):
     """
     Text aggregator: Aggregates TEXT_DELTA into complete TEXT.
     
-    Input: TEXT_DELTA (streaming)
-    Output: TEXT (complete aggregated text)
+    Input: TEXT_DELTA (streaming), CompletionSignal (trigger)
+    Output: TEXT (complete aggregated text) + CompletionSignal
+    
+    Completion Contract:
+    - Awaits completion from ASR (triggers output)
+    - Emits completion after aggregation (for downstream if needed)
     
     Workflow:
-    1. Accumulate TEXT_DELTA chunks
-    2. On EVENT_TEXT_COMPLETE: Emit complete text as TEXT
-    3. Pass through all other chunks
+    1. Accumulate TEXT_DELTA chunks into buffer
+    2. On completion signal: Emit complete text as TEXT + completion
     """
+    
+    # Station role
+    ROLE = StationRole.BUFFER
     
     # BufferStation configuration
     ALLOWED_INPUT_TYPES = [ChunkType.TEXT_DELTA]
-    """
-    Text aggregator: Aggregates TEXT_DELTA into complete TEXT.
     
-    Input: TEXT_DELTA (streaming)
-    Output: TEXT (complete aggregated text)
-    
-    Workflow:
-    1. Accumulate TEXT_DELTA chunks
-    2. On EVENT_TEXT_COMPLETE: Emit complete text as TEXT
-    3. Pass through all other chunks
-    """
+    # Completion contract: await ASR completion, emit aggregated text + completion
+    EMITS_COMPLETION = True
+    AWAITS_COMPLETION = True
     
     def __init__(self, name: str = "TextAggregator"):
         """
@@ -82,34 +82,14 @@ class TextAggregatorStation(BufferStation):
         DAG routing rules:
         - Only process chunks matching ALLOWED_INPUT_TYPES (TEXT_DELTA)
         - Do NOT passthrough - DAG handles routing to downstream nodes
-        - Do NOT check chunk.source - only care about chunk type
+        - Accumulate text into buffer (output triggered by on_completion)
         
         Core logic:
         - Accumulate TEXT_DELTA chunks into buffer
-        - On EVENT_TEXT_COMPLETE: Emit complete TEXT chunk, clear buffer
+        - Output is triggered by on_completion() when upstream sends CompletionSignal
         
         Note: SignalHandlerMiddleware handles CONTROL_STATE_RESET (clears buffer via _handle_interrupt)
         """
-        # Handle EVENT_TEXT_COMPLETE signal (emit aggregated text)
-        if chunk.type == ChunkType.EVENT_TEXT_COMPLETE:
-            if self._text_buffer.strip():
-                self.logger.info(f"Aggregated text: '{self._text_buffer[:50]}...'")
-                
-                # Emit complete text as TEXT
-                yield TextChunk(
-                    type=ChunkType.TEXT,
-                    data=self._text_buffer,
-                    source=self.name,
-                    session_id=chunk.session_id,
-                    turn_id=chunk.turn_id
-                )
-                
-                # Clear buffer
-                self._text_buffer = ""
-            else:
-                self.logger.debug("No text to aggregate - buffer is empty, not emitting TEXT chunk")
-            return
-        
         # Accumulate TEXT_DELTA chunks
         if chunk.type == ChunkType.TEXT_DELTA:
             # Extract text from data attribute (unified API)
@@ -118,4 +98,43 @@ class TextAggregatorStation(BufferStation):
             if delta:
                 self._text_buffer += delta
                 self.logger.debug(f"Accumulated {len(delta)} chars, total: {len(self._text_buffer)} chars")
+        
+        # Must be async generator (yield nothing if just buffering)
+        return
+        yield  # Makes this an async generator
+    
+    async def on_completion(self, signal: CompletionChunk) -> AsyncIterator[Chunk]:
+        """
+        Handle completion signal from upstream (ASR).
+        
+        Emits aggregated text as TEXT chunk and completion signal.
+        
+        Args:
+            signal: CompletionChunk from ASR
+            
+        Yields:
+            TEXT chunk + CompletionSignal
+        """
+        if self._text_buffer.strip():
+            self.logger.info(f"Aggregated text: '{self._text_buffer[:50]}...'")
+            
+            # Emit complete text as TEXT
+            yield TextChunk(
+                type=ChunkType.TEXT,
+                data=self._text_buffer,
+                source=self.name,
+                session_id=signal.session_id,
+                turn_id=signal.turn_id
+            )
+            
+            # Clear buffer
+            self._text_buffer = ""
+        else:
+            self.logger.debug("No text to aggregate - buffer is empty, not emitting TEXT chunk")
+        
+        # Emit completion signal for downstream (if any)
+        yield self.emit_completion(
+            session_id=signal.session_id,
+            turn_id=signal.turn_id
+        )
 

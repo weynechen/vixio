@@ -7,6 +7,12 @@ Design principles:
 3. Type generalization: Keep generic types (TEXT, AUDIO), not source-specific
 4. Full decoupling: Station doesn't check chunk.source, only cares about type
 5. Cohesive sync: Stream sync handled inside Station
+
+Completion Signal Contract:
+- Stations declare EMITS_COMPLETION and AWAITS_COMPLETION
+- DAG automatically binds completion signals between adjacent stations
+- When upstream (EMITS_COMPLETION=True) completes, downstream (AWAITS_COMPLETION=True) receives signal
+- This decouples stations from knowing each other's specific signal types
 """
 
 import asyncio
@@ -24,7 +30,7 @@ from typing import (
 )
 from loguru import logger
 
-from vixio.core.chunk import Chunk, ChunkType
+from vixio.core.chunk import Chunk, ChunkType, CompletionChunk, CompletionSignal, is_completion_chunk
 from vixio.core.station import Station
 
 if TYPE_CHECKING:
@@ -68,6 +74,7 @@ class DAGNode:
     Responsibilities:
     - Run Station in its own asyncio task
     - Route output chunks to downstream nodes based on ALLOWED_INPUT_TYPES
+    - Route completion signals to downstream nodes based on contract
     - Collect runtime statistics
     """
 
@@ -83,6 +90,7 @@ class DAGNode:
         self.station = station
         self.input_queue: asyncio.Queue = asyncio.Queue()
         self.downstream: List["DAGNode"] = []
+        self.completion_downstream: List["DAGNode"] = []  # Nodes that await completion
         self.stats = NodeStats()
         self.position: Dict[str, float] = {"x": 0, "y": 0}  # For visualization layout
         self.logger = logger.bind(component=f"DAGNode:{name}")
@@ -94,6 +102,16 @@ class DAGNode:
         if types:
             return set(types)
         return None  # None means accept all types
+    
+    @property
+    def emits_completion(self) -> bool:
+        """Check if this station emits completion signal"""
+        return getattr(self.station, "EMITS_COMPLETION", False)
+    
+    @property
+    def awaits_completion(self) -> bool:
+        """Check if this station awaits completion signal"""
+        return getattr(self.station, "AWAITS_COMPLETION", False)
 
     def accepts(self, chunk: Chunk) -> bool:
         """
@@ -136,7 +154,7 @@ class DAGNode:
         self.logger.debug(f"Node {self.name} started")
 
         try:
-            async for chunk in self.station.process(self._input_iterator()):
+            async for chunk in self._process_with_completion():
                 start_time = time.time()
 
                 # Update stats
@@ -156,31 +174,12 @@ class DAGNode:
                 if event_emitter:
                     await event_emitter.emit_chunk_processed(self.name, chunk)
 
-                # Route to downstream nodes
-                sent = False
-                for downstream in self.downstream:
-                    if downstream.accepts(chunk):
-                        await downstream.input_queue.put(chunk)
-                        downstream.stats.chunks_received += 1
-                        downstream.stats.queue_size = downstream.input_queue.qsize()
-
-                        # Record text preview for downstream
-                        if chunk.type in [ChunkType.TEXT, ChunkType.TEXT_DELTA]:
-                            text = str(chunk.data) if chunk.data else ""
-                            downstream.stats.last_input_text = text[:100]
-
-                        self.stats.chunks_forwarded += 1
-                        sent = True
-
-                        # Emit edge active event
-                        if event_emitter:
-                            await event_emitter.emit_edge_active(
-                                self.name, downstream.name, chunk
-                            )
-
-                # If no downstream accepted or no downstream at all, send to output
-                if not sent or not self.downstream:
-                    await output_queue.put(chunk)
+                # Handle CompletionChunk specially
+                if is_completion_chunk(chunk):
+                    await self._route_completion_signal(chunk, output_queue, event_emitter)
+                else:
+                    # Route regular chunks to downstream nodes
+                    await self._route_data_chunk(chunk, output_queue, event_emitter)
 
                 # Record latency
                 latency_ms = (time.time() - start_time) * 1000
@@ -200,10 +199,103 @@ class DAGNode:
             # Signal downstream that this node is done
             for downstream in self.downstream:
                 await downstream.input_queue.put(None)
+            for downstream in self.completion_downstream:
+                if downstream not in self.downstream:
+                    await downstream.input_queue.put(None)
             self.logger.debug(f"Node {self.name} finished")
+    
+    async def _process_with_completion(self) -> AsyncIterator[Chunk]:
+        """
+        Process input through station.
+        
+        Note: CompletionChunk handling is done inside Station.process().
+        DAG just routes chunks and collects output.
+        """
+        async for chunk in self.station.process(self._input_iterator()):
+            yield chunk
+    
+    async def _route_completion_signal(
+        self,
+        chunk: CompletionChunk,
+        output_queue: asyncio.Queue,
+        event_emitter: Optional[Any] = None,
+    ) -> None:
+        """
+        Route completion signal to downstream nodes that await completion.
+        
+        Args:
+            chunk: CompletionChunk to route
+            output_queue: Queue for final output
+            event_emitter: Optional event emitter
+        """
+        sent = False
+        
+        # Route to completion_downstream (nodes that await completion)
+        for downstream in self.completion_downstream:
+            await downstream.input_queue.put(chunk)
+            downstream.stats.chunks_received += 1
+            self.stats.chunks_forwarded += 1
+            sent = True
+            
+            self.logger.debug(
+                f"Routed completion signal to {downstream.name}"
+            )
+            
+            if event_emitter:
+                await event_emitter.emit_edge_active(
+                    self.name, downstream.name, chunk
+                )
+        
+        # If no downstream awaits completion, send to output (for logging/monitoring)
+        if not sent:
+            await output_queue.put(chunk)
+    
+    async def _route_data_chunk(
+        self,
+        chunk: Chunk,
+        output_queue: asyncio.Queue,
+        event_emitter: Optional[Any] = None,
+    ) -> None:
+        """
+        Route regular data chunk to downstream nodes.
+        
+        Args:
+            chunk: Chunk to route
+            output_queue: Queue for final output
+            event_emitter: Optional event emitter
+        """
+        sent = False
+        for downstream in self.downstream:
+            if downstream.accepts(chunk):
+                await downstream.input_queue.put(chunk)
+                downstream.stats.chunks_received += 1
+                downstream.stats.queue_size = downstream.input_queue.qsize()
+
+                # Record text preview for downstream
+                if chunk.type in [ChunkType.TEXT, ChunkType.TEXT_DELTA]:
+                    text = str(chunk.data) if chunk.data else ""
+                    downstream.stats.last_input_text = text[:100]
+
+                self.stats.chunks_forwarded += 1
+                sent = True
+
+                # Emit edge active event
+                if event_emitter:
+                    await event_emitter.emit_edge_active(
+                        self.name, downstream.name, chunk
+                    )
+
+        # If no downstream accepted or no downstream at all, send to output
+        if not sent or not self.downstream:
+            await output_queue.put(chunk)
 
     async def _input_iterator(self) -> AsyncIterator[Chunk]:
-        """Iterate over input queue until None is received"""
+        """
+        Iterate over input queue until None is received.
+        
+        Note: CompletionChunk handling is done in Station.process(),
+        not here. DAG just routes chunks to the appropriate stations.
+        """
         while True:
             chunk = await self.input_queue.get()
             if chunk is None:
@@ -459,7 +551,13 @@ class CompiledDAG:
         )
 
     def _build_graph(self) -> None:
-        """Build downstream connections between nodes"""
+        """
+        Build downstream connections between nodes.
+        
+        Two types of connections:
+        1. Data routing: Based on ALLOWED_INPUT_TYPES
+        2. Completion routing: Based on EMITS_COMPLETION and AWAITS_COMPLETION
+        """
         for from_name, to_name in self.edges:
             # Skip transport_in (always virtual)
             if from_name == DAG.TRANSPORT_IN:
@@ -470,7 +568,15 @@ class CompiledDAG:
             from_node = self.nodes.get(from_name)
             to_node = self.nodes.get(to_name)
             if from_node and to_node:
+                # Add data routing connection
                 from_node.downstream.append(to_node)
+                
+                # Auto-bind completion signal routing
+                if from_node.emits_completion and to_node.awaits_completion:
+                    from_node.completion_downstream.append(to_node)
+                    self.logger.info(
+                        f"Auto-bound completion: {from_name} -> {to_name}"
+                    )
 
     async def run(
         self,

@@ -1,16 +1,20 @@
 """
 SentenceAggregatorStation - aggregate streaming text into sentences
 
-Input: TEXT_DELTA
-Output: TEXT (complete sentences)
+Input: TEXT_DELTA, CompletionSignal (trigger flush from Agent)
+Output: TEXT (complete sentences) + CompletionSignal
+
+Completion Contract:
+- AWAITS_COMPLETION: True (triggered by Agent's completion signal to flush remaining)
+- EMITS_COMPLETION: True (emits completion after final flush, triggers TTS stop)
 
 Refactored with middleware pattern for clean separation of concerns.
 """
 
 import re
 from typing import AsyncIterator, List
-from vixio.core.station import BufferStation
-from vixio.core.chunk import Chunk, ChunkType, TextChunk
+from vixio.core.station import BufferStation, StationRole
+from vixio.core.chunk import Chunk, ChunkType, TextChunk, CompletionChunk, CompletionSignal
 from vixio.core.middleware import with_middlewares
 from vixio.stations.middlewares import LatencyMonitorMiddleware
 
@@ -111,26 +115,28 @@ class SentenceAggregator:
 )
 class SentenceAggregatorStation(BufferStation):
     """
-    sentence aggregator: aggregates streaming text into complete sentences.
+    Sentence aggregator: aggregates streaming text into complete sentences.
     
-    Input: TEXT_DELTA (streaming)
-    Output: TEXT (complete sentences)
+    Input: TEXT_DELTA (streaming), CompletionSignal (trigger flush)
+    Output: TEXT (complete sentences) + CompletionSignal
+    
+    Completion Contract:
+    - Awaits completion from Agent (triggers flush of remaining buffer)
+    - Emits completion after final flush (triggers TTS stop)
     
     This station is useful for feeding complete sentences to TTS
     instead of waiting for the entire response.
     """
+    
+    # Station role
+    ROLE = StationRole.BUFFER
     
     # BufferStation configuration
     ALLOWED_INPUT_TYPES = [ChunkType.TEXT_DELTA]
-    """
-    sentence aggregator: aggregates streaming text into complete sentences.
     
-    Input: TEXT_DELTA (streaming)
-    Output: TEXT (complete sentences)
-    
-    This station is useful for feeding complete sentences to TTS
-    instead of waiting for the entire response.
-    """
+    # Completion contract: await agent completion to flush, emit completion for TTS
+    EMITS_COMPLETION = True
+    AWAITS_COMPLETION = True
     
     def __init__(
         self,
@@ -166,31 +172,16 @@ class SentenceAggregatorStation(BufferStation):
         DAG routing rules:
         - Only process chunks matching ALLOWED_INPUT_TYPES (TEXT_DELTA)
         - Do NOT passthrough - DAG handles routing to downstream nodes
-        - Do NOT check chunk.source - only care about chunk type
+        - Accumulate text and emit complete sentences immediately
         
         Core logic:
         - Accumulate TEXT_DELTA chunks and aggregate into sentences
-        - On EVENT_AGENT_STOP: Flush remaining buffer as final sentence
+        - Emit complete sentences as soon as they're detected
+        - Final flush is triggered by on_completion() when upstream sends CompletionSignal
         
         Note: SignalHandlerMiddleware handles CONTROL_STATE_RESET (resets aggregator via _handle_interrupt)
         Note: LatencyMonitorMiddleware automatically records first sentence output
         """
-        # Handle EVENT_AGENT_STOP signal (flush remaining text, then propagate)
-        if chunk.type == ChunkType.EVENT_AGENT_STOP:
-            remaining = self._aggregator.flush()
-            if remaining:
-                self.logger.info(f"Flushing final sentence: '{remaining[:50]}...'")
-                yield TextChunk(
-                    type=ChunkType.TEXT,
-                    data=remaining,
-                    source=self.name,
-                    session_id=chunk.session_id,
-                    turn_id=chunk.turn_id
-                )
-            # Propagate EVENT_AGENT_STOP to downstream (TTS needs it to emit TTS_STOP)
-            yield chunk
-            return
-        
         # Process TEXT_DELTA chunks
         if chunk.type == ChunkType.TEXT_DELTA:
             # Extract text from data attribute (unified API)
@@ -211,4 +202,33 @@ class SentenceAggregatorStation(BufferStation):
                         session_id=chunk.session_id,
                         turn_id=chunk.turn_id
                     )
+    
+    async def on_completion(self, signal: CompletionChunk) -> AsyncIterator[Chunk]:
+        """
+        Handle completion signal from upstream (Agent).
+        
+        Flushes remaining buffer as final sentence and emits completion signal.
+        
+        Args:
+            signal: CompletionChunk from Agent
+            
+        Yields:
+            Final TEXT chunk (if any) + CompletionSignal
+        """
+        remaining = self._aggregator.flush()
+        if remaining:
+            self.logger.info(f"Flushing final sentence: '{remaining[:50]}...'")
+            yield TextChunk(
+                type=ChunkType.TEXT,
+                data=remaining,
+                source=self.name,
+                session_id=signal.session_id,
+                turn_id=signal.turn_id
+            )
+        
+        # Emit completion signal (triggers TTS stop)
+        yield self.emit_completion(
+            session_id=signal.session_id,
+            turn_id=signal.turn_id
+        )
 

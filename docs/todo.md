@@ -5,7 +5,10 @@
 - [x] 实现xiaozhi的vision mcp 接口
 - [ ] 数字人station
 - [x] 制作python 包
-- [ ] 更改pipeline为DAG，充分解耦各个station的依赖
+- [x] 更改pipeline为DAG，充分解耦各个station的依赖
+- [ ] 解决litellm网络卡住的问题
+- [ ] 调整ASR为streamstation，引入流式ASR provider
+- [ ] 引入smartturn替换当前的默认turn
 - [ ] 更新intranscribe
 - [ ] 更新realtimestation
 - [ ] 制作实时翻译示例

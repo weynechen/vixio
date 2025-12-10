@@ -4,6 +4,14 @@ VADStation - Voice Activity Detection
 Input: AUDIO_RAW (PCM audio)
 Output: AUDIO_RAW (passthrough) + EVENT_VAD_START/END
 
+Completion Contract:
+- AWAITS_COMPLETION: False (processes audio stream continuously)
+- EMITS_COMPLETION: False (emits state events, not completion signals)
+
+Note: VAD emits state events (VAD_START/END) which TurnDetector uses
+for its state machine. TurnDetector then emits CompletionSignal when
+the turn is determined to be complete.
+
 Note: This station expects PCM audio data. Transport layers are responsible
 for format conversion (e.g., Opus -> PCM) before chunks enter the pipeline.
 
@@ -11,7 +19,7 @@ Refactored with middleware pattern for clean separation of concerns.
 """
 
 from typing import AsyncIterator
-from vixio.core.station import DetectorStation
+from vixio.core.station import DetectorStation, StationRole
 from vixio.core.chunk import Chunk, ChunkType, EventChunk, is_audio_chunk
 from vixio.core.middleware import with_middlewares
 from vixio.providers.vad import VADProvider, VADEvent
@@ -30,12 +38,24 @@ class VADStation(DetectorStation):
     Input: AUDIO_RAW (PCM format)
     Output: AUDIO_RAW (passthrough) + EVENT_VAD_START/END
     
+    Completion Contract:
+    - Does NOT emit completion signals (emits state events instead)
+    - TurnDetector listens to VAD events and emits completion when turn ends
+    
     Note: Expects PCM audio data. Transport layers handle format conversion.
     Turn management is handled by TTS/TurnDetector stations (increment on completion/interrupt).
     """
     
+    # Station role
+    ROLE = StationRole.DETECTOR
+    
     # DetectorStation configuration
     ALLOWED_INPUT_TYPES = [ChunkType.AUDIO_RAW]
+    
+    # VAD emits state events, not completion signals
+    # TurnDetector handles converting VAD events to completion signals
+    EMITS_COMPLETION = False
+    AWAITS_COMPLETION = False
     
     def __init__(self, vad_provider: VADProvider, name: str = "VAD"):
         """
@@ -106,6 +126,7 @@ class VADStation(DetectorStation):
         # Only process audio data (PCM)
         if chunk.type != ChunkType.AUDIO_RAW:
             return
+            yield  # Makes this an async generator
         
         # Detect voice activity
         audio_data = chunk.data if isinstance(chunk.data, bytes) else b''

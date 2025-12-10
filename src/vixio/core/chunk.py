@@ -3,7 +3,9 @@ Chunk data structures - carriers for both data and signals in the pipeline
 
 Design principle:
 - Data chunks (AUDIO/TEXT/VIDEO): Core content to be transformed by stations
-- Signal chunks (CONTROL/EVENT): Messages to passthrough + trigger station state changes
+- Control signals (CONTROL_*): Global commands via ControlBus, all stations respond
+- Completion signals: Local signals between adjacent stations, auto-bound by DAG
+- Client events (EVENT_*): Notifications for client UI sync (via OutputStation)
 """
 
 from dataclasses import dataclass, field
@@ -13,7 +15,17 @@ import time
 
 
 class ChunkType(str, Enum):
-    """Chunk types - divided into Data (core content) and Signals (messages)"""
+    """
+    Chunk types - divided into Data and Signals
+    
+    Design:
+    - Data types: Core content transformed by stations
+    - Control signals: Global commands via ControlBus
+    - Client events: Notifications sent to client for UI sync
+    
+    Note: Internal completion signals (between stations) are handled separately
+    via CompletionSignal, not in ChunkType. This keeps ChunkType stable.
+    """
     
     # ============ Data Chunks (Core content - to be processed/transformed) ============
     # Audio data
@@ -24,44 +36,33 @@ class ChunkType(str, Enum):
     TEXT_DELTA = "text.delta"         # Streaming text fragment (e.g. Agent output)
     
     # Vision data
-    VIDEO_FRAME = "video.frame"      # Video frame
-    IMAGE = "image"       # single image
+    VIDEO_FRAME = "video.frame"       # Video frame
+    IMAGE = "image"                    # Single image
     
-    # ============ Signal Chunks (Messages - passthrough + trigger state change) ============
+    # ============ Control Signals (Global - via ControlBus) ============
+    # These affect all stations and go through ControlBus
+    CONTROL_HANDSHAKE = "control.handshake"      # Handshake with client
+    CONTROL_STATE_RESET = "control.state_reset"  # Interrupt bot, reset all stations
+    CONTROL_TURN_SWITCH = "control.turn_switch"  # Abort current turn, start new turn
+    CONTROL_TERMINATE = "control.terminate"      # Stop TTS and terminate session
     
-    # --- Control Signals (from client, change pipeline behavior) ---
-    CONTROL_HANDSHAKE = "control.handshake" # Handshake with client
-    CONTROL_STATE_RESET = "control.state_reset" # Interrupt bot (stop TTS, start listening) , reset all station
-    CONTROL_TURN_SWITCH = "control.turn_switch" # Abort current turn , immediately send to client, start a new turn
-    CONTROL_TERMINATE = "control.terminate"   # stop tts and terminate the session
-    
-    # --- Event Signals (internal state notifications) ---
-    # VAD events (from VAD station)
+    # ============ Internal State Events (for state machine stations) ============
+    # VAD events - for TurnDetector state machine
     EVENT_VAD_START = "event.vad.start"    # Voice detected
     EVENT_VAD_END = "event.vad.end"        # Voice ended
     
-    # Turn events (from TurnDetector station)
-    EVENT_USER_STARTED_SPEAKING = "event.user.speaking.start"
-    EVENT_USER_STOPPED_SPEAKING = "event.user.speaking.stop"  # User turn complete, ready for e.g.ASR
-    
-    # Text events (from ASR/input sources)
-    EVENT_TEXT_COMPLETE = "event.text.complete"  # Text input complete, ready for aggregation
-    
-    # Bot events (from TTS station)
+    # Bot speaking state - for TurnDetector interrupt detection
     EVENT_BOT_STARTED_SPEAKING = "event.bot.speaking.start"
     EVENT_BOT_STOPPED_SPEAKING = "event.bot.speaking.stop"
     
-    # State events (for client UI sync)
+    # ============ Client Events (for OutputStation -> Client) ============
+    # State events - notify client of state changes
     EVENT_STATE_IDLE = "event.state.idle"
     EVENT_STATE_LISTENING = "event.state.listening"
     EVENT_STATE_PROCESSING = "event.state.processing"
     EVENT_STATE_SPEAKING = "event.state.speaking"
     
-    # Agent events (from Agent station)
-    EVENT_AGENT_START = "event.agent.start"
-    EVENT_AGENT_STOP = "event.agent.stop"
-    
-    # TTS events (for client sync)
+    # TTS events - for client audio sync and subtitle display
     EVENT_TTS_START = "event.tts.start"
     EVENT_TTS_SENTENCE_START = "event.tts.sentence.start"
     EVENT_TTS_SENTENCE_END = "event.tts.sentence.end"
@@ -85,6 +86,23 @@ class ChunkType(str, Enum):
             True if this is a high priority chunk type
         """
         return self in HIGH_PRIORITY_TYPES
+
+
+class CompletionSignal(str, Enum):
+    """
+    Completion signals - local signals between adjacent stations
+    
+    Design principle:
+    - These signals are NOT in ChunkType (no need to modify ChunkType when adding stations)
+    - Automatically bound by DAG based on station attributes (EMITS_COMPLETION, AWAITS_COMPLETION)
+    - Station doesn't know upstream/downstream, only declares its own attributes
+    
+    Signal types:
+    - COMPLETE: Stream processing finished, trigger downstream flush
+    - FLUSH: Request to flush buffer and output accumulated data
+    """
+    COMPLETE = "completion.complete"  # Upstream finished processing
+    FLUSH = "completion.flush"        # Request to flush buffer
 
 
 # High priority chunk types (for immediate sending, not blocked by audio queue)
@@ -264,6 +282,43 @@ class VideoChunk(Chunk):
 # ============ Specialized Signal Chunks ============
 
 @dataclass
+class CompletionChunk(Chunk):
+    """
+    Completion signal chunk - local signals between adjacent stations.
+    
+    Design:
+    - Used by DAG to automatically route completion signals
+    - Station doesn't need to know who sent this signal
+    - DAG fills in from_station when routing
+    
+    Attributes:
+        signal: CompletionSignal type (COMPLETE or FLUSH)
+        from_station: Source station name (filled by DAG, station doesn't need to set)
+    """
+    type: ChunkType = None  # Not a ChunkType, but keep for compatibility
+    signal: CompletionSignal = CompletionSignal.COMPLETE
+    from_station: str = ""  # Filled by DAG when routing
+    
+    def __post_init__(self):
+        """Set type to None to indicate this is a CompletionChunk"""
+        # CompletionChunk uses signal field, not type field
+        pass
+    
+    def is_signal(self) -> bool:
+        """CompletionChunk is always a signal"""
+        return True
+    
+    def is_data(self) -> bool:
+        """CompletionChunk is never data"""
+        return False
+    
+    def __str__(self) -> str:
+        session_short = self.session_id[:8] if self.session_id else 'N/A'
+        from_info = f" from {self.from_station}" if self.from_station else ""
+        return f"CompletionChunk({self.signal.value}{from_info}, session={session_short})"
+
+
+@dataclass
 class ControlChunk(Chunk):
     """
     Control chunk - control signals from client.
@@ -290,24 +345,24 @@ class ControlChunk(Chunk):
 @dataclass
 class EventChunk(Chunk):
     """
-    Event chunk - internal state notifications.
+    Event chunk - notifications for client UI sync.
     
     Examples:
-    - EVENT_VAD_START/END: Voice activity events
-    - EVENT_USER_STARTED_SPEAKING/STOPPED_SPEAKING: User turn events
-    - EVENT_USER_STOPPED_SPEAKING: Turn complete
-    - EVENT_TTS_START/STOP: TTS generation events
-    - EVENT_STATE_*: State change events
+    - EVENT_TTS_START/STOP: TTS generation events (for client audio sync)
+    - EVENT_TTS_SENTENCE_START: Subtitle display
+    - EVENT_STATE_*: State change events (for client UI)
     - EVENT_ERROR: Error occurred
+    
+    Note:
+    - These events are primarily for OutputStation to send to client
+    - Internal completion signals between stations use CompletionChunk instead
+    - Use the inherited 'source' field to specify which station generated this event
     
     Attributes:
         event_data: Any - Event-specific data
         data: Optional - Additional event payload
-    
-    Note:
-        Use the inherited 'source' field to specify which station generated this event
     """
-    type: ChunkType = ChunkType.EVENT_VAD_START
+    type: ChunkType = ChunkType.EVENT_TTS_START
     event_data: Any = None
     
     def __str__(self) -> str:
@@ -342,4 +397,9 @@ def is_control_chunk(chunk: Chunk) -> bool:
 
 def is_event_chunk(chunk: Chunk) -> bool:
     """Check if chunk is event signal"""
-    return isinstance(chunk, EventChunk) or chunk.type.value.startswith("event.")
+    return isinstance(chunk, EventChunk) or (chunk.type and chunk.type.value.startswith("event."))
+
+
+def is_completion_chunk(chunk: Chunk) -> bool:
+    """Check if chunk is completion signal"""
+    return isinstance(chunk, CompletionChunk)

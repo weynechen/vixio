@@ -1,8 +1,12 @@
 """
 TTSStation - Text to Speech
 
-Input: TEXT (complete sentences, source="SentenceAggregator")
-Output: AUDIO_RAW (streaming) + EVENT_TTS_START/STOP
+Input: TEXT (complete sentences), CompletionSignal (trigger TTS_STOP from SentenceAggregator)
+Output: AUDIO_RAW (streaming) + EVENT_TTS_START/SENTENCE_START/STOP
+
+Completion Contract:
+- AWAITS_COMPLETION: True (completion signal triggers TTS_STOP event)
+- EMITS_COMPLETION: True (emits completion after all synthesis done)
 
 Note: This station only processes TEXT chunks from SentenceAggregator.
 Use SentenceAggregatorStation before this to convert TEXT_DELTA to TEXT.
@@ -11,22 +15,16 @@ Refactored with middleware pattern for clean separation of concerns.
 """
 
 from typing import AsyncIterator
-from vixio.core.station import StreamStation
-from vixio.core.chunk import Chunk, ChunkType, AudioChunk, EventChunk
+from vixio.core.station import StreamStation, StationRole
+from vixio.core.chunk import Chunk, ChunkType, AudioChunk, EventChunk, CompletionChunk, CompletionSignal
 from vixio.core.middleware import with_middlewares
 from vixio.stations.middlewares import (
-    MultiSignalHandlerMiddleware,
     InputValidatorMiddleware
 )
 from vixio.providers.tts import TTSProvider
 
 
 @with_middlewares(
-    # Handle multiple signals (CONTROL_STATE_RESET, EVENT_AGENT_STOP)
-    MultiSignalHandlerMiddleware(
-        signal_handlers={},  # Will be configured in _configure_middlewares_hook
-        passthrough_signals=False  # DAG handles routing, no passthrough
-    ),
     # Validate input (only TEXT, non-empty)
     # Note: No source check - DAG routing ensures correct data flow
     InputValidatorMiddleware(
@@ -44,17 +42,28 @@ class TTSStation(StreamStation):
     """
     TTS workstation: Synthesizes text to audio.
     
-    Input: TEXT (complete sentences, source="SentenceAggregator")
-    Output: AUDIO_RAW (streaming) + EVENT_TTS_START/STOP
+    Input: TEXT (complete sentences), CompletionSignal (triggers TTS_STOP)
+    Output: AUDIO_RAW (streaming) + EVENT_TTS_START/SENTENCE_START/STOP
+    
+    Completion Contract:
+    - Awaits completion from SentenceAggregator (triggers TTS_STOP)
+    - Emits completion after all synthesis done
     
     Note: Only processes TEXT chunks from SentenceAggregator.
     Use SentenceAggregatorStation to convert TEXT_DELTA to TEXT.
     """
     
+    # Station role
+    ROLE = StationRole.STREAM
+    
     # StreamStation configuration
     ALLOWED_INPUT_TYPES = [ChunkType.TEXT]
     LATENCY_METRIC_NAME = "tts_first_audio_ready"
     LATENCY_OUTPUT_TYPES = [ChunkType.AUDIO_RAW]  # Only monitor audio output, not events
+    
+    # Completion contract: await sentence completion for TTS_STOP, emit completion
+    EMITS_COMPLETION = True
+    AWAITS_COMPLETION = True
     
     def __init__(self, tts_provider: TTSProvider, name: str = "tts"):  # Lowercase for consistent source tracking
         """
@@ -78,14 +87,10 @@ class TTSStation(StreamStation):
         Configure signal handlers for TTS-specific signals.
         """
         for middleware in middlewares:
-            if middleware.__class__.__name__ == 'MultiSignalHandlerMiddleware':
-                # Configure signal handlers
-                middleware.signal_handlers = {
-                    ChunkType.CONTROL_STATE_RESET: self._handle_interrupt,
-                    ChunkType.EVENT_AGENT_STOP: self._handle_agent_stop
-                }
+            if middleware.__class__.__name__ == 'SignalHandlerMiddleware':
+                middleware.on_interrupt = self._handle_interrupt
     
-    async def _handle_interrupt(self, chunk: Chunk) -> AsyncIterator[Chunk]:
+    async def _handle_interrupt(self) -> None:
         """
         Handle CONTROL_STATE_RESET signal.
         
@@ -96,42 +101,53 @@ class TTSStation(StreamStation):
             self.tts.cancel()
             self._is_speaking = False
             self.logger.info("TTS cancelled by interrupt")
-            
-    async def _handle_agent_stop(self, chunk: Chunk) -> AsyncIterator[Chunk]:
+    
+    async def reset_state(self) -> None:
+        """Reset TTS state for new turn."""
+        self._is_speaking = False
+        self.logger.debug("TTS state reset for new turn")
+    
+    async def on_completion(self, signal: CompletionChunk) -> AsyncIterator[Chunk]:
         """
-        Handle EVENT_AGENT_STOP signal.
+        Handle completion signal from upstream (SentenceAggregator).
         
-        Emit TTS_STOP to signal TTS session complete.
+        Emits TTS_STOP event to signal TTS session complete.
         
-        Note: Due to sequential chunk processing, when EVENT_AGENT_STOP arrives:
-        - All TEXT chunks have been processed (they come before EVENT_AGENT_STOP)
+        Note: Due to sequential chunk processing, when completion arrives:
+        - All TEXT chunks have been processed (they come before completion signal)
         - TTS synthesis for each TEXT is complete (process_chunk runs to completion)
         - So TTS_STOP here correctly indicates "TTS has finished all synthesis"
         
         Edge case: if no TEXT was processed (_is_speaking=False), no TTS_STOP needed.
+        
+        Args:
+            signal: CompletionChunk from SentenceAggregator
+            
+        Yields:
+            EVENT_TTS_STOP + CompletionSignal
         """
         if not self._is_speaking:
             # No TTS session active, nothing to stop
-            self.logger.debug("Agent stopped but TTS never started, no TTS_STOP needed")
+            self.logger.debug("Completion received but TTS never started, no TTS_STOP needed")
             return
-            yield  # Keep as generator
         
         # Emit TTS_STOP - all TEXT has been processed at this point
         yield EventChunk(
             type=ChunkType.EVENT_TTS_STOP,
             event_data={"reason": "synthesis_complete"},
             source=self.name,
-            session_id=chunk.session_id,
-            turn_id=chunk.turn_id
+            session_id=signal.session_id,
+            turn_id=signal.turn_id
         )
         
         self._is_speaking = False
         self.logger.info("TTS session complete (all sentences synthesized)")
-    
-    async def reset_state(self) -> None:
-        """Reset TTS state for new turn."""
-        self._is_speaking = False
-        self.logger.debug("TTS state reset for new turn")
+        
+        # Emit completion signal
+        yield self.emit_completion(
+            session_id=signal.session_id,
+            turn_id=signal.turn_id
+        )
             
     async def process_chunk(self, chunk: Chunk) -> AsyncIterator[Chunk]:
         """
@@ -153,12 +169,14 @@ class TTSStation(StreamStation):
         # Only process TEXT chunks
         if chunk.type != ChunkType.TEXT:
             return
+            yield  # Makes this an async generator
         
         # Extract text from data attribute
         text = chunk.data if isinstance(chunk.data, str) else (str(chunk.data) if chunk.data else "")
         
         if not text:
             return
+            yield  # Makes this an async generator
         
         self.logger.info(f"TTS synthesizing: '{text[:50]}...'")
         

@@ -2,7 +2,11 @@
 AgentStation - LLM Agent Integration
 
 Input: TEXT (complete user input from TextAggregator)
-Output: TEXT_DELTA (streaming, source="agent") + EVENT_AGENT_START/STOP
+Output: TEXT_DELTA (streaming) + CompletionSignal
+
+Completion Contract:
+- AWAITS_COMPLETION: False (triggered by TEXT data, not completion signal)
+- EMITS_COMPLETION: True (emits completion when stream ends, triggers SentenceAggregator flush)
 
 Note: Agent is the central processing node. All text must go through Agent,
 even if it's just a passthrough (echo agent) or translation agent.
@@ -17,11 +21,10 @@ Vision Support:
 
 import asyncio
 from typing import AsyncIterator, Optional, List
-from vixio.core.station import StreamStation
-from vixio.core.chunk import Chunk, ChunkType, TextDeltaChunk, is_text_chunk
+from vixio.core.station import StreamStation, StationRole
+from vixio.core.chunk import Chunk, ChunkType, TextDeltaChunk, CompletionChunk, CompletionSignal, is_text_chunk
 from vixio.core.middleware import with_middlewares
 from vixio.stations.middlewares import (
-    EventEmitterMiddleware,
     TimeoutHandlerMiddleware
 )
 from vixio.providers.agent import AgentProvider
@@ -33,12 +36,6 @@ from vixio.providers.vision import (
 
 
 @with_middlewares(
-    # Emit AGENT_START/STOP events
-    EventEmitterMiddleware(
-        start_event=ChunkType.EVENT_AGENT_START,
-        stop_event=ChunkType.EVENT_AGENT_STOP,
-        emit_on_interrupt=True
-    ),
     # Monitor timeout (custom configuration for Agent)
     TimeoutHandlerMiddleware(
         timeout_seconds=30.0,  # Will be overridden in __init__
@@ -57,14 +54,25 @@ class AgentStation(StreamStation):
     Agent workstation: Processes text through LLM agent.
     
     Input: TEXT (complete user input)
-    Output: TEXT_DELTA (streaming, source="agent") + EVENT_AGENT_START/STOP
+    Output: TEXT_DELTA (streaming) + CompletionSignal
+    
+    Completion Contract:
+    - Does NOT await completion (triggered by TEXT data)
+    - Emits completion when stream ends (triggers SentenceAggregator flush)
     
     Note: All TEXT_DELTA output has source="agent" to distinguish from ASR output.
     """
     
+    # Station role
+    ROLE = StationRole.STREAM
+    
     # StreamStation configuration
     ALLOWED_INPUT_TYPES = [ChunkType.TEXT]
     LATENCY_METRIC_NAME = "agent_first_token"
+    
+    # Completion contract: emit completion when stream ends
+    EMITS_COMPLETION = True
+    AWAITS_COMPLETION = False  # Triggered by TEXT data, not completion signal
     
     def __init__(
         self,
@@ -117,12 +125,10 @@ class AgentStation(StreamStation):
         
         Allows customizing middleware settings after attachment.
         """
-        # Find TimeoutHandlerMiddleware and update timeout
         for middleware in middlewares:
             if middleware.__class__.__name__ == 'TimeoutHandlerMiddleware':
                 middleware.timeout_seconds = self.timeout_seconds
             elif middleware.__class__.__name__ == 'SignalHandlerMiddleware':
-                # Set interrupt callback to reset agent conversation
                 middleware.on_interrupt = self._handle_interrupt
     
     async def _handle_interrupt(self) -> None:
@@ -203,6 +209,7 @@ class AgentStation(StreamStation):
         # Only process TEXT chunks
         if chunk.type != ChunkType.TEXT:
             return
+            yield  # Makes this an async generator
         
         # Extract text content (unified using chunk.data)
         text = chunk.data if isinstance(chunk.data, str) else (str(chunk.data) if chunk.data else "")
@@ -243,6 +250,12 @@ class AgentStation(StreamStation):
                         session_id=chunk.session_id,
                         turn_id=chunk.turn_id
                     )
+            
+            # Stream complete - emit completion signal (triggers SentenceAggregator flush)
+            yield self.emit_completion(
+                session_id=chunk.session_id,
+                turn_id=chunk.turn_id
+            )
         
         finally:
             await agent_stream.aclose()
