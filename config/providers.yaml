@@ -70,7 +70,7 @@ dev-local-cn:
 #   docker-compose up -d vad asr tts  # Start services
 #   uv run python examples/agent_chat.py --env dev
 # ==============================================================================
-dev:
+dev-grpc:
   providers:
     # VAD Provider (Local gRPC)
     vad:
@@ -91,7 +91,7 @@ dev:
     
     # Agent Provider (Remote API)
     agent:
-      provider: openai-agent-remote
+      provider: openai-agent
       config:
         api_key: ${API_KEY}
         model: ${LITELLM_MODEL}

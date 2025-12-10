@@ -15,7 +15,7 @@ RUN apt-get update && apt-get install -y \
 RUN pip install --no-cache-dir uv
 
 # Copy service files (including pyproject.toml)
-COPY micro_services/silero_vad /app/silero_vad
+COPY inference/silero_vad /app/silero_vad
 
 # Install dependencies using service's own pyproject.toml
 RUN uv sync --no-dev

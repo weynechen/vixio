@@ -3,7 +3,7 @@
 
 FROM python:3.12-slim
 
-WORKDIR /app/kokoro
+WORKDIR /app/kokoro_cn_tts_local
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
@@ -16,7 +16,7 @@ RUN apt-get update && apt-get install -y \
 RUN pip install --no-cache-dir uv
 
 # Copy service files (including pyproject.toml)
-COPY micro_services/kokoro /app/kokoro
+COPY inference/kokoro_cn_tts_local /app/kokoro_cn_tts_local
 
 # Install dependencies using service's own pyproject.toml
 RUN uv sync --no-dev

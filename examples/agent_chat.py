@@ -15,7 +15,7 @@ Usage:
     uv run python examples/agent_chat.py --env dev-local-cn
     
     # Development mode - with gRPC microservices
-    uv run python examples/agent_chat.py --env dev
+    uv run python examples/agent_chat.py --env dev-grpc 
     
     # Docker mode
     uv run python examples/agent_chat.py --env docker
@@ -113,8 +113,8 @@ async def main():
     parser.add_argument(
         "--env",
         type=str,
-        default="dev",
-        choices=["dev", "dev-local-cn", "dev-qwen", "docker", "k8s"],
+        default="dev-grpc",
+        choices=["dev-grpc", "dev-local-cn", "dev-qwen", "docker", "k8s"],
         help="Deployment environment (default: dev)"
     )
     parser.add_argument(
@@ -343,7 +343,7 @@ async def main():
     logger.info("=" * 70)
     
     # Show deployment-specific notes
-    if args.env in ("dev", "dev-local-cn", "dev-qwen"):
+    if args.env in ("dev-grpc", "dev-local-cn", "dev-qwen"):
         logger.info("📌 Dev Mode Notes:")
         logger.info(f"   - Using environment: {args.env}")
         logger.info("   - Ensure gRPC services are running if configured")

@@ -3682,6 +3682,21 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+dev-grpc = [
+    { name = "aiohttp" },
+    { name = "aiohttp-cors" },
+    { name = "fastapi" },
+    { name = "grpcio" },
+    { name = "grpcio-tools" },
+    { name = "httpx" },
+    { name = "numpy" },
+    { name = "openai" },
+    { name = "openai-agents", extra = ["litellm"] },
+    { name = "opuslib-next" },
+    { name = "pyjwt" },
+    { name = "uvicorn", extra = ["standard"] },
+    { name = "websockets" },
+]
 dev-local-cn = [
     { name = "aiohttp" },
     { name = "aiohttp-cors" },
@@ -3827,11 +3842,12 @@ requires-dist = [
     { name = "silero-vad", marker = "extra == 'silero-vad-local'", specifier = ">=5.0" },
     { name = "torch", marker = "extra == 'kokoro-cn-tts-local'", specifier = ">=2.0.0" },
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'xiaozhi'", specifier = ">=0.27.0" },
+    { name = "vixio", extras = ["xiaozhi", "openai-agent", "silero-vad-grpc", "sherpa-onnx-asr-grpc", "kokoro-cn-tts-grpc"], marker = "extra == 'dev-grpc'" },
     { name = "vixio", extras = ["xiaozhi", "openai-agent", "silero-vad-local", "sherpa-onnx-asr-local", "kokoro-cn-tts-local"], marker = "extra == 'dev-local-cn'" },
     { name = "vixio", extras = ["xiaozhi", "silero-vad-local", "qwen"], marker = "extra == 'dev-qwen'" },
     { name = "websockets", marker = "extra == 'xiaozhi'", specifier = ">=14.0,<15.0" },
 ]
-provides-extras = ["xiaozhi", "silero-vad-grpc", "sherpa-onnx-asr-grpc", "kokoro-cn-tts-grpc", "silero-vad-local", "sherpa-onnx-asr-local", "kokoro-cn-tts-local", "openai-agent", "edge-tts", "qwen", "dev-local-cn", "dev-qwen", "test"]
+provides-extras = ["xiaozhi", "silero-vad-grpc", "sherpa-onnx-asr-grpc", "kokoro-cn-tts-grpc", "silero-vad-local", "sherpa-onnx-asr-local", "kokoro-cn-tts-local", "openai-agent", "edge-tts", "qwen", "dev-local-cn", "dev-grpc", "dev-qwen", "test"]
 
 [[package]]
 name = "vixio-kokoro-tts-service"

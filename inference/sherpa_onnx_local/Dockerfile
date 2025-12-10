@@ -3,7 +3,7 @@
 
 FROM python:3.12-slim
 
-WORKDIR /app/sherpa_asr
+WORKDIR /app/sherpa_onnx_local
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
@@ -16,7 +16,7 @@ RUN apt-get update && apt-get install -y \
 RUN pip install --no-cache-dir uv
 
 # Copy service files (including pyproject.toml)
-COPY micro_services/sherpa_onnx_local /app/sherpa_asr
+COPY inference/sherpa_onnx_local /app/sherpa_onnx_local
 
 # Install dependencies using service's own pyproject.toml
 RUN uv sync --no-dev

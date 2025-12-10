@@ -114,9 +114,14 @@ qwen = [
 
 # ----------convenience settings --------------
 
-# dev
+# dev (local inference, requires GPU)
 dev-local-cn = [
     "vixio[xiaozhi,openai-agent,silero-vad-local,sherpa-onnx-asr-local,kokoro-cn-tts-local]",
+]
+
+# dev (gRPC clients, connect to external inference services)
+dev-grpc = [
+    "vixio[xiaozhi,openai-agent,silero-vad-grpc,sherpa-onnx-asr-grpc,kokoro-cn-tts-grpc]",
 ]
 
 # dev qwen

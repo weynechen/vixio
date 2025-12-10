@@ -20,6 +20,10 @@ vixio-tts-server = "server:main"
 requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
+[tool.setuptools]
+# Explicitly specify modules to avoid auto-discovery of logs/models directories
+py-modules = ["server", "client", "tts_pb2", "tts_pb2_grpc"]
+
 [[tool.uv.index]]
 url = "https://pypi.org/simple/"
 default = true

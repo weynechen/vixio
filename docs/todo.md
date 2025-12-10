@@ -3,11 +3,11 @@
 - [x] function tool 需要接入 → 已完成: [function_tool_design.md](./function_tool_design.md)
 - [ ] 接入video in , video 在语音驱动下做describe，辅助场景理解 → 已完成: [vision_design.md](./vision_design.md) 未测试
 - [x] 实现xiaozhi的vision mcp 接口
-- [ ] 数字人station
 - [x] 制作python 包
 - [x] 更改pipeline为DAG，充分解耦各个station的依赖
-- [ ] 解决litellm网络卡住的问题
+- [x] 解决litellm网络卡住的问题
 - [ ] 调整ASR为streamstation，引入流式ASR provider
+- [ ] 数字人station
 - [ ] 引入smartturn替换当前的默认turn
 - [ ] 更新intranscribe
 - [ ] 更新realtimestation

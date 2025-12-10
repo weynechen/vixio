@@ -19,6 +19,10 @@ vixio-vad-server = "server:main"
 requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
+[tool.setuptools]
+# Explicitly specify modules to avoid auto-discovery of logs/models directories
+py-modules = ["server", "client", "vad_pb2", "vad_pb2_grpc"]
+
 # UV package indexes (optional, for faster downloads in China)
 # [[tool.uv.index]]
 # url = "https://mirrors.aliyun.com/pypi/simple/"
