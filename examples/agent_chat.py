@@ -43,6 +43,11 @@ Logger Configuration:
     )
 """
 
+
+import dotenv
+
+dotenv.load_dotenv()
+
 import asyncio
 import os
 import signal
@@ -66,9 +71,6 @@ from vixio.providers.factory import ProviderFactory
 from vixio.utils import get_local_ip
 from vixio.config import get_default_config_path
 
-import dotenv
-
-dotenv.load_dotenv()
 
 # Event to signal shutdown
 _shutdown_event = None
