@@ -38,7 +38,7 @@ Logger Configuration:
     # Option 2: Enable DEBUG only for specific components
     configure_logger(
         level="INFO",  # Global level
-        debug_components=["LatencyMonitor"],  # Only this component outputs DEBUG
+        debug=["LatencyMonitor"],  # Only this component outputs DEBUG
         log_dir="logs"
     )
 """
@@ -124,7 +124,7 @@ async def main():
         help="Path to provider config file (default: config/providers.yaml)"
     )
     parser.add_argument(
-        "--debug-components",
+        "--debug",
         type=str,
         nargs="*",
         default=None,
@@ -133,14 +133,14 @@ async def main():
     args = parser.parse_args()
     
     # Configure logger with debug components if specified
-    if args.debug_components:
+    if args.debug:
         from vixio.utils.logger_config import reset_logger, configure_logger
         reset_logger()
         configure_logger(
             level="INFO",
-            debug_components=args.debug_components
+            debug_components=args.debug
         )
-        logger.info(f"Enabled DEBUG logging for: {', '.join(args.debug_components)}")
+        logger.info(f"Enabled DEBUG logging for: {', '.join(args.debug)}")
     
     logger.info("=== Voice Chat with AI Agent ===")
     logger.info(f"Environment: {args.env}")

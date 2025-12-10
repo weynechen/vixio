@@ -611,13 +611,36 @@ class CompiledDAG:
         async def feed_input():
             try:
                 async for chunk in input_stream:
-                    # CONTROL signals go through ControlBus, not DAG
-                    if chunk.type.value.startswith("control."):
+                    # Handle CONTROL_STATE_RESET: send interrupt + notify client
+                    if chunk.type == ChunkType.CONTROL_STATE_RESET:
                         if self.control_bus:
                             await self.control_bus.send_interrupt(
                                 source=chunk.source or "transport",
                                 reason=chunk.type.value,
                             )
+                        
+                        # Also send CONTROL_TURN_SWITCH to OutputStation
+                        # This notifies client to stop playback (TTS_STOP + STATE_LISTENING)
+                        from vixio.core.chunk import ControlChunk
+                        turn_switch_chunk = ControlChunk(
+                            type=ChunkType.CONTROL_TURN_SWITCH,
+                            command="turn_switch",
+                            params=chunk.params if hasattr(chunk, 'params') else {},
+                            session_id=chunk.session_id,
+                            turn_id=chunk.turn_id,
+                            source="ControlBus",
+                        )
+                        # Send to exit nodes (OutputStation)
+                        for exit_node_name in self._exit_nodes:
+                            exit_node = self.nodes.get(exit_node_name)
+                            if exit_node:
+                                await exit_node.input_queue.put(turn_switch_chunk)
+                        continue
+                    
+                    # Skip other CONTROL signals (CONTROL_HANDSHAKE, etc.)
+                    # They don't need interrupt handling or client notification
+                    if chunk.type.value.startswith("control."):
+                        self.logger.debug(f"Skipping control signal: {chunk.type.value}")
                         continue
 
                     # Feed to entry nodes that accept this chunk

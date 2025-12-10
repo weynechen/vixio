@@ -78,7 +78,7 @@ class SignalHandlerMiddleware(SignalMiddleware):
         Args:
             signal: InterruptSignal from ControlBus
         """
-        self.logger.info(f"Received interrupt from ControlBus: {signal}")
+        self.logger.debug(f"Received interrupt from ControlBus: {signal}")
         
         # Cancel active streaming if enabled
         if self.cancel_streaming and self._streaming_task is not None:
