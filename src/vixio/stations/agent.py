@@ -47,7 +47,7 @@ from vixio.providers.vision import (
     )
     # Note: StreamStation base class automatically provides:
     # - InputValidatorMiddleware (validates ALLOWED_INPUT_TYPES)
-    # - SignalHandlerMiddleware (handles CONTROL_INTERRUPT)
+    # - SignalHandlerMiddleware (handles CONTROL_STATE_RESET)
     # - InterruptDetectorMiddleware (detects turn_id changes)
     # - LatencyMonitorMiddleware (uses LATENCY_METRIC_NAME)
     # - ErrorHandlerMiddleware (error handling)
@@ -129,7 +129,7 @@ class AgentStation(StreamStation):
         """
         Handle interrupt signal.
         
-        Called by SignalHandlerMiddleware when CONTROL_INTERRUPT received.
+        Called by SignalHandlerMiddleware when CONTROL_STATE_RESET received.
         """
         # Close ongoing streaming generator
         if self._streaming_generator is not None:

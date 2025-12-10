@@ -1,7 +1,7 @@
 """
 VisionProcessorStation - Vision frame processing
 
-Input: VIDEO_FRAME, VIDEO_IMAGE
+Input: VIDEO_FRAME, IMAGE
 Output: Processed vision data or extracted features
 """
 

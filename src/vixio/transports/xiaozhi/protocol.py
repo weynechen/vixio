@@ -173,7 +173,7 @@ class XiaozhiProtocol(ProtocolBase):
             action = message.get("action", "")
             if action == XiaozhiControlAction.INTERRUPT:
                 return ControlChunk(
-                    type=ChunkType.CONTROL_INTERRUPT,
+                    type=ChunkType.CONTROL_STATE_RESET,
                     command="interrupt",
                     params={},
                     session_id=session_id,
@@ -213,7 +213,7 @@ class XiaozhiProtocol(ProtocolBase):
         # Abort message → ControlChunk
         elif msg_type == "abort":
             return ControlChunk(
-                type=ChunkType.CONTROL_INTERRUPT,
+                type=ChunkType.CONTROL_STATE_RESET,
                 command="abort",
                 params={"reason": "client_abort"},
                 session_id=session_id,

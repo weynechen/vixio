@@ -2,10 +2,10 @@
 TurnDetectorStation - Detect when user finishes speaking and handle interrupts
 
 Input: EVENT_VAD_END, EVENT_VAD_START, EVENT_BOT_STARTED_SPEAKING
-Output: EVENT_TURN_END (after silence threshold)
+Output: EVENT_USER_STOPPED_SPEAKING (after silence threshold)
 
 Note: Sends interrupt signal to ControlBus when user speaks during bot speaking.
-Session's interrupt handler injects CONTROL_INTERRUPT into pipeline.
+Session's interrupt handler injects CONTROL_STATE_RESET into pipeline.
 """
 
 import asyncio
@@ -21,7 +21,7 @@ class TurnDetectorStation(DetectorStation):
     Turn detector: Detects when user finishes speaking and handles interrupts.
     
     Input: EVENT_VAD_END, EVENT_VAD_START, EVENT_BOT_STARTED_SPEAKING, EVENT_BOT_STOPPED_SPEAKING
-    Output: EVENT_TURN_END (after silence threshold)
+    Output: EVENT_USER_STOPPED_SPEAKING (after silence threshold)
     
     Strategy:
     - Wait inline after VAD_END for silence threshold (using cancellable sleep)
@@ -81,7 +81,7 @@ class TurnDetectorStation(DetectorStation):
         DAG routing rules:
         - Only process chunks matching ALLOWED_INPUT_TYPES (VAD/BOT events)
         - Do NOT passthrough - DAG handles routing to downstream nodes
-        - Output: EVENT_TURN_END
+        - Output: EVENT_USER_STOPPED_SPEAKING
         
         Logic:
         - On EVENT_VAD_START: Check if user interrupted (bot speaking)
@@ -158,7 +158,7 @@ class TurnDetectorStation(DetectorStation):
                     )
                     
                     yield EventChunk(
-                        type=ChunkType.EVENT_TURN_END,
+                        type=ChunkType.EVENT_USER_STOPPED_SPEAKING,
                         event_data={"silence_duration": self.silence_threshold},
                         source=self.name,
                         session_id=chunk.session_id,
@@ -176,7 +176,7 @@ class TurnDetectorStation(DetectorStation):
             return
         
         # Reset on interrupt (from ControlBus via middleware)
-        elif chunk.type == ChunkType.CONTROL_INTERRUPT:
+        elif chunk.type == ChunkType.CONTROL_STATE_RESET:
             self._should_emit_turn_end = False
             self._waiting_session_id = None
             self._bot_is_speaking = False

@@ -106,7 +106,7 @@ class SentenceAggregator:
     )
     # Note: BufferStation base class automatically provides:
     # - InputValidatorMiddleware (validates ALLOWED_INPUT_TYPES)
-    # - SignalHandlerMiddleware (handles CONTROL_INTERRUPT)
+    # - SignalHandlerMiddleware (handles CONTROL_STATE_RESET)
     # - ErrorHandlerMiddleware (error handling)
 )
 class SentenceAggregatorStation(BufferStation):
@@ -172,7 +172,7 @@ class SentenceAggregatorStation(BufferStation):
         - Accumulate TEXT_DELTA chunks and aggregate into sentences
         - On EVENT_AGENT_STOP: Flush remaining buffer as final sentence
         
-        Note: SignalHandlerMiddleware handles CONTROL_INTERRUPT (resets aggregator via _handle_interrupt)
+        Note: SignalHandlerMiddleware handles CONTROL_STATE_RESET (resets aggregator via _handle_interrupt)
         Note: LatencyMonitorMiddleware automatically records first sentence output
         """
         # Handle EVENT_AGENT_STOP signal (flush remaining text, then propagate)

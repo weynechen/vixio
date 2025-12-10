@@ -340,11 +340,11 @@ class OutputStation(Station):
         - Passes type + source to Protocol for message formatting
         
         Queue selection based on ChunkType.is_high_priority():
-        - High priority (CONTROL_INTERRUPT, STATE changes) -> priority_queue (immediate)
+        - High priority (CONTROL_STATE_RESET, STATE changes) -> priority_queue (immediate)
         - Normal (audio, TTS events) -> send_queue (may be delayed by flow control)
         
         Special handling:
-        - CONTROL_ABORT: converted to TTS_STOP + STATE_LISTENING messages
+        - CONTROL_TURN_SWITCH: converted to TTS_STOP + STATE_LISTENING messages
         - AUDIO_RAW: split into frames and encoded
         
         OutputStation is endpoint, doesn't produce new Chunks.
@@ -355,9 +355,9 @@ class OutputStation(Station):
             return
             yield  # Keep as generator
         
-        # Special handling for CONTROL_INTERRUPT: send TTS_STOP + STATE_LISTENING
-        if chunk.type == ChunkType.CONTROL_ABORT:
-            await self._handle_abort(chunk)
+        # Special handling for CONTROL_STATE_RESET: send TTS_STOP + STATE_LISTENING
+        if chunk.type == ChunkType.CONTROL_TURN_SWITCH:
+            await self._handle_turn_switch(chunk)
             return
             yield  # Keep as generator
         
@@ -398,15 +398,15 @@ class OutputStation(Station):
         return
         yield  # Keep as generator
     
-    async def _handle_abort(self, chunk: Chunk) -> None:
+    async def _handle_turn_switch(self, chunk: Chunk) -> None:
         """
-        Handle CONTROL_ABORT: send TTS_STOP and STATE_LISTENING messages.
+        Handle CONTROL_TURN_SWITCH: send TTS_STOP and STATE_LISTENING messages.
         
         This converts the semantic interrupt signal into protocol-specific messages.
         Both messages are sent via priority_queue for immediate delivery.
         
         Args:
-            chunk: CONTROL_ABORT chunk
+            chunk: CONTROL_TURN_SWITCH chunk
         """
         # 1. Send TTS_STOP to stop client playback
         tts_stop_msg = self.protocol.send_tts_event(self._session_id, "stop")

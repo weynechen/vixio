@@ -93,7 +93,7 @@ async def main():
     DAG data flow:
     1. Client sends audio via WebSocket (transport_in)
     2. VAD detects voice activity -> outputs AUDIO + VAD events
-    3. TurnDetector waits for silence -> outputs EVENT_TURN_END
+    3. TurnDetector waits for silence -> outputs EVENT_USER_STOPPED_SPEAKING
     4. ASR transcribes to text -> outputs TEXT_DELTA + EVENT_TEXT_COMPLETE
     5. TextAggregator collects deltas -> outputs TEXT
     6. Agent processes text -> outputs TEXT_DELTA (streaming)

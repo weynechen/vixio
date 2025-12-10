@@ -498,7 +498,7 @@ class TestCompiledDAGExecution:
 
         async def input_stream():
             yield TextChunk(data="text", turn_id=1)
-            yield Chunk(type=ChunkType.CONTROL_INTERRUPT, turn_id=1)
+            yield Chunk(type=ChunkType.CONTROL_STATE_RESET, turn_id=1)
             yield TextChunk(data="text2", turn_id=2)
 
         outputs = []

@@ -21,7 +21,7 @@ from vixio.core.middleware import with_middlewares
 @with_middlewares(
     # Note: BufferStation base class automatically provides:
     # - InputValidatorMiddleware (validates ALLOWED_INPUT_TYPES)
-    # - SignalHandlerMiddleware (handles CONTROL_INTERRUPT)
+    # - SignalHandlerMiddleware (handles CONTROL_STATE_RESET)
     # - ErrorHandlerMiddleware (error handling)
 )
 class TextAggregatorStation(BufferStation):
@@ -88,7 +88,7 @@ class TextAggregatorStation(BufferStation):
         - Accumulate TEXT_DELTA chunks into buffer
         - On EVENT_TEXT_COMPLETE: Emit complete TEXT chunk, clear buffer
         
-        Note: SignalHandlerMiddleware handles CONTROL_INTERRUPT (clears buffer via _handle_interrupt)
+        Note: SignalHandlerMiddleware handles CONTROL_STATE_RESET (clears buffer via _handle_interrupt)
         """
         # Handle EVENT_TEXT_COMPLETE signal (emit aggregated text)
         if chunk.type == ChunkType.EVENT_TEXT_COMPLETE:

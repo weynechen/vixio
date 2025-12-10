@@ -145,7 +145,7 @@ class SignalMiddleware(Middleware):
     Subclasses implement process_signal() for signal-specific logic.
     
     Use cases:
-    - Signal routing (handle CONTROL_INTERRUPT)
+    - Signal routing (handle CONTROL_STATE_RESET)
     - Multi-signal handling (route different signal types)
     - Signal logging/monitoring
     """

@@ -252,7 +252,7 @@ class SessionManager:
         
         Flow:
         1. Get input stream from InputStation
-        2. Wrap input stream to detect CONTROL_INTERRUPT chunks
+        2. Wrap input stream to detect CONTROL_STATE_RESET chunks
         3. Run DAG (chunks flow through nodes to OutputStation)
         
         Args:
@@ -274,7 +274,7 @@ class SessionManager:
             # Get ControlBus for this connection
             control_bus = self._control_buses.get(connection_id)
             
-            # Wrap input stream to detect CONTROL_INTERRUPT
+            # Wrap input stream to detect CONTROL_STATE_RESET
             input_stream = self._wrap_input_stream(raw_input_stream, control_bus, connection_id)
             
             # Run DAG (OutputStation is part of DAG, handles output)
@@ -305,7 +305,7 @@ class SessionManager:
         connection_id: str
     ) -> AsyncIterator[Chunk]:
         """
-        Wrap input stream to detect CONTROL_INTERRUPT chunks and send to ControlBus.
+        Wrap input stream to detect CONTROL_STATE_RESET chunks and send to ControlBus.
         
         This allows client-initiated interrupts (abort) to trigger the interrupt mechanism.
         
@@ -315,11 +315,11 @@ class SessionManager:
             connection_id: Connection identifier
             
         Yields:
-            Chunks from input stream (CONTROL_INTERRUPT chunks still passed through)
+            Chunks from input stream (CONTROL_STATE_RESET chunks still passed through)
         """
         async for chunk in input_stream:
-            # Detect CONTROL_INTERRUPT chunk and send to ControlBus
-            if chunk.type == ChunkType.CONTROL_INTERRUPT and control_bus:
+            # Detect CONTROL_STATE_RESET chunk and send to ControlBus
+            if chunk.type == ChunkType.CONTROL_STATE_RESET and control_bus:
                 self.logger.info(
                     f"[{connection_id[:8]}] Client interrupt detected, sending to ControlBus"
                 )

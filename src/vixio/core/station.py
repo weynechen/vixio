@@ -136,7 +136,7 @@ class Station(ABC):
         For signal chunks:
         - Must yield the signal to pass it through (yield chunk)
         - Can update internal state
-        - Can optionally yield additional chunks (e.g., ASR yields TEXT on EVENT_TURN_END)
+        - Can optionally yield additional chunks (e.g., ASR yields TEXT on EVENT_USER_STOPPED_SPEAKING)
         
         Args:
             chunk: Input chunk (data or signal)
@@ -169,7 +169,7 @@ class Station(ABC):
             class ASRStation(StreamStation):
                 def _setup_handlers(self):
                     self.register_handler(ChunkType.AUDIO_RAW, self._handle_audio)
-                    self.register_handler(ChunkType.EVENT_TURN_END, self._handle_turn_end)
+                    self.register_handler(ChunkType.EVENT_USER_STOPPED_SPEAKING, self._handle_turn_end)
                 
                 async def process_chunk(self, chunk):
                     # Clean: delegate to registered handlers
@@ -220,7 +220,7 @@ class StreamStation(Station):
     
     Default middlewares (auto-applied via decorator):
     - InputValidatorMiddleware: Validate input types (subclass specifies allowed_types)
-    - SignalHandlerMiddleware: Handle CONTROL_INTERRUPT
+    - SignalHandlerMiddleware: Handle CONTROL_STATE_RESET
     - InterruptDetectorMiddleware: Detect turn_id changes
     - LatencyMonitorMiddleware: Monitor first output latency
     - ErrorHandlerMiddleware: Error handling
@@ -274,7 +274,7 @@ class BufferStation(Station):
     
     Default middlewares (auto-applied via decorator):
     - InputValidatorMiddleware: Validate input types (subclass specifies allowed_types)
-    - SignalHandlerMiddleware: Handle CONTROL_INTERRUPT (clear buffer)
+    - SignalHandlerMiddleware: Handle CONTROL_STATE_RESET (clear buffer)
     - ErrorHandlerMiddleware: Error handling
     
     Subclasses should define:
@@ -308,7 +308,7 @@ class DetectorStation(Station):
     
     Default middlewares (auto-applied via decorator):
     - InputValidatorMiddleware: Validate input types (subclass specifies allowed_types)
-    - SignalHandlerMiddleware: Handle CONTROL_INTERRUPT
+    - SignalHandlerMiddleware: Handle CONTROL_STATE_RESET
     - ErrorHandlerMiddleware: Error handling
     
     Subclasses should define:

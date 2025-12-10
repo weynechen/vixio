@@ -22,7 +22,7 @@ from vixio.providers.tts import TTSProvider
 
 
 @with_middlewares(
-    # Handle multiple signals (CONTROL_INTERRUPT, EVENT_AGENT_STOP)
+    # Handle multiple signals (CONTROL_STATE_RESET, EVENT_AGENT_STOP)
     MultiSignalHandlerMiddleware(
         signal_handlers={},  # Will be configured in _configure_middlewares_hook
         passthrough_signals=False  # DAG handles routing, no passthrough
@@ -35,7 +35,7 @@ from vixio.providers.tts import TTSProvider
         passthrough_on_invalid=False  # DAG handles routing
     )
     # Note: StreamStation base class automatically provides:
-    # - SignalHandlerMiddleware (handles CONTROL_INTERRUPT)
+    # - SignalHandlerMiddleware (handles CONTROL_STATE_RESET)
     # - InterruptDetectorMiddleware (detects turn_id changes)
     # - LatencyMonitorMiddleware (uses LATENCY_METRIC_NAME)
     # - ErrorHandlerMiddleware (error handling)
@@ -81,16 +81,16 @@ class TTSStation(StreamStation):
             if middleware.__class__.__name__ == 'MultiSignalHandlerMiddleware':
                 # Configure signal handlers
                 middleware.signal_handlers = {
-                    ChunkType.CONTROL_INTERRUPT: self._handle_interrupt,
+                    ChunkType.CONTROL_STATE_RESET: self._handle_interrupt,
                     ChunkType.EVENT_AGENT_STOP: self._handle_agent_stop
                 }
     
     async def _handle_interrupt(self, chunk: Chunk) -> AsyncIterator[Chunk]:
         """
-        Handle CONTROL_INTERRUPT signal.
+        Handle CONTROL_STATE_RESET signal.
         
         Cancel TTS synthesis and reset state.
-        Note: TTS_STOP is NOT emitted here - OutputStation handles client notification via CONTROL_ABORT.
+        Note: TTS_STOP is NOT emitted here - OutputStation handles client notification via CONTROL_TURN_SWITCH.
         """
         if self._is_speaking:
             self.tts.cancel()

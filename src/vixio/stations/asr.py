@@ -1,7 +1,7 @@
 """
 ASRStation - Speech to Text
 
-Input: AUDIO_RAW (collect), EVENT_TURN_END (trigger)
+Input: AUDIO_RAW (collect), EVENT_USER_STOPPED_SPEAKING (trigger)
 Output: TEXT_DELTA (transcription result, source="asr")
 
 Note: Outputs TEXT_DELTA for consistency with streaming scenarios.
@@ -20,7 +20,7 @@ from vixio.providers.asr import ASRProvider
 @with_middlewares(
     # Note: StreamStation base class automatically provides:
     # - InputValidatorMiddleware (validates ALLOWED_INPUT_TYPES)
-    # - SignalHandlerMiddleware (handles CONTROL_INTERRUPT)
+    # - SignalHandlerMiddleware (handles CONTROL_STATE_RESET)
     # - InterruptDetectorMiddleware (detects turn_id changes)
     # - LatencyMonitorMiddleware (uses LATENCY_METRIC_NAME)
     # - ErrorHandlerMiddleware (error handling)
@@ -29,7 +29,7 @@ class ASRStation(StreamStation):
     """
     ASR workstation: Transcribes audio to text.
     
-    Input: AUDIO_RAW (collect), EVENT_TURN_END (trigger)
+    Input: AUDIO_RAW (collect), EVENT_USER_STOPPED_SPEAKING (trigger)
     Output: TEXT_DELTA (transcription result, source="asr")
     
     Note: Outputs TEXT_DELTA to maintain consistency with streaming ASR.
@@ -42,7 +42,7 @@ class ASRStation(StreamStation):
     """
     ASR workstation: Transcribes audio to text.
     
-    Input: AUDIO_RAW (collect), EVENT_TURN_END (trigger)
+    Input: AUDIO_RAW (collect), EVENT_USER_STOPPED_SPEAKING (trigger)
     Output: TEXT_DELTA (transcription result, source="asr")
     
     Note: Outputs TEXT_DELTA to maintain consistency with streaming ASR.
@@ -79,7 +79,7 @@ class ASRStation(StreamStation):
         """
         Handle interrupt signal.
         
-        Called by SignalHandlerMiddleware when CONTROL_INTERRUPT received.
+        Called by SignalHandlerMiddleware when CONTROL_STATE_RESET received.
         """
         # Clear audio buffer
         if self._audio_buffer:
@@ -117,12 +117,12 @@ class ASRStation(StreamStation):
         
         Core logic:
         - Collect AUDIO_RAW chunks into buffer
-        - On EVENT_TURN_END: Transcribe buffered audio, yield TEXT_DELTA, clear buffer
+        - On EVENT_USER_STOPPED_SPEAKING: Transcribe buffered audio, yield TEXT_DELTA, clear buffer
         
-        Note: SignalHandlerMiddleware handles CONTROL_INTERRUPT (clears buffer via _handle_interrupt)
+        Note: SignalHandlerMiddleware handles CONTROL_STATE_RESET (clears buffer via _handle_interrupt)
         """
-        # Handle EVENT_TURN_END signal (trigger transcription)
-        if chunk.type == ChunkType.EVENT_TURN_END:
+        # Handle EVENT_USER_STOPPED_SPEAKING signal (trigger transcription)
+        if chunk.type == ChunkType.EVENT_USER_STOPPED_SPEAKING:
             # Transcribe buffered audio
             if self._audio_buffer:
                 self.logger.info(f"Transcribing {len(self._audio_buffer)} audio chunks...")
@@ -162,7 +162,7 @@ class ASRStation(StreamStation):
                 # Clear buffer
                 self._audio_buffer.clear()
             else:
-                self.logger.warning("EVENT_TURN_END received but no audio in buffer")
+                self.logger.warning("EVENT_USER_STOPPED_SPEAKING received but no audio in buffer")
             
             return
         

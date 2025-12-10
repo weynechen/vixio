@@ -4,7 +4,7 @@ Signal Handler Middleware
 Handles interrupt signals via ControlBus subscription (DAG architecture).
 
 DAG Signal Handling:
-- CONTROL signals (CONTROL_INTERRUPT) come from ControlBus, not data stream
+- CONTROL signals (CONTROL_STATE_RESET) come from ControlBus, not data stream
 - EVENT signals come from DAG data stream
 - This middleware subscribes to ControlBus when attached to a Station
 """
@@ -24,12 +24,12 @@ class SignalHandlerMiddleware(SignalMiddleware):
     Handles interrupt signals via ControlBus subscription.
     
     DAG architecture:
-    - CONTROL signals (CONTROL_INTERRUPT) come from ControlBus
+    - CONTROL signals (CONTROL_STATE_RESET) come from ControlBus
     - This middleware subscribes to ControlBus via register_interrupt_handler()
     - EVENT signals still flow through DAG data stream
     
     Triggers side effects like:
-    - Resetting state on CONTROL_INTERRUPT
+    - Resetting state on CONTROL_STATE_RESET
     - Closing streaming tasks
     - Cleaning up resources
     """
@@ -103,7 +103,7 @@ class SignalHandlerMiddleware(SignalMiddleware):
         Process signal chunk.
         
         DAG architecture:
-        - CONTROL_INTERRUPT signals now come from ControlBus, not data stream
+        - CONTROL_STATE_RESET signals now come from ControlBus, not data stream
         - This method handles EVENT signals that flow through DAG
         
         Args:
@@ -113,10 +113,10 @@ class SignalHandlerMiddleware(SignalMiddleware):
         Yields:
             Signal chunk and any additional chunks from core logic
         """
-        # CONTROL_INTERRUPT is now handled via ControlBus subscription
+        # CONTROL_STATE_RESET is now handled via ControlBus subscription
         # But still support legacy data stream path for backward compatibility
-        if chunk.type == ChunkType.CONTROL_INTERRUPT:
-            self.logger.debug("CONTROL_INTERRUPT received via data stream (legacy path)")
+        if chunk.type == ChunkType.CONTROL_STATE_RESET:
+            self.logger.debug("CONTROL_STATE_RESET received via data stream (legacy path)")
             
             # Cancel active streaming if enabled
             if self.cancel_streaming and self._streaming_task is not None:

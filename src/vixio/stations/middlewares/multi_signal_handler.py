@@ -25,7 +25,7 @@ class MultiSignalHandlerMiddleware(SignalMiddleware):
     
     Data chunks are passed through unchanged.
     
-    More flexible than SignalHandlerMiddleware which only handles CONTROL_INTERRUPT.
+    More flexible than SignalHandlerMiddleware which only handles CONTROL_STATE_RESET.
     Supports both simple callbacks and generators that yield chunks.
     
     Useful for stations that need to:

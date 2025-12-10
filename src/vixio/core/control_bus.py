@@ -50,7 +50,7 @@ class ControlBus:
     - No "lazy increment" or "ready to start" states needed
     
     DAG Signal Handling:
-    - CONTROL signals (CONTROL_INTERRUPT) go through ControlBus
+    - CONTROL signals (CONTROL_STATE_RESET) go through ControlBus
     - EVENT signals go through DAG data flow
     - Components can register interrupt handlers via register_interrupt_handler()
     

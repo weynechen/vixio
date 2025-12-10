@@ -20,7 +20,7 @@ from vixio.providers.vad import VADProvider, VADEvent
 @with_middlewares(
     # Note: DetectorStation base class automatically provides:
     # - InputValidatorMiddleware (validates ALLOWED_INPUT_TYPES)
-    # - SignalHandlerMiddleware (handles CONTROL_INTERRUPT)
+    # - SignalHandlerMiddleware (handles CONTROL_STATE_RESET)
     # - ErrorHandlerMiddleware (error handling)
 )
 class VADStation(DetectorStation):
@@ -64,7 +64,7 @@ class VADStation(DetectorStation):
         """
         Handle interrupt signal.
         
-        Called by SignalHandlerMiddleware when CONTROL_INTERRUPT received.
+        Called by SignalHandlerMiddleware when CONTROL_STATE_RESET received.
         """
         # Reset VAD state on interrupt
         if self._is_speaking:
@@ -101,7 +101,7 @@ class VADStation(DetectorStation):
         - Emit EVENT_VAD_START/END on state change
         - Output audio for downstream processing
         
-        Note: SignalHandlerMiddleware handles CONTROL_INTERRUPT (resets VAD via _handle_interrupt)
+        Note: SignalHandlerMiddleware handles CONTROL_STATE_RESET (resets VAD via _handle_interrupt)
         """
         # Only process audio data (PCM)
         if chunk.type != ChunkType.AUDIO_RAW:

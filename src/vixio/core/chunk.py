@@ -16,23 +16,24 @@ class ChunkType(str, Enum):
     """Chunk types - divided into Data (core content) and Signals (messages)"""
     
     # ============ Data Chunks (Core content - to be processed/transformed) ============
-    # Audio data - raw material for ASR
+    # Audio data
     AUDIO_RAW = "audio.raw"           # PCM audio (16-bit signed, little-endian)
     
-    # Text data - raw material for Agent, output from ASR
-    TEXT = "text"                      # Complete text (ASR result, Agent input)
-    TEXT_DELTA = "text.delta"         # Streaming text fragment (Agent output)
+    # Text data
+    TEXT = "text"                      # Complete text (e.g. ASR result, Agent input)
+    TEXT_DELTA = "text.delta"         # Streaming text fragment (e.g. Agent output)
     
-    # Vision data - raw material for vision models
-    VIDEO_FRAME = "vision.frame"       # Vision frame
-    VIDEO_IMAGE = "vision.image"       # Static image
+    # Vision data
+    VIDEO_FRAME = "video.frame"      # Video frame
+    IMAGE = "image"       # single image
     
     # ============ Signal Chunks (Messages - passthrough + trigger state change) ============
     
     # --- Control Signals (from client, change pipeline behavior) ---
     CONTROL_HANDSHAKE = "control.handshake" # Handshake with client
-    CONTROL_INTERRUPT = "control.interrupt" # Interrupt bot (stop TTS, start listening) , reset all station
-    CONTROL_ABORT = "control.abort_current_turn"         # Abort current turn , immediately send to client
+    CONTROL_STATE_RESET = "control.state_reset" # Interrupt bot (stop TTS, start listening) , reset all station
+    CONTROL_TURN_SWITCH = "control.turn_switch" # Abort current turn , immediately send to client, start a new turn
+    CONTROL_TERMINATE = "control.terminate"   # stop tts and terminate the session
     
     # --- Event Signals (internal state notifications) ---
     # VAD events (from VAD station)
@@ -41,8 +42,7 @@ class ChunkType(str, Enum):
     
     # Turn events (from TurnDetector station)
     EVENT_USER_STARTED_SPEAKING = "event.user.speaking.start"
-    EVENT_USER_STOPPED_SPEAKING = "event.user.speaking.stop"
-    EVENT_TURN_END = "event.turn.end"      # User turn complete, ready for ASR
+    EVENT_USER_STOPPED_SPEAKING = "event.user.speaking.stop"  # User turn complete, ready for e.g.ASR
     
     # Text events (from ASR/input sources)
     EVENT_TEXT_COMPLETE = "event.text.complete"  # Text input complete, ready for aggregation
@@ -92,8 +92,8 @@ class ChunkType(str, Enum):
 HIGH_PRIORITY_TYPES = {
     # Control signals - always high priority
     ChunkType.CONTROL_HANDSHAKE,
-    ChunkType.CONTROL_INTERRUPT,
-    ChunkType.CONTROL_ABORT,
+    ChunkType.CONTROL_STATE_RESET,
+    ChunkType.CONTROL_TURN_SWITCH,
     
     # State events - client needs immediate feedback
     ChunkType.EVENT_STATE_LISTENING,
@@ -269,14 +269,14 @@ class ControlChunk(Chunk):
     Control chunk - control signals from client.
     
     Examples:
-    - CONTROL_ABORT: Abort current turn, immediately send to client
+    - CONTROL_TURN_SWITCH: Abort current turn, immediately send to client
     
     Attributes:
         command: str - Command name (optional, can use type instead)
         params: Dict - Command parameters
         data: Optional - Additional control data
     """
-    type: ChunkType = ChunkType.CONTROL_ABORT
+    type: ChunkType = ChunkType.CONTROL_TURN_SWITCH
     command: str = ""
     params: Dict[str, Any] = field(default_factory=dict)
     
@@ -295,7 +295,7 @@ class EventChunk(Chunk):
     Examples:
     - EVENT_VAD_START/END: Voice activity events
     - EVENT_USER_STARTED_SPEAKING/STOPPED_SPEAKING: User turn events
-    - EVENT_TURN_END: Turn complete
+    - EVENT_USER_STOPPED_SPEAKING: Turn complete
     - EVENT_TTS_START/STOP: TTS generation events
     - EVENT_STATE_*: State change events
     - EVENT_ERROR: Error occurred
