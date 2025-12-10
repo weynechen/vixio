@@ -21,7 +21,7 @@ Vision Support:
 
 import asyncio
 from typing import AsyncIterator, Optional, List
-from vixio.core.station import StreamStation, StationRole
+from vixio.core.station import StreamStation
 from vixio.core.chunk import Chunk, ChunkType, TextDeltaChunk, is_text_chunk
 from vixio.core.middleware import with_middlewares
 from vixio.stations.middlewares import (
@@ -62,9 +62,6 @@ class AgentStation(StreamStation):
     
     Note: All TEXT_DELTA output has source="agent" to distinguish from ASR output.
     """
-    
-    # Station role
-    ROLE = StationRole.STREAM
     
     # StreamStation configuration
     ALLOWED_INPUT_TYPES = [ChunkType.TEXT]

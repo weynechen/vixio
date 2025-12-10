@@ -14,7 +14,7 @@ Refactored with middleware pattern for clean separation of concerns.
 """
 
 from typing import AsyncIterator
-from vixio.core.station import BufferStation, StationRole
+from vixio.core.station import BufferStation
 from vixio.core.chunk import Chunk, ChunkType, TextChunk, EventChunk
 from vixio.core.middleware import with_middlewares
 
@@ -40,9 +40,6 @@ class TextAggregatorStation(BufferStation):
     1. Accumulate TEXT_DELTA chunks into buffer
     2. On completion signal: Emit complete text as TEXT + completion
     """
-    
-    # Station role
-    ROLE = StationRole.BUFFER
     
     # BufferStation configuration
     ALLOWED_INPUT_TYPES = [ChunkType.TEXT_DELTA]

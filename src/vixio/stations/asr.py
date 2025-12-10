@@ -15,7 +15,7 @@ Refactored with middleware pattern for clean separation of concerns.
 """
 
 from typing import AsyncIterator, List
-from vixio.core.station import BufferStation, StationRole
+from vixio.core.station import BufferStation
 from vixio.core.chunk import Chunk, ChunkType, TextDeltaChunk, EventChunk, is_audio_chunk
 from vixio.core.middleware import with_middlewares
 from vixio.providers.asr import ASRProvider
@@ -41,9 +41,6 @@ class ASRStation(BufferStation):
     Note: Outputs TEXT_DELTA to maintain consistency with streaming ASR.
     Use TextAggregatorStation to aggregate before Agent.
     """
-    
-    # Station role
-    ROLE = StationRole.BUFFER
     
     # BufferStation configuration
     ALLOWED_INPUT_TYPES = [ChunkType.AUDIO_RAW]

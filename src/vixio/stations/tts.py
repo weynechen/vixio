@@ -15,7 +15,7 @@ Refactored with middleware pattern for clean separation of concerns.
 """
 
 from typing import AsyncIterator
-from vixio.core.station import StreamStation, StationRole
+from vixio.core.station import StreamStation
 from vixio.core.chunk import Chunk, ChunkType, AudioChunk, EventChunk
 from vixio.core.middleware import with_middlewares
 from vixio.stations.middlewares import (
@@ -53,9 +53,6 @@ class TTSStation(StreamStation):
     Use SentenceAggregatorStation to convert TEXT_DELTA to TEXT.
     """
     
-    # Station role
-    ROLE = StationRole.STREAM
-    
     # StreamStation configuration
     ALLOWED_INPUT_TYPES = [ChunkType.TEXT]
     LATENCY_METRIC_NAME = "tts_first_audio_ready"
@@ -65,7 +62,7 @@ class TTSStation(StreamStation):
     EMITS_COMPLETION = True
     AWAITS_COMPLETION = True
     
-    def __init__(self, tts_provider: TTSProvider, name: str = "tts"):  # Lowercase for consistent source tracking
+    def __init__(self, tts_provider: TTSProvider, name: str = "tts"): 
         """
         Initialize TTS station.
         
@@ -192,7 +189,7 @@ class TTSStation(StreamStation):
             )
             self._is_speaking = True
         
-        # Emit SENTENCE_START event (for client display)
+        # Emit SENTENCE_START event (for client sync)
         yield EventChunk(
             type=ChunkType.EVENT_TTS_SENTENCE_START,
             event_data={"text": text},

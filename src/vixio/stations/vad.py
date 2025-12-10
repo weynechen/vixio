@@ -19,7 +19,7 @@ Refactored with middleware pattern for clean separation of concerns.
 """
 
 from typing import AsyncIterator
-from vixio.core.station import DetectorStation, StationRole
+from vixio.core.station import DetectorStation
 from vixio.core.chunk import Chunk, ChunkType, EventChunk, is_audio_chunk
 from vixio.core.middleware import with_middlewares
 from vixio.providers.vad import VADProvider, VADEvent
@@ -45,9 +45,6 @@ class VADStation(DetectorStation):
     Note: Expects PCM audio data. Transport layers handle format conversion.
     Turn management is handled by TTS/TurnDetector stations (increment on completion/interrupt).
     """
-    
-    # Station role
-    ROLE = StationRole.DETECTOR
     
     # DetectorStation configuration
     ALLOWED_INPUT_TYPES = [ChunkType.AUDIO_RAW]

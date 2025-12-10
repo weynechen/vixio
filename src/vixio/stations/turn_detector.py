@@ -15,7 +15,7 @@ Completion Contract:
 import asyncio
 import time
 from typing import AsyncIterator, Optional
-from vixio.core.station import DetectorStation, StationRole
+from vixio.core.station import DetectorStation
 from vixio.core.chunk import Chunk, ChunkType, EventChunk, ControlChunk
 from vixio.utils import get_latency_monitor
 
@@ -48,9 +48,6 @@ class TurnDetectorStation(DetectorStation):
     async timers, and conditional branching. It inherits DetectorStation for classification
     but implements its own process_chunk without middleware decoration.
     """
-    
-    # Station role
-    ROLE = StationRole.DETECTOR
     
     # DetectorStation configuration
     # TurnDetector processes VAD/BOT events, not audio data

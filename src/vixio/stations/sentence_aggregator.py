@@ -13,7 +13,7 @@ Refactored with middleware pattern for clean separation of concerns.
 
 import re
 from typing import AsyncIterator, List
-from vixio.core.station import BufferStation, StationRole
+from vixio.core.station import BufferStation
 from vixio.core.chunk import Chunk, ChunkType, TextChunk, EventChunk
 from vixio.core.middleware import with_middlewares
 from vixio.stations.middlewares import LatencyMonitorMiddleware
@@ -127,9 +127,6 @@ class SentenceAggregatorStation(BufferStation):
     This station is useful for feeding complete sentences to TTS
     instead of waiting for the entire response.
     """
-    
-    # Station role
-    ROLE = StationRole.BUFFER
     
     # BufferStation configuration
     ALLOWED_INPUT_TYPES = [ChunkType.TEXT_DELTA]
