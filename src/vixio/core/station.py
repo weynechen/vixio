@@ -15,7 +15,7 @@ Completion Contract:
 from abc import ABC, abstractmethod
 from enum import Enum
 from typing import AsyncIterator, List, Optional, TYPE_CHECKING
-from vixio.core.chunk import Chunk, ChunkType, CompletionChunk, CompletionSignal
+from vixio.core.chunk import Chunk, ChunkType, EventChunk, is_completion_event
 from loguru import logger
 
 if TYPE_CHECKING:
@@ -92,7 +92,7 @@ class Station(ABC):
         - Process chunks from current turn normally
         
         Completion handling:
-        - If chunk is CompletionChunk and this station AWAITS_COMPLETION,
+        - If chunk is EVENT_STREAM_COMPLETE and this station AWAITS_COMPLETION,
           call on_completion() instead of process_chunk()
         
         This method should NOT be overridden by subclasses.
@@ -103,8 +103,6 @@ class Station(ABC):
         Yields:
             Processed chunks
         """
-        from vixio.core.chunk import is_completion_chunk
-        
         async for chunk in input_stream:
             # Check turn ID
             if chunk.turn_id < self.current_turn_id:
@@ -118,10 +116,10 @@ class Station(ABC):
                 self.current_turn_id = chunk.turn_id
                 await self.reset_state()
             
-            # Handle CompletionChunk specially
-            if is_completion_chunk(chunk) and self.AWAITS_COMPLETION:
+            # Handle completion event specially (consumed, not passthrough)
+            if is_completion_event(chunk) and self.AWAITS_COMPLETION:
                 try:
-                    self.logger.debug(f"[{self.name}] Processing completion signal from {chunk.from_station}")
+                    self.logger.debug(f"[{self.name}] Processing completion event from {chunk.source}")
                     async for output_chunk in self.on_completion(chunk):
                         # Propagate turn ID
                         output_chunk.turn_id = self.current_turn_id
@@ -130,7 +128,7 @@ class Station(ABC):
                 except Exception as e:
                     chunk_str = str(chunk).replace('{', '{{').replace('}', '}}')
                     self.logger.error(f"[{self.name}] Error in on_completion {chunk_str}: {e}", exc_info=True)
-                continue  # Don't call process_chunk for CompletionChunk
+                continue  # Consume completion event, don't passthrough
             
             # Process chunk normally
             try:
@@ -155,17 +153,17 @@ class Station(ABC):
         """
         self.logger.debug(f"[{self.name}] State reset for turn {self.current_turn_id}")
     
-    async def on_completion(self, signal: CompletionChunk) -> AsyncIterator[Chunk]:
+    async def on_completion(self, event: EventChunk) -> AsyncIterator[Chunk]:
         """
-        Handle completion signal from upstream station.
+        Handle completion event from upstream station.
         
-        Called by DAG when upstream station emits completion signal.
+        Called when upstream station emits EVENT_STREAM_COMPLETE.
         Only called if this station has AWAITS_COMPLETION = True.
         
         Default behavior: do nothing (subclasses override for buffer flush, etc.)
         
         Args:
-            signal: CompletionChunk from upstream
+            event: EventChunk with type=EVENT_STREAM_COMPLETE from upstream
             
         Yields:
             Output chunks (e.g., aggregated text from buffer)
@@ -174,7 +172,7 @@ class Station(ABC):
             class TextAggregatorStation(BufferStation):
                 AWAITS_COMPLETION = True
                 
-                async def on_completion(self, signal):
+                async def on_completion(self, event):
                     if self._buffer:
                         yield TextChunk(data=self._buffer)
                         self._buffer = ""
@@ -183,9 +181,9 @@ class Station(ABC):
         return
         yield  # Make this a generator
     
-    def emit_completion(self, session_id: Optional[str] = None, turn_id: int = 0) -> CompletionChunk:
+    def emit_completion(self, session_id: Optional[str] = None, turn_id: int = 0) -> EventChunk:
         """
-        Create a completion signal chunk.
+        Create a completion event.
         
         Helper method for stations that emit completion signals.
         Only meaningful if EMITS_COMPLETION = True.
@@ -195,11 +193,10 @@ class Station(ABC):
             turn_id: Turn ID
             
         Returns:
-            CompletionChunk ready to yield
+            EventChunk with type=EVENT_STREAM_COMPLETE
         """
-        return CompletionChunk(
-            signal=CompletionSignal.COMPLETE,
-            from_station=self.name,
+        return EventChunk(
+            type=ChunkType.EVENT_STREAM_COMPLETE,
             source=self.name,
             session_id=session_id or self._session_id,
             turn_id=turn_id
@@ -278,7 +275,7 @@ class Station(ABC):
             class ASRStation(StreamStation):
                 def _setup_handlers(self):
                     self.register_handler(ChunkType.AUDIO_RAW, self._handle_audio)
-                    self.register_handler(CompletionSignal.COMPLETE, self._handle_turn_end)
+                    self.register_handler(ChunkType.EVENT_STREAM_COMPLETE, self._handle_turn_end)
                 
                 async def process_chunk(self, chunk):
                     # Clean: delegate to registered handlers

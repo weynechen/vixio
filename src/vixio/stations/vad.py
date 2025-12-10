@@ -9,7 +9,7 @@ Completion Contract:
 - EMITS_COMPLETION: False (emits state events, not completion signals)
 
 Note: VAD emits state events (VAD_START/END) which TurnDetector uses
-for its state machine. TurnDetector then emits CompletionSignal when
+for its state machine. TurnDetector then emits EVENT_STREAM_COMPLETE when
 the turn is determined to be complete.
 
 Note: This station expects PCM audio data. Transport layers are responsible

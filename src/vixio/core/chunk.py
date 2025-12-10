@@ -4,8 +4,10 @@ Chunk data structures - carriers for both data and signals in the pipeline
 Design principle:
 - Data chunks (AUDIO/TEXT/VIDEO): Core content to be transformed by stations
 - Control signals (CONTROL_*): Global commands via ControlBus, all stations respond
-- Completion signals: Local signals between adjacent stations, auto-bound by DAG
-- Client events (EVENT_*): Notifications for client UI sync (via OutputStation)
+- Event signals (EVENT_*): State notifications and completion signals
+  - Broadcast events (VAD_*, BOT_*): Transparent passthrough
+  - Completion events (STREAM_COMPLETE): Consumed by downstream, triggers on_completion
+  - Client events (TTS_*, STATE_*): Sent to client via OutputStation
 """
 
 from dataclasses import dataclass, field
@@ -21,10 +23,12 @@ class ChunkType(str, Enum):
     Design:
     - Data types: Core content transformed by stations
     - Control signals: Global commands via ControlBus
-    - Client events: Notifications sent to client for UI sync
+    - Event signals: State notifications and completion signals
     
-    Note: Internal completion signals (between stations) are handled separately
-    via CompletionSignal, not in ChunkType. This keeps ChunkType stable.
+    Event signal behavior:
+    - Broadcast events (VAD_*, BOT_*): Passthrough to all downstream
+    - Completion events (STREAM_COMPLETE): Consumed by stations with AWAITS_COMPLETION=True
+    - Client events (TTS_*, STATE_*): Sent to client via OutputStation
     """
     
     # ============ Data Chunks (Core content - to be processed/transformed) ============
@@ -46,7 +50,7 @@ class ChunkType(str, Enum):
     CONTROL_TURN_SWITCH = "control.turn_switch"  # Abort current turn, start new turn
     CONTROL_TERMINATE = "control.terminate"      # Stop TTS and terminate session
     
-    # ============ Internal State Events (for state machine stations) ============
+    # ============ Broadcast Events (passthrough to all downstream) ============
     # VAD events - for TurnDetector state machine
     EVENT_VAD_START = "event.vad.start"    # Voice detected
     EVENT_VAD_END = "event.vad.end"        # Voice ended
@@ -55,7 +59,10 @@ class ChunkType(str, Enum):
     EVENT_BOT_STARTED_SPEAKING = "event.bot.speaking.start"
     EVENT_BOT_STOPPED_SPEAKING = "event.bot.speaking.stop"
     
-    # ============ Client Events (for OutputStation -> Client) ============
+    # ============ Completion Event (consumed by downstream, triggers on_completion) ============
+    EVENT_STREAM_COMPLETE = "event.stream.complete"  # Upstream finished, trigger downstream flush
+    
+    # ============ Client Events (for OutputStation -> Client display) ============
     # State events - notify client of state changes
     EVENT_STATE_IDLE = "event.state.idle"
     EVENT_STATE_LISTENING = "event.state.listening"
@@ -86,23 +93,14 @@ class ChunkType(str, Enum):
             True if this is a high priority chunk type
         """
         return self in HIGH_PRIORITY_TYPES
-
-
-class CompletionSignal(str, Enum):
-    """
-    Completion signals - local signals between adjacent stations
     
-    Design principle:
-    - These signals are NOT in ChunkType (no need to modify ChunkType when adding stations)
-    - Automatically bound by DAG based on station attributes (EMITS_COMPLETION, AWAITS_COMPLETION)
-    - Station doesn't know upstream/downstream, only declares its own attributes
-    
-    Signal types:
-    - COMPLETE: Stream processing finished, trigger downstream flush
-    - FLUSH: Request to flush buffer and output accumulated data
-    """
-    COMPLETE = "completion.complete"  # Upstream finished processing
-    FLUSH = "completion.flush"        # Request to flush buffer
+    def is_completion_event(self) -> bool:
+        """
+        Check if this is a completion event (consumed by downstream).
+        
+        Completion events trigger on_completion() in stations with AWAITS_COMPLETION=True.
+        """
+        return self == ChunkType.EVENT_STREAM_COMPLETE
 
 
 # High priority chunk types (for immediate sending, not blocked by audio queue)
@@ -282,43 +280,6 @@ class VideoChunk(Chunk):
 # ============ Specialized Signal Chunks ============
 
 @dataclass
-class CompletionChunk(Chunk):
-    """
-    Completion signal chunk - local signals between adjacent stations.
-    
-    Design:
-    - Used by DAG to automatically route completion signals
-    - Station doesn't need to know who sent this signal
-    - DAG fills in from_station when routing
-    
-    Attributes:
-        signal: CompletionSignal type (COMPLETE or FLUSH)
-        from_station: Source station name (filled by DAG, station doesn't need to set)
-    """
-    type: ChunkType = None  # Not a ChunkType, but keep for compatibility
-    signal: CompletionSignal = CompletionSignal.COMPLETE
-    from_station: str = ""  # Filled by DAG when routing
-    
-    def __post_init__(self):
-        """Set type to None to indicate this is a CompletionChunk"""
-        # CompletionChunk uses signal field, not type field
-        pass
-    
-    def is_signal(self) -> bool:
-        """CompletionChunk is always a signal"""
-        return True
-    
-    def is_data(self) -> bool:
-        """CompletionChunk is never data"""
-        return False
-    
-    def __str__(self) -> str:
-        session_short = self.session_id[:8] if self.session_id else 'N/A'
-        from_info = f" from {self.from_station}" if self.from_station else ""
-        return f"CompletionChunk({self.signal.value}{from_info}, session={session_short})"
-
-
-@dataclass
 class ControlChunk(Chunk):
     """
     Control chunk - control signals from client.
@@ -345,18 +306,18 @@ class ControlChunk(Chunk):
 @dataclass
 class EventChunk(Chunk):
     """
-    Event chunk - notifications for client UI sync.
+    Event chunk - state notifications and completion signals.
+    
+    Event types:
+    - Broadcast events (VAD_*, BOT_*): Passthrough to all downstream
+    - Completion events (STREAM_COMPLETE): Consumed by downstream, triggers on_completion
+    - Client events (TTS_*, STATE_*): Sent to client via OutputStation
     
     Examples:
-    - EVENT_TTS_START/STOP: TTS generation events (for client audio sync)
-    - EVENT_TTS_SENTENCE_START: Subtitle display
-    - EVENT_STATE_*: State change events (for client UI)
-    - EVENT_ERROR: Error occurred
-    
-    Note:
-    - These events are primarily for OutputStation to send to client
-    - Internal completion signals between stations use CompletionChunk instead
-    - Use the inherited 'source' field to specify which station generated this event
+    - EVENT_VAD_START/END: VAD state changes (broadcast)
+    - EVENT_STREAM_COMPLETE: Stream finished, trigger downstream flush (completion)
+    - EVENT_TTS_START/STOP: TTS events for client (client event)
+    - EVENT_STATE_*: State changes for client UI (client event)
     
     Attributes:
         event_data: Any - Event-specific data
@@ -364,6 +325,10 @@ class EventChunk(Chunk):
     """
     type: ChunkType = ChunkType.EVENT_TTS_START
     event_data: Any = None
+    
+    def is_completion_event(self) -> bool:
+        """Check if this is a completion event"""
+        return self.type == ChunkType.EVENT_STREAM_COMPLETE
     
     def __str__(self) -> str:
         session_short = self.session_id[:8] if self.session_id else 'N/A'
@@ -400,6 +365,6 @@ def is_event_chunk(chunk: Chunk) -> bool:
     return isinstance(chunk, EventChunk) or (chunk.type and chunk.type.value.startswith("event."))
 
 
-def is_completion_chunk(chunk: Chunk) -> bool:
-    """Check if chunk is completion signal"""
-    return isinstance(chunk, CompletionChunk)
+def is_completion_event(chunk: Chunk) -> bool:
+    """Check if chunk is a completion event (triggers on_completion in downstream)"""
+    return chunk.type == ChunkType.EVENT_STREAM_COMPLETE

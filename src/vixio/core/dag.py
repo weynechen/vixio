@@ -30,7 +30,7 @@ from typing import (
 )
 from loguru import logger
 
-from vixio.core.chunk import Chunk, ChunkType, CompletionChunk, CompletionSignal, is_completion_chunk
+from vixio.core.chunk import Chunk, ChunkType, is_completion_event
 from vixio.core.station import Station
 
 if TYPE_CHECKING:
@@ -174,9 +174,9 @@ class DAGNode:
                 if event_emitter:
                     await event_emitter.emit_chunk_processed(self.name, chunk)
 
-                # Handle CompletionChunk specially
-                if is_completion_chunk(chunk):
-                    await self._route_completion_signal(chunk, output_queue, event_emitter)
+                # Handle completion event specially
+                if is_completion_event(chunk):
+                    await self._route_completion_event(chunk, output_queue, event_emitter)
                 else:
                     # Route regular chunks to downstream nodes
                     await self._route_data_chunk(chunk, output_queue, event_emitter)
@@ -208,23 +208,21 @@ class DAGNode:
         """
         Process input through station.
         
-        Note: CompletionChunk handling is done inside Station.process().
-        DAG just routes chunks and collects output.
         """
         async for chunk in self.station.process(self._input_iterator()):
             yield chunk
     
-    async def _route_completion_signal(
+    async def _route_completion_event(
         self,
-        chunk: CompletionChunk,
+        chunk: Chunk,
         output_queue: asyncio.Queue,
         event_emitter: Optional[Any] = None,
     ) -> None:
         """
-        Route completion signal to downstream nodes that await completion.
+        Route completion event to downstream nodes that await completion.
         
         Args:
-            chunk: CompletionChunk to route
+            chunk: EventChunk with EVENT_STREAM_COMPLETE to route
             output_queue: Queue for final output
             event_emitter: Optional event emitter
         """
@@ -238,7 +236,7 @@ class DAGNode:
             sent = True
             
             self.logger.debug(
-                f"Routed completion signal to {downstream.name}"
+                f"Routed completion event to {downstream.name}"
             )
             
             if event_emitter:
@@ -293,8 +291,6 @@ class DAGNode:
         """
         Iterate over input queue until None is received.
         
-        Note: CompletionChunk handling is done in Station.process(),
-        not here. DAG just routes chunks to the appropriate stations.
         """
         while True:
             chunk = await self.input_queue.get()

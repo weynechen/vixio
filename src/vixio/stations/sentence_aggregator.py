@@ -1,8 +1,8 @@
 """
 SentenceAggregatorStation - aggregate streaming text into sentences
 
-Input: TEXT_DELTA, CompletionSignal (trigger flush from Agent)
-Output: TEXT (complete sentences) + CompletionSignal
+Input: TEXT_DELTA, EVENT_STREAM_COMPLETE (trigger flush from Agent)
+Output: TEXT (complete sentences) + EVENT_STREAM_COMPLETE
 
 Completion Contract:
 - AWAITS_COMPLETION: True (triggered by Agent's completion signal to flush remaining)
@@ -14,7 +14,7 @@ Refactored with middleware pattern for clean separation of concerns.
 import re
 from typing import AsyncIterator, List
 from vixio.core.station import BufferStation, StationRole
-from vixio.core.chunk import Chunk, ChunkType, TextChunk, CompletionChunk, CompletionSignal
+from vixio.core.chunk import Chunk, ChunkType, TextChunk, EventChunk
 from vixio.core.middleware import with_middlewares
 from vixio.stations.middlewares import LatencyMonitorMiddleware
 
@@ -117,8 +117,8 @@ class SentenceAggregatorStation(BufferStation):
     """
     Sentence aggregator: aggregates streaming text into complete sentences.
     
-    Input: TEXT_DELTA (streaming), CompletionSignal (trigger flush)
-    Output: TEXT (complete sentences) + CompletionSignal
+    Input: TEXT_DELTA (streaming), EVENT_STREAM_COMPLETE (trigger flush)
+    Output: TEXT (complete sentences) + EVENT_STREAM_COMPLETE
     
     Completion Contract:
     - Awaits completion from Agent (triggers flush of remaining buffer)
@@ -177,7 +177,7 @@ class SentenceAggregatorStation(BufferStation):
         Core logic:
         - Accumulate TEXT_DELTA chunks and aggregate into sentences
         - Emit complete sentences as soon as they're detected
-        - Final flush is triggered by on_completion() when upstream sends CompletionSignal
+        - Final flush is triggered by on_completion() when upstream sends EVENT_STREAM_COMPLETE
         
         Note: SignalHandlerMiddleware handles CONTROL_STATE_RESET (resets aggregator via _handle_interrupt)
         Note: LatencyMonitorMiddleware automatically records first sentence output
@@ -203,17 +203,17 @@ class SentenceAggregatorStation(BufferStation):
                         turn_id=chunk.turn_id
                     )
     
-    async def on_completion(self, signal: CompletionChunk) -> AsyncIterator[Chunk]:
+    async def on_completion(self, event: EventChunk) -> AsyncIterator[Chunk]:
         """
-        Handle completion signal from upstream (Agent).
+        Handle completion event from upstream (Agent).
         
-        Flushes remaining buffer as final sentence and emits completion signal.
+        Flushes remaining buffer as final sentence and emits completion event.
         
         Args:
-            signal: CompletionChunk from Agent
+            event: EventChunk with EVENT_STREAM_COMPLETE from Agent
             
         Yields:
-            Final TEXT chunk (if any) + CompletionSignal
+            Final TEXT chunk (if any) + completion event
         """
         remaining = self._aggregator.flush()
         if remaining:
@@ -222,13 +222,13 @@ class SentenceAggregatorStation(BufferStation):
                 type=ChunkType.TEXT,
                 data=remaining,
                 source=self.name,
-                session_id=signal.session_id,
-                turn_id=signal.turn_id
+                session_id=event.session_id,
+                turn_id=event.turn_id
             )
         
-        # Emit completion signal (triggers TTS stop)
+        # Emit completion event (triggers TTS stop)
         yield self.emit_completion(
-            session_id=signal.session_id,
-            turn_id=signal.turn_id
+            session_id=event.session_id,
+            turn_id=event.turn_id
         )
 

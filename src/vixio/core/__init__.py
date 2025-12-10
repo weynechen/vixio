@@ -11,14 +11,12 @@ from vixio.core.chunk import (
     VideoChunk,
     ControlChunk,
     EventChunk,
-    CompletionSignal,
-    CompletionChunk,
     is_audio_chunk,
     is_text_chunk,
     is_video_chunk,
     is_control_chunk,
     is_event_chunk,
-    is_completion_chunk,
+    is_completion_event,
     HIGH_PRIORITY_TYPES,
 )
 from vixio.core.station import Station, PassthroughStation, StationRole
@@ -72,15 +70,13 @@ __all__ = [
     "VideoChunk",
     "ControlChunk",
     "EventChunk",
-    "CompletionSignal",
-    "CompletionChunk",
     # Chunk type guards
     "is_audio_chunk",
     "is_text_chunk",
     "is_video_chunk",
     "is_control_chunk",
     "is_event_chunk",
-    "is_completion_chunk",
+    "is_completion_event",
     "HIGH_PRIORITY_TYPES",
     # Core classes
     "Station",

@@ -2,7 +2,7 @@
 AgentStation - LLM Agent Integration
 
 Input: TEXT (complete user input from TextAggregator)
-Output: TEXT_DELTA (streaming) + CompletionSignal
+Output: TEXT_DELTA (streaming) + EVENT_STREAM_COMPLETE
 
 Completion Contract:
 - AWAITS_COMPLETION: False (triggered by TEXT data, not completion signal)
@@ -22,7 +22,7 @@ Vision Support:
 import asyncio
 from typing import AsyncIterator, Optional, List
 from vixio.core.station import StreamStation, StationRole
-from vixio.core.chunk import Chunk, ChunkType, TextDeltaChunk, CompletionChunk, CompletionSignal, is_text_chunk
+from vixio.core.chunk import Chunk, ChunkType, TextDeltaChunk, is_text_chunk
 from vixio.core.middleware import with_middlewares
 from vixio.stations.middlewares import (
     TimeoutHandlerMiddleware
@@ -54,7 +54,7 @@ class AgentStation(StreamStation):
     Agent workstation: Processes text through LLM agent.
     
     Input: TEXT (complete user input)
-    Output: TEXT_DELTA (streaming) + CompletionSignal
+    Output: TEXT_DELTA (streaming) + EVENT_STREAM_COMPLETE
     
     Completion Contract:
     - Does NOT await completion (triggered by TEXT data)

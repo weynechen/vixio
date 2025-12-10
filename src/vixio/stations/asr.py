@@ -1,8 +1,8 @@
 """
 ASRStation - Speech to Text
 
-Input: AUDIO_RAW (collect), CompletionSignal (trigger from TurnDetector)
-Output: TEXT_DELTA (transcription result) + CompletionSignal
+Input: AUDIO_RAW (collect), EVENT_STREAM_COMPLETE (trigger from TurnDetector)
+Output: TEXT_DELTA (transcription result) + EVENT_STREAM_COMPLETE
 
 Completion Contract:
 - AWAITS_COMPLETION: True (triggered by TurnDetector's completion signal)
@@ -16,7 +16,7 @@ Refactored with middleware pattern for clean separation of concerns.
 
 from typing import AsyncIterator, List
 from vixio.core.station import BufferStation, StationRole
-from vixio.core.chunk import Chunk, ChunkType, TextDeltaChunk, CompletionChunk, CompletionSignal, is_audio_chunk
+from vixio.core.chunk import Chunk, ChunkType, TextDeltaChunk, EventChunk, is_audio_chunk
 from vixio.core.middleware import with_middlewares
 from vixio.providers.asr import ASRProvider
 
@@ -31,8 +31,8 @@ class ASRStation(BufferStation):
     """
     ASR workstation: Transcribes audio to text.
     
-    Input: AUDIO_RAW (collect), CompletionSignal (trigger transcription)
-    Output: TEXT_DELTA (transcription result) + CompletionSignal
+    Input: AUDIO_RAW (collect), EVENT_STREAM_COMPLETE (trigger transcription)
+    Output: TEXT_DELTA (transcription result) + EVENT_STREAM_COMPLETE
     
     Completion Contract:
     - Awaits completion from TurnDetector (triggers transcription)
@@ -118,7 +118,7 @@ class ASRStation(BufferStation):
         
         Core logic:
         - Collect AUDIO_RAW chunks into buffer
-        - Transcription is triggered by on_completion() when upstream sends CompletionSignal
+        - Transcription is triggered by on_completion() when upstream sends EVENT_STREAM_COMPLETE
         
         Note: SignalHandlerMiddleware handles CONTROL_STATE_RESET (clears buffer via _handle_interrupt)
         """
@@ -132,23 +132,24 @@ class ASRStation(BufferStation):
         return
         yield  # Makes this an async generator
     
-    async def on_completion(self, signal: CompletionChunk) -> AsyncIterator[Chunk]:
+    async def on_completion(self, event: EventChunk) -> AsyncIterator[Chunk]:
         """
-        Handle completion signal from upstream
+        Handle completion event from upstream.
         
         Triggers transcription of buffered audio and emits:
         1. TEXT_DELTA with transcription result
-        2. CompletionSignal to trigger downstream TextAggregator
+        2. Completion event to trigger downstream TextAggregator
         
         Args:
-            signal: CompletionChunk from upstream station
+            event: EventChunk with EVENT_STREAM_COMPLETE from upstream
             
         Yields:
-            TEXT_DELTA + CompletionSignal
+            TEXT_DELTA + completion event
         """
         if not self._audio_buffer:
             self.logger.warning("Completion received but no audio in buffer")
             return
+            yield  # Make this an async generator
         
         self.logger.info(f"Transcribing {len(self._audio_buffer)} audio chunks...")
         
@@ -162,8 +163,8 @@ class ASRStation(BufferStation):
                 type=ChunkType.TEXT_DELTA,
                 data=text,
                 source=self.name,
-                session_id=signal.session_id,
-                turn_id=signal.turn_id
+                session_id=event.session_id,
+                turn_id=event.turn_id
             )
         else:
             self.logger.warning("ASR returned empty text")
@@ -171,8 +172,8 @@ class ASRStation(BufferStation):
         # Clear buffer
         self._audio_buffer.clear()
         
-        # Emit completion signal to trigger downstream 
+        # Emit completion event to trigger downstream 
         yield self.emit_completion(
-            session_id=signal.session_id,
-            turn_id=signal.turn_id
+            session_id=event.session_id,
+            turn_id=event.turn_id
         )

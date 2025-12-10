@@ -2,7 +2,7 @@
 TurnDetectorStation - Detect when user finishes speaking and handle interrupts
 
 Input: EVENT_VAD_END, EVENT_VAD_START, EVENT_BOT_STARTED_SPEAKING
-Output: CompletionSignal (after silence threshold, triggers ASR)
+Output: EVENT_STREAM_COMPLETE (after silence threshold, triggers ASR)
 
 Note: Sends interrupt signal to ControlBus when user speaks during bot speaking.
 Session's interrupt handler injects CONTROL_STATE_RESET into pipeline.
@@ -16,7 +16,7 @@ import asyncio
 import time
 from typing import AsyncIterator, Optional
 from vixio.core.station import DetectorStation, StationRole
-from vixio.core.chunk import Chunk, ChunkType, EventChunk, ControlChunk, CompletionChunk, CompletionSignal
+from vixio.core.chunk import Chunk, ChunkType, EventChunk, ControlChunk
 from vixio.utils import get_latency_monitor
 
 
@@ -25,11 +25,11 @@ class TurnDetectorStation(DetectorStation):
     Turn detector: Detects when user finishes speaking and handles interrupts.
     
     Input: EVENT_VAD_END, EVENT_VAD_START, EVENT_BOT_STARTED_SPEAKING, EVENT_BOT_STOPPED_SPEAKING
-    Output: CompletionSignal (after silence threshold, triggers downstream ASR)
+    Output: EVENT_STREAM_COMPLETE (after silence threshold, triggers downstream ASR)
     
     Strategy:
     - Wait inline after VAD_END for silence threshold (using cancellable sleep)
-    - If silence continues, emit CompletionSignal (triggers ASR)
+    - If silence continues, emit EVENT_STREAM_COMPLETE (triggers ASR)
     - If voice resumes (VAD_START) or interrupted, set cancel flag to suppress
     - Track session state (LISTENING vs SPEAKING)
     - Send interrupt signal when user speaks during bot speaking
@@ -42,7 +42,7 @@ class TurnDetectorStation(DetectorStation):
     
     Completion Contract:
     - Does NOT await completion (listens to VAD state events)
-    - Emits completion when turn ends (triggers ASR via CompletionSignal)
+    - Emits completion when turn ends (triggers ASR via EVENT_STREAM_COMPLETE)
     
     Note: This station doesn't use middlewares due to its complex state machine logic,
     async timers, and conditional branching. It inherits DetectorStation for classification
@@ -96,7 +96,7 @@ class TurnDetectorStation(DetectorStation):
         DAG routing rules:
         - Only process chunks matching ALLOWED_INPUT_TYPES (VAD/BOT events)
         - Do NOT passthrough - DAG handles routing to downstream nodes
-        - Output: CompletionSignal (triggers ASR)
+        - Output: EVENT_STREAM_COMPLETE (triggers ASR)
         
         Logic:
         - On EVENT_VAD_START: Check if user interrupted (bot speaking)
@@ -175,14 +175,13 @@ class TurnDetectorStation(DetectorStation):
                         "turn_end_detected"
                     )
                     
-                    # Emit completion signal (triggers downstream ASR)
-                    yield CompletionChunk(
-                        signal=CompletionSignal.COMPLETE,
-                        from_station=self.name,
+                    # Emit completion event (triggers downstream ASR)
+                    yield EventChunk(
+                        type=ChunkType.EVENT_STREAM_COMPLETE,
                         source=self.name,
                         session_id=chunk.session_id,
                         turn_id=waiting_turn_id,
-                        metadata={"silence_duration": self.silence_threshold}
+                        event_data={"silence_duration": self.silence_threshold}
                     )
             
             except asyncio.CancelledError:

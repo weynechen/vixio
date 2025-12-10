@@ -1,8 +1,8 @@
 """
 TextAggregatorStation - Aggregates TEXT_DELTA into complete TEXT
 
-Input: TEXT_DELTA (streaming), CompletionSignal (trigger from ASR)
-Output: TEXT (aggregated complete text) + CompletionSignal
+Input: TEXT_DELTA (streaming), EVENT_STREAM_COMPLETE (trigger from ASR)
+Output: TEXT (aggregated complete text) + EVENT_STREAM_COMPLETE
 
 Completion Contract:
 - AWAITS_COMPLETION: True (triggered by ASR's completion signal)
@@ -15,7 +15,7 @@ Refactored with middleware pattern for clean separation of concerns.
 
 from typing import AsyncIterator
 from vixio.core.station import BufferStation, StationRole
-from vixio.core.chunk import Chunk, ChunkType, TextChunk, CompletionChunk, CompletionSignal
+from vixio.core.chunk import Chunk, ChunkType, TextChunk, EventChunk
 from vixio.core.middleware import with_middlewares
 
 
@@ -29,8 +29,8 @@ class TextAggregatorStation(BufferStation):
     """
     Text aggregator: Aggregates TEXT_DELTA into complete TEXT.
     
-    Input: TEXT_DELTA (streaming), CompletionSignal (trigger)
-    Output: TEXT (complete aggregated text) + CompletionSignal
+    Input: TEXT_DELTA (streaming), EVENT_STREAM_COMPLETE (trigger)
+    Output: TEXT (complete aggregated text) + EVENT_STREAM_COMPLETE
     
     Completion Contract:
     - Awaits completion from ASR (triggers output)
@@ -86,7 +86,7 @@ class TextAggregatorStation(BufferStation):
         
         Core logic:
         - Accumulate TEXT_DELTA chunks into buffer
-        - Output is triggered by on_completion() when upstream sends CompletionSignal
+        - Output is triggered by on_completion() when upstream sends EVENT_STREAM_COMPLETE
         
         Note: SignalHandlerMiddleware handles CONTROL_STATE_RESET (clears buffer via _handle_interrupt)
         """
@@ -103,17 +103,17 @@ class TextAggregatorStation(BufferStation):
         return
         yield  # Makes this an async generator
     
-    async def on_completion(self, signal: CompletionChunk) -> AsyncIterator[Chunk]:
+    async def on_completion(self, event: EventChunk) -> AsyncIterator[Chunk]:
         """
-        Handle completion signal from upstream (ASR).
+        Handle completion event from upstream (ASR).
         
-        Emits aggregated text as TEXT chunk and completion signal.
+        Emits aggregated text as TEXT chunk and completion event.
         
         Args:
-            signal: CompletionChunk from ASR
+            event: EventChunk with EVENT_STREAM_COMPLETE from ASR
             
         Yields:
-            TEXT chunk + CompletionSignal
+            TEXT chunk + completion event
         """
         if self._text_buffer.strip():
             self.logger.info(f"Aggregated text: '{self._text_buffer[:50]}...'")
@@ -123,8 +123,8 @@ class TextAggregatorStation(BufferStation):
                 type=ChunkType.TEXT,
                 data=self._text_buffer,
                 source=self.name,
-                session_id=signal.session_id,
-                turn_id=signal.turn_id
+                session_id=event.session_id,
+                turn_id=event.turn_id
             )
             
             # Clear buffer
@@ -132,9 +132,9 @@ class TextAggregatorStation(BufferStation):
         else:
             self.logger.debug("No text to aggregate - buffer is empty, not emitting TEXT chunk")
         
-        # Emit completion signal for downstream (if any)
+        # Emit completion event for downstream (if any)
         yield self.emit_completion(
-            session_id=signal.session_id,
-            turn_id=signal.turn_id
+            session_id=event.session_id,
+            turn_id=event.turn_id
         )
 
