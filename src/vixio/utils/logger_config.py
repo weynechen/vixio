@@ -17,6 +17,9 @@ from loguru import logger
 # Global flag to ensure configuration only happens once
 _configured = False
 
+# Store last configuration for reconfiguration (e.g., after third-party library resets logger)
+_last_config = {}
+
 
 def configure_logger(
     log_dir: str = "logs",
@@ -46,12 +49,23 @@ def configure_logger(
         >>> configure_logger(console_level="INFO", file_level="DEBUG")  # Different levels
         >>> configure_logger(level="INFO", debug_components=["LatencyMonitor"])  # DEBUG for specific component
     """
-    global _configured
+    global _configured, _last_config
     
     # Only configure once (unless explicitly reconfigured)
     if _configured:
         logger.warning("Logger already configured, skipping reconfiguration")
         return
+    
+    # Save configuration for potential reconfiguration
+    _last_config = {
+        "log_dir": log_dir,
+        "level": level,
+        "rotation": rotation,
+        "retention": retention,
+        "console_level": console_level,
+        "file_level": file_level,
+        "debug_components": debug_components,
+    }
     
     # Remove default handler
     logger.remove()
@@ -81,10 +95,14 @@ def configure_logger(
             
             Components are identified by 'component' field in record extra.
             All logger.bind() calls should use component=<name> for consistency.
+            
+            Uses prefix matching: "OutputStation" matches "OutputStation-12345678".
             """
-            # Check if this is a debug-enabled component
-            component_name = record["extra"].get("component")
-            is_debug_component = component_name in debug_components
+            # Check if this is a debug-enabled component (using prefix match)
+            component_name = record["extra"].get("component") or ""
+            is_debug_component = any(
+                component_name.startswith(prefix) for prefix in debug_components
+            )
             
             if is_debug_component:
                 # Allow DEBUG and above for this component
@@ -149,6 +167,29 @@ def reset_logger() -> None:
     global _configured
     _configured = False
     logger.remove()
+
+
+def reconfigure_logger() -> None:
+    """
+    Reconfigure logger using the last saved configuration.
+    
+    This is useful when a third-party library (e.g., kokoro) calls logger.remove()
+    and removes all vixio's handlers. Call this function to restore the logger
+    with the same configuration that was used before.
+    
+    If no previous configuration exists, uses default settings.
+    """
+    global _configured, _last_config
+    
+    # Reset the configured flag to allow reconfiguration
+    _configured = False
+    logger.remove()
+    
+    # Reconfigure with saved settings (or defaults if no previous config)
+    if _last_config:
+        configure_logger(**_last_config)
+    else:
+        configure_logger()
 
 
 def get_logger():

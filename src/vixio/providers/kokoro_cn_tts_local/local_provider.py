@@ -124,6 +124,11 @@ class LocalKokoroTTSInProcessProvider(TTSProvider):
         try:
             from kokoro import KModel
             import torch
+            
+            # kokoro library calls logger.remove() on import, which removes all 
+            # vixio's loguru handlers. We need to reconfigure the logger.
+            from vixio.utils.logger_config import reconfigure_logger
+            reconfigure_logger()
         except ImportError as e:
             raise ImportError(
                 "kokoro or torch not installed. "
