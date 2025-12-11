@@ -22,6 +22,7 @@ from vixio.core.chunk import (
 from vixio.core.station import Station, PassthroughStation, StationRole
 from vixio.core.transport import TransportBase
 from vixio.core.session import SessionManager
+from vixio.core.session_context import SessionContext, SessionQueues, SessionTasks
 from vixio.core.protocol import ProtocolBase
 from vixio.core.output_controller import (
     FlowControllerBase,
@@ -85,6 +86,9 @@ __all__ = [
     "TransportBase",
     "ProtocolBase",
     "SessionManager",
+    "SessionContext",
+    "SessionQueues",
+    "SessionTasks",
     # DAG classes
     "DAG",
     "DAGNode",

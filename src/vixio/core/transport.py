@@ -247,6 +247,74 @@ class TransportBase(ABC):
             name=f"OutputStation-{session_id[:8]}"
         )
     
+    # ============ Factory methods for SessionContext ============
+    
+    def create_input_station(
+        self,
+        session_id: str,
+        read_queue: 'asyncio.Queue',
+        video_queue: Optional['asyncio.Queue'] = None,
+    ) -> 'Station':
+        """
+        Factory method: Create InputStation with external queues.
+        
+        Used by SessionContext to create stations with queues owned by the context.
+        
+        Args:
+            session_id: Session ID
+            read_queue: Queue for incoming data (owned by SessionContext)
+            video_queue: Queue for video frames (owned by SessionContext)
+            
+        Returns:
+            InputStation instance
+        """
+        from vixio.stations.transport_stations import InputStation
+        
+        protocol = self.get_protocol()
+        audio_codec = self.get_audio_codec(session_id)
+        
+        return InputStation(
+            session_id=session_id,
+            read_queue=read_queue,
+            protocol=protocol,
+            audio_codec=audio_codec,
+            video_queue=video_queue,
+            name=f"InputStation-{session_id[:8]}"
+        )
+    
+    def create_output_station(
+        self,
+        session_id: str,
+        send_queue: 'asyncio.Queue',
+        priority_queue: 'asyncio.Queue',
+    ) -> 'Station':
+        """
+        Factory method: Create OutputStation with external queues.
+        
+        Used by SessionContext to create stations with queues owned by the context.
+        
+        Args:
+            session_id: Session ID
+            send_queue: Queue for outgoing data (owned by SessionContext)
+            priority_queue: Queue for priority messages (owned by SessionContext)
+            
+        Returns:
+            OutputStation instance
+        """
+        from vixio.stations.transport_stations import OutputStation
+        
+        protocol = self.get_protocol()
+        audio_codec = self.get_audio_codec(session_id)
+        
+        return OutputStation(
+            session_id=session_id,
+            send_queue=send_queue,
+            priority_queue=priority_queue,
+            protocol=protocol,
+            audio_codec=audio_codec,
+            name=f"OutputStation-{session_id[:8]}"
+        )
+    
     # ============ ControlBus integration ============
     
     def set_control_bus(self, session_id: str, control_bus: 'ControlBus') -> None:

@@ -549,4 +549,7 @@ class SessionManager:
                 except (asyncio.CancelledError, asyncio.TimeoutError):
                     pass
         
+        # Cleanup session resources (critical for preventing memory leaks)
+        self._cleanup_session(connection_id)
+        
         self.logger.info(f"Session cancelled for connection {connection_id[:8]}")
