@@ -790,12 +790,14 @@ class CompiledDAG:
             node.station.set_session_id(session_id)
 
     async def cleanup(self) -> None:
-        """Cleanup all station resources"""
+        """Cleanup all station resources and break reference cycles"""
         self.logger.debug("Cleaning up DAG resources...")
         cleanup_count = 0
 
         for node in self.nodes.values():
             station = node.station
+            
+            # Call station's cleanup method if exists
             if hasattr(station, "cleanup") and callable(getattr(station, "cleanup")):
                 try:
                     cleanup_method = getattr(station, "cleanup")
@@ -806,9 +808,38 @@ class CompiledDAG:
                     cleanup_count += 1
                 except Exception as e:
                     self.logger.error(f"Error cleaning up station {station.name}: {e}")
+            
+            # Clear station's middleware logger references
+            if hasattr(station, "_middlewares"):
+                for mw in getattr(station, "_middlewares", []):
+                    if hasattr(mw, "logger"):
+                        mw.logger = None
+                    if hasattr(mw, "station"):
+                        mw.station = None
+            
+            # Clear station's control_bus reference
+            if hasattr(station, "control_bus"):
+                station.control_bus = None
+            
+            # Clear station's logger reference
+            if hasattr(station, "logger"):
+                station.logger = None
+            
+            # Clear DAGNode's logger reference
+            if hasattr(node, "logger"):
+                node.logger = None
 
         if cleanup_count > 0:
             self.logger.info(f"Cleaned up {cleanup_count} stations")
+        
+        # Clear ControlBus reference
+        if self.control_bus:
+            if hasattr(self.control_bus, "logger"):
+                self.control_bus.logger = None
+            self.control_bus = None
+        
+        # Clear own logger reference (do this last)
+        self.logger = None
 
 
 class DAGValidationError(Exception):

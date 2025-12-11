@@ -261,6 +261,9 @@ class XiaozhiTransport(TransportBase):
         client = self._device_tool_clients.pop(session_id, None)
         if client:
             client.cancel_all()
+            # Clear logger reference to help GC
+            if hasattr(client, "logger"):
+                client.logger = None
         
         # Cleanup session-device mapping
         self._session_device_map.pop(session_id, None)

@@ -472,11 +472,20 @@ class SessionManager:
         if connection_id in self._sessions:
             del self._sessions[connection_id]
         
+        # Cleanup ControlBus (clear logger reference to help GC)
         if connection_id in self._control_buses:
+            control_bus = self._control_buses[connection_id]
+            if hasattr(control_bus, "logger"):
+                control_bus.logger = None
             del self._control_buses[connection_id]
         
-        # Cleanup InputStation
+        # Cleanup InputStation (clear logger and control_bus references)
         if connection_id in self._input_stations:
+            input_station = self._input_stations[connection_id]
+            if hasattr(input_station, "logger"):
+                input_station.logger = None
+            if hasattr(input_station, "control_bus"):
+                input_station.control_bus = None
             del self._input_stations[connection_id]
     
     async def _cleanup_dag(
