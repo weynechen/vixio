@@ -1,0 +1,29 @@
+# Docker Compose Override for GPU version with China PyPI Mirror
+# Usage: docker-compose -f docker-compose-inference-gpu.yml -f docker-compose-inference-gpu-cn.yml up -d --build
+
+version: '3.8'
+
+services:
+  silero-vad-service:
+    build:
+      args:
+        UV_INDEX_URL: https://mirrors.aliyun.com/pypi/simple/
+    environment:
+      - HF_ENDPOINT=https://hf-mirror.com
+
+  sherpa-asr-service:
+    build:
+      args:
+        UV_INDEX_URL: https://mirrors.aliyun.com/pypi/simple/
+    environment:
+      - HF_ENDPOINT=https://hf-mirror.com
+
+  kokoro-tts-service:
+    build:
+      args:
+        UV_INDEX_URL: https://mirrors.aliyun.com/pypi/simple/
+        # PyTorch China mirror (optional, uncomment if needed)
+        # TORCH_INDEX_URL: https://download.pytorch.org/whl/cu124
+    environment:
+      - HF_ENDPOINT=https://hf-mirror.com
+

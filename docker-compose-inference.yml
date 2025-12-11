@@ -124,14 +124,14 @@ networks:
 # Usage:
 # ------
 # Start services:
-#   docker-compose up -d
+#   docker compose up -d
 #
 # View logs:
-#   docker-compose logs -f vad-service
+#   docker compose logs -f vad-service
 #
 # Stop services:
-#   docker-compose down
+#   docker compose down
 #
 # Rebuild:
-#   docker-compose up -d --build
+#   docker compose up -d --build
 

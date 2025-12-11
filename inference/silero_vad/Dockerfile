@@ -17,6 +17,10 @@ RUN pip install --no-cache-dir uv
 # Copy service files (including pyproject.toml)
 COPY inference/silero_vad /app/silero_vad
 
+# PyPI mirror configuration (optional, for CN users)
+ARG UV_INDEX_URL
+ENV UV_INDEX_URL=${UV_INDEX_URL}
+
 # Install dependencies using service's own pyproject.toml
 RUN uv sync --no-dev
 

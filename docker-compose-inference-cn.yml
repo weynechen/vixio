@@ -1,0 +1,26 @@
+# Docker Compose Override for China PyPI Mirror
+# Usage: docker-compose -f docker-compose-inference.yml -f docker-compose-inference-cn.yml up -d --build
+
+version: '3.8'
+
+services:
+  silero-vad-service:
+    build:
+      args:
+        UV_INDEX_URL: https://mirrors.aliyun.com/pypi/simple/
+    environment:
+      - HF_ENDPOINT=https://hf-mirror.com
+
+  sherpa-asr-service:
+    build:
+      args:
+        UV_INDEX_URL: https://mirrors.aliyun.com/pypi/simple/
+    environment:
+      - HF_ENDPOINT=https://hf-mirror.com
+
+  kokoro-tts-service:
+    build:
+      args:
+        UV_INDEX_URL: https://mirrors.aliyun.com/pypi/simple/
+    environment:
+      - HF_ENDPOINT=https://hf-mirror.com
