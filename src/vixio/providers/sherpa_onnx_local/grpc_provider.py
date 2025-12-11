@@ -117,15 +117,19 @@ class LocalSherpaASRProvider(ASRProvider):
             f"(language={self.language})"
         )
     
-    async def transcribe(self, audio_chunks: list[bytes]) -> str:
+    async def transcribe_stream(self, audio_chunks: list[bytes]):
         """
-        Transcribe audio chunks to text.
+        Transcribe audio chunks to text (streaming output).
+        
+        This is a pseudo-streaming implementation - the underlying
+        gRPC service processes all audio at once, but output is
+        wrapped as an async iterator for interface consistency.
         
         Args:
             audio_chunks: List of PCM audio bytes (16kHz, mono, 16-bit)
             
-        Returns:
-            Transcribed text (empty string on error)
+        Yields:
+            Single text result after processing completes
         """
         if not self._client or not self.session_id:
             raise RuntimeError("ASR provider not initialized. Call initialize() first.")
@@ -137,16 +141,14 @@ class LocalSherpaASRProvider(ASRProvider):
                 audio_chunks=audio_chunks
             )
             
-            # Return transcribed text
+            # Yield transcribed text (pseudo-streaming)
             if response.text:
                 self.logger.debug(f"Transcribed: {response.text}")
-                return response.text
-            else:
-                return ""
+                yield response.text
         
         except Exception as e:
             self.logger.error(f"ASR transcription failed: {e}")
-            return ""  # Return empty string on error
+            # Yield nothing on error
     
     async def reset(self) -> None:
         """Reset ASR session state"""

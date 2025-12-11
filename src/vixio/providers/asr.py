@@ -1,9 +1,12 @@
 """
 ASR provider interface
+
+Streaming ASR Provider - all implementations must provide streaming output,
+even if the underlying engine is batch-based (pseudo-streaming).
 """
 
 from abc import abstractmethod
-from typing import List, Dict, Any
+from typing import List, Dict, Any, AsyncIterator
 from vixio.providers.base import BaseProvider
 
 
@@ -11,24 +14,35 @@ class ASRProvider(BaseProvider):
     """
     ASR (Automatic Speech Recognition) provider interface.
     
-    Implementations should transcribe audio to text.
+    All implementations must provide streaming output via transcribe_stream().
+    Even batch-based engines should wrap their output as pseudo-streaming.
+    
+    Streaming Contract:
+    - transcribe_stream() yields TEXT_DELTA chunks as recognition progresses
+    - For batch engines: yield single result after processing
+    - For streaming engines: yield intermediate + final results
     """
     
     @abstractmethod
-    async def transcribe(self, audio_chunks: List[bytes]) -> str:
+    def transcribe_stream(self, audio_chunks: List[bytes]) -> AsyncIterator[str]:
         """
-        Transcribe audio chunks to text.
+        Transcribe audio chunks to text (streaming output).
+        
+        All implementations must provide this method. For batch-based engines,
+        wrap the single result as a one-item async iterator.
         
         Args:
             audio_chunks: List of PCM audio bytes (16kHz, mono, 16-bit)
             
-        Returns:
-            Transcribed text
+        Yields:
+            Text segments as recognition progresses
+            - Batch engines: yield single final result
+            - Streaming engines: yield intermediate results + final
         """
         pass
     
     @abstractmethod
-    def reset(self) -> None:
+    async def reset(self) -> None:
         """Reset internal state"""
         pass
     

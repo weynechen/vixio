@@ -2,7 +2,15 @@
 TurnDetectorStation - Detect when user finishes speaking and handle interrupts
 
 Input: EVENT_VAD_END, EVENT_VAD_START, EVENT_BOT_STARTED_SPEAKING
-Output: EVENT_STREAM_COMPLETE (after silence threshold, triggers ASR)
+       + AUDIO_RAW (optional, when buffer_audio=True)
+Output: EVENT_STREAM_COMPLETE (triggers ASR)
+        + AUDIO_RAW (optional, when buffer_audio=True)
+
+Modes:
+- Events only (buffer_audio=False): Only processes VAD events, outputs completion.
+  Use with VAD in buffer mode (VAD handles audio buffering).
+- Buffer mode (buffer_audio=True): Also buffers AUDIO_RAW, outputs on turn end.
+  Use with VAD in passthrough mode.
 
 Note: Sends interrupt signal to ControlBus when user speaks during bot speaking.
 Session's interrupt handler injects CONTROL_STATE_RESET into pipeline.
@@ -14,9 +22,9 @@ Completion Contract:
 
 import asyncio
 import time
-from typing import AsyncIterator, Optional
+from typing import AsyncIterator, Optional, List
 from vixio.core.station import DetectorStation
-from vixio.core.chunk import Chunk, ChunkType, EventChunk, ControlChunk
+from vixio.core.chunk import Chunk, ChunkType, EventChunk, ControlChunk, AudioChunk
 from vixio.utils import get_latency_monitor
 
 
@@ -24,12 +32,18 @@ class TurnDetectorStation(DetectorStation):
     """
     Turn detector: Detects when user finishes speaking and handles interrupts.
     
-    Input: EVENT_VAD_END, EVENT_VAD_START, EVENT_BOT_STARTED_SPEAKING, EVENT_BOT_STOPPED_SPEAKING
-    Output: EVENT_STREAM_COMPLETE (after silence threshold, triggers downstream ASR)
+    Input: EVENT_VAD_* + EVENT_BOT_* events, optionally AUDIO_RAW
+    Output: EVENT_STREAM_COMPLETE, optionally buffered AUDIO_RAW
+    
+    Modes:
+    - Events only (default): Process VAD events, emit completion on silence threshold.
+      VAD handles audio buffering in this mode.
+    - Buffer mode: Also buffer AUDIO_RAW and output on turn end.
+      Use when VAD is in passthrough mode.
     
     Strategy:
     - Wait inline after VAD_END for silence threshold (using cancellable sleep)
-    - If silence continues, emit EVENT_STREAM_COMPLETE (triggers ASR)
+    - If silence continues, emit EVENT_STREAM_COMPLETE (+ buffered audio if enabled)
     - If voice resumes (VAD_START) or interrupted, set cancel flag to suppress
     - Track session state (LISTENING vs SPEAKING)
     - Send interrupt signal when user speaks during bot speaking
@@ -38,7 +52,6 @@ class TurnDetectorStation(DetectorStation):
     - Sends interrupt signal to ControlBus when user interrupts (speaks during bot speaking)
     - Session's interrupt handler increments turn_id for all interrupts
     - TTS station increments turn_id when bot finishes speaking
-    - This ensures turn_id changes immediately and consistently on completion/interrupt
     
     Completion Contract:
     - Does NOT await completion (listens to VAD state events)
@@ -50,8 +63,9 @@ class TurnDetectorStation(DetectorStation):
     """
     
     # DetectorStation configuration
-    # TurnDetector processes VAD/BOT events, not audio data
+    # TurnDetector processes VAD/BOT events (audio optional based on buffer_audio)
     ALLOWED_INPUT_TYPES = [
+        ChunkType.AUDIO_RAW,
         ChunkType.EVENT_VAD_START,
         ChunkType.EVENT_VAD_END,
         ChunkType.EVENT_BOT_STARTED_SPEAKING,
@@ -66,6 +80,7 @@ class TurnDetectorStation(DetectorStation):
         self,
         silence_threshold_ms: int = 100,
         interrupt_enabled: bool = True,
+        buffer_audio: bool = True,
         name: str = "TurnDetector"
     ):
         """
@@ -74,32 +89,44 @@ class TurnDetectorStation(DetectorStation):
         Args:
             silence_threshold_ms: Silence duration to consider turn ended (default: 100ms)
             interrupt_enabled: Whether to enable interrupt detection (default: True)
+            buffer_audio: If True, buffer audio and output on turn end.
+                         If False, only process VAD events (VAD handles audio buffering).
             name: Station name
         """
         super().__init__(name=name)
         self.silence_threshold = silence_threshold_ms / 1000.0  # Convert to seconds
         self.interrupt_enabled = interrupt_enabled
+        self.buffer_audio = buffer_audio
         self._should_emit_turn_end = False
         self._waiting_session_id: Optional[str] = None
         self._bot_is_speaking = False  # Track if bot is currently speaking
         
+        # Audio buffering (only used when buffer_audio=True)
+        self._audio_buffer: List[AudioChunk] = []
+        self._is_collecting_audio = False  # True after VAD_START, False after turn end
+        
         # Latency monitoring
         self._latency_monitor = get_latency_monitor()
+        
+        if buffer_audio:
+            self.logger.info("TurnDetector running in buffer mode (outputs audio on turn end)")
+        else:
+            self.logger.info("TurnDetector running in events-only mode (VAD handles audio)")
     
     async def process_chunk(self, chunk: Chunk) -> AsyncIterator[Chunk]:
         """
-        Process chunk for turn detection and interrupt handling.
+        Process chunk for turn detection, interrupt handling, and optional audio buffering.
         
         DAG routing rules:
-        - Only process chunks matching ALLOWED_INPUT_TYPES (VAD/BOT events)
-        - Do NOT passthrough - DAG handles routing to downstream nodes
-        - Output: EVENT_STREAM_COMPLETE (triggers ASR)
+        - Process VAD/BOT events
+        - If buffer_audio=True: also buffer AUDIO_RAW, output on turn end
+        - If buffer_audio=False: ignore AUDIO_RAW (VAD handles it)
+        - Output: EVENT_STREAM_COMPLETE (+ optional buffered AUDIO_RAW)
         
         Logic:
-        - On EVENT_VAD_START: Check if user interrupted (bot speaking)
-          * If yes: send interrupt signal to ControlBus
-          * Cancel pending turn end if any
-        - On EVENT_VAD_END: Wait for silence threshold, emit TURN_END (if not cancelled)
+        - On AUDIO_RAW: Buffer if buffer_audio=True and collecting
+        - On EVENT_VAD_START: Start collecting (if buffer_audio), check for interrupt
+        - On EVENT_VAD_END: Wait for silence threshold, emit completion (+ audio if buffering)
         - On EVENT_BOT_STARTED_SPEAKING: Set bot speaking flag
         - On EVENT_BOT_STOPPED_SPEAKING: Clear bot speaking flag
         
@@ -108,6 +135,15 @@ class TurnDetectorStation(DetectorStation):
         - Session's interrupt handler increments turn_id for all interrupts
         - TTS station increments turn_id when bot finishes
         """
+        # Buffer audio chunks when collecting (only in buffer mode)
+        if chunk.type == ChunkType.AUDIO_RAW:
+            if self.buffer_audio and self._is_collecting_audio:
+                self._audio_buffer.append(chunk)
+                self.logger.debug(f"Buffered audio chunk, total: {len(self._audio_buffer)}")
+            # Don't passthrough audio
+            return
+            yield  # Makes this an async generator
+        
         # Bot speaking state tracking
         if chunk.type == ChunkType.EVENT_BOT_STARTED_SPEAKING:
             self._bot_is_speaking = True
@@ -121,8 +157,13 @@ class TurnDetectorStation(DetectorStation):
             return
             yield  # Makes this an async generator
         
-        # Voice started - check for interrupt
+        # Voice started - start collecting audio (if buffering), check for interrupt
         elif chunk.type == ChunkType.EVENT_VAD_START:
+            # Start collecting audio (only in buffer mode)
+            if self.buffer_audio:
+                self._is_collecting_audio = True
+                self.logger.debug("Started collecting audio")
+            
             # Cancel pending turn end
             if self._should_emit_turn_end:
                 self.logger.debug("Turn end cancelled (voice resumed)")
@@ -142,7 +183,7 @@ class TurnDetectorStation(DetectorStation):
             return
             yield  # Makes this an async generator
         
-        # Voice ended - wait for silence then emit completion signal
+        # Voice ended - wait for silence then emit completion signal (+ audio if buffering)
         elif chunk.type == ChunkType.EVENT_VAD_END:
             # Record T0: user_speech_end (VAD_END received)
             self._latency_monitor.record(
@@ -163,7 +204,10 @@ class TurnDetectorStation(DetectorStation):
                 
                 # If flag still set (not cancelled), emit completion signal
                 if self._should_emit_turn_end and self._waiting_session_id == chunk.session_id:
-                    self.logger.info(f"Turn ended after {self.silence_threshold:.2f}s silence")
+                    if self.buffer_audio:
+                        self.logger.info(f"Turn ended after {self.silence_threshold:.2f}s silence, outputting {len(self._audio_buffer)} buffered audio chunks")
+                    else:
+                        self.logger.info(f"Turn ended after {self.silence_threshold:.2f}s silence")
                     
                     # Record T1: turn_end_detected
                     self._latency_monitor.record(
@@ -171,6 +215,17 @@ class TurnDetectorStation(DetectorStation):
                         waiting_turn_id,
                         "turn_end_detected"
                     )
+                    
+                    # Output buffered audio chunks (only in buffer mode)
+                    if self.buffer_audio:
+                        for audio_chunk in self._audio_buffer:
+                            # Update source to this station
+                            audio_chunk.source = self.name
+                            yield audio_chunk
+                        
+                        # Clear buffer after output
+                        self._audio_buffer.clear()
+                        self._is_collecting_audio = False
                     
                     # Emit completion event (triggers downstream ASR)
                     yield EventChunk(
@@ -197,6 +252,11 @@ class TurnDetectorStation(DetectorStation):
             self._should_emit_turn_end = False
             self._waiting_session_id = None
             self._bot_is_speaking = False
+            # Clear audio buffer on interrupt (only in buffer mode)
+            if self.buffer_audio and self._audio_buffer:
+                self.logger.debug(f"Clearing {len(self._audio_buffer)} buffered audio chunks on interrupt")
+                self._audio_buffer.clear()
+            self._is_collecting_audio = False
             self.logger.debug("Turn detector reset by interrupt")
             return
             yield  # Makes this an async generator
@@ -207,4 +267,9 @@ class TurnDetectorStation(DetectorStation):
         self._should_emit_turn_end = False
         self._waiting_session_id = None
         self._bot_is_speaking = False
+        # Clear audio buffer on state reset (only in buffer mode)
+        if self.buffer_audio and self._audio_buffer:
+            self.logger.debug(f"Clearing {len(self._audio_buffer)} buffered audio chunks on state reset")
+            self._audio_buffer.clear()
+        self._is_collecting_audio = False
         self.logger.debug("Turn detector state reset")

@@ -210,15 +210,19 @@ class LocalSherpaASRInProcessProvider(ASRProvider):
         
         return Path(downloaded_path)
     
-    async def transcribe(self, audio_chunks: list[bytes]) -> str:
+    async def transcribe_stream(self, audio_chunks: list[bytes]):
         """
-        Transcribe audio chunks to text.
+        Transcribe audio chunks to text (streaming output).
+        
+        This is a pseudo-streaming implementation - the underlying
+        OfflineRecognizer processes all audio at once, but output is
+        wrapped as an async iterator for interface consistency.
         
         Args:
             audio_chunks: List of PCM audio bytes (16kHz, mono, 16-bit)
             
-        Returns:
-            Transcribed text (empty string on error)
+        Yields:
+            Single text result after processing completes
         """
         if self._recognizer is None:
             raise RuntimeError("ASR provider not initialized. Call initialize() first.")
@@ -228,7 +232,7 @@ class LocalSherpaASRInProcessProvider(ASRProvider):
             audio_data = b''.join(audio_chunks)
             
             if not audio_data:
-                return ""
+                return
             
             # Convert bytes to numpy array
             audio_array = np.frombuffer(audio_data, dtype=np.int16)
@@ -245,12 +249,12 @@ class LocalSherpaASRInProcessProvider(ASRProvider):
             
             if result:
                 self.logger.debug(f"Transcribed: {result}")
-            
-            return result
+                # Yield single result (pseudo-streaming)
+                yield result
         
         except Exception as e:
             self.logger.error(f"ASR transcription failed: {e}")
-            return ""
+            # Yield nothing on error
     
     async def reset(self) -> None:
         """Reset ASR state (no-op for offline recognizer)"""

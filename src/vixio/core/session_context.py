@@ -10,6 +10,8 @@ Usage:
     async with await SessionContext.create(session_id, dag_factory, transport) as ctx:
         await ctx.run()
     # All resources automatically released here
+
+NOTE: This refactoring is not used in the current implementation.
 """
 
 import asyncio

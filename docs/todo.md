@@ -6,10 +6,11 @@
 - [x] 制作python 包
 - [x] 更改pipeline为DAG，充分解耦各个station的依赖
 - [x] 解决litellm网络卡住的问题
-- [ ] 调整ASR为streamstation，引入流式ASR provider
+- [x] 调整ASR为streamstation，引入流式ASR provider
 - [ ] 数字人station
 - [ ] 引入smartturn替换当前的默认turn
 - [ ] 更新intranscribe
 - [ ] 更新realtimestation
 - [ ] 制作实时翻译示例
 - [ ] 使用https://github.com/antvis/x6 或者 https://github.com/microsoft/react-dag-editor 制作DAG前端图展示数据流，延时，调试信息等等
+- [ ] 在使用本地推理的情况下，tts往往会成为瓶颈点。每次推理需要100~1000ms。如果是100个并发，就要10~100s的排队了。
