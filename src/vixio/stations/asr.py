@@ -1,24 +1,24 @@
 """
 ASRStation - Speech to Text (Streaming)
 
-Input: AUDIO_RAW (from TurnDetector buffer), EVENT_STREAM_COMPLETE (trigger)
+Input: AUDIO_RAW (merged chunk from TurnDetector)
 Output: TEXT_DELTA (streaming transcription) + EVENT_STREAM_COMPLETE
 
 Data Flow:
 - TurnDetector buffers audio during user speaking
-- On turn end, TurnDetector outputs all buffered AUDIO_RAW + EVENT_STREAM_COMPLETE
-- ASR collects all AUDIO_RAW until EVENT_STREAM_COMPLETE
-- On completion, ASR processes all collected audio through streaming provider
+- On turn end, TurnDetector outputs one merged AUDIO_RAW chunk
+- ASR directly processes the audio chunk in process_chunk (not on_completion)
+- This allows LatencyMonitorMiddleware to properly track first output
 
 Completion Contract:
-- AWAITS_COMPLETION: True (triggered by TurnDetector's completion signal)
+- AWAITS_COMPLETION: False (processes audio directly, not triggered by completion)
 - EMITS_COMPLETION: True (emits completion after transcription, triggers TextAggregator)
 
 Note: Outputs TEXT_DELTA for streaming scenarios.
 ASR Provider interface is streaming (AsyncIterator), even for batch engines.
 """
 
-from typing import AsyncIterator, List
+from typing import AsyncIterator
 from vixio.core.station import StreamStation
 from vixio.core.chunk import Chunk, ChunkType, TextDeltaChunk, EventChunk
 from vixio.core.middleware import with_middlewares
@@ -29,36 +29,35 @@ from vixio.providers.asr import ASRProvider
     # Note: StreamStation base class automatically provides:
     # - InputValidatorMiddleware (validates ALLOWED_INPUT_TYPES)
     # - SignalHandlerMiddleware (handles CONTROL_STATE_RESET)
+    # - LatencyMonitorMiddleware (monitors first output latency)
     # - ErrorHandlerMiddleware (error handling)
 )
 class ASRStation(StreamStation):
     """
     ASR workstation: Transcribes audio to text (streaming output).
     
-    Input: AUDIO_RAW (from TurnDetector), EVENT_STREAM_COMPLETE (trigger)
+    Input: AUDIO_RAW (merged chunk from TurnDetector)
     Output: TEXT_DELTA (streaming) + EVENT_STREAM_COMPLETE
     
     Data Flow:
-    - Receives burst of AUDIO_RAW from TurnDetector (already buffered upstream)
-    - Collects audio until EVENT_STREAM_COMPLETE arrives
-    - On completion, processes all audio through streaming ASR provider
+    - Receives single merged AUDIO_RAW chunk from TurnDetector
+    - Directly processes audio in process_chunk (enables middleware monitoring)
     - Yields TEXT_DELTA as provider streams results
+    - Emits completion to trigger downstream
     
     Completion Contract:
-    - Awaits completion from TurnDetector (triggers transcription)
+    - Does NOT await completion (processes audio directly)
     - Emits completion after transcription (triggers TextAggregator)
-    
-    Note: ASR itself doesn't buffer long-term - audio is buffered by TurnDetector.
-    ASR only collects the burst of audio chunks between turn end and completion.
     """
     
     # StreamStation configuration
     ALLOWED_INPUT_TYPES = [ChunkType.AUDIO_RAW]
     LATENCY_METRIC_NAME = "asr_complete"
+    LATENCY_OUTPUT_TYPES = [ChunkType.TEXT_DELTA]  # Only monitor TEXT_DELTA, not EVENT_BOT_THINKING
     
-    # Completion contract: await turn completion, emit text completion
+    # Completion contract: process directly, emit completion
     EMITS_COMPLETION = True
-    AWAITS_COMPLETION = True
+    AWAITS_COMPLETION = False  # Process audio directly in process_chunk
     
     def __init__(self, asr_provider: ASRProvider, name: str = "asr"):
         """
@@ -70,8 +69,7 @@ class ASRStation(StreamStation):
         """
         super().__init__(name=name, enable_interrupt_detection=True)
         self.asr = asr_provider
-        # Temporary collection for audio burst from TurnDetector
-        self._pending_audio: List[bytes] = []
+        self._is_processing = False
         
     def _configure_middlewares_hook(self, middlewares: list) -> None:
         """
@@ -79,7 +77,7 @@ class ASRStation(StreamStation):
         
         Allows customizing middleware settings after attachment.
         """
-        # Set interrupt callback to clear pending audio
+        # Set interrupt callback
         for middleware in middlewares:
             if middleware.__class__.__name__ == 'SignalHandlerMiddleware':
                 middleware.on_interrupt = self._handle_interrupt
@@ -90,13 +88,9 @@ class ASRStation(StreamStation):
         
         Called by SignalHandlerMiddleware when CONTROL_STATE_RESET received.
         """
-        # Clear pending audio
-        if self._pending_audio:
-            self.logger.debug(f"Clearing {len(self._pending_audio)} pending audio chunks")
-            self._pending_audio.clear()
-        
         # Reset ASR provider
         await self.asr.reset()
+        self._is_processing = False
     
     async def cleanup(self) -> None:
         """
@@ -105,9 +99,6 @@ class ASRStation(StreamStation):
         Releases ASR provider resources to free memory.
         """
         try:
-            # Clear pending audio
-            self._pending_audio.clear()
-            
             # Cleanup ASR provider
             if self.asr and hasattr(self.asr, 'cleanup'):
                 await self.asr.cleanup()
@@ -117,46 +108,39 @@ class ASRStation(StreamStation):
     
     async def process_chunk(self, chunk: Chunk) -> AsyncIterator[Chunk]:
         """
-        Process AUDIO_RAW chunk - collect for pending transcription.
+        Process AUDIO_RAW chunk - directly transcribe and yield results.
         
-        Audio chunks arrive in burst from TurnDetector (already buffered there).
-        Collect them until on_completion() triggers transcription.
-        
-        Note: This is not long-term buffering - TurnDetector handles that.
-        This just collects the burst of audio between turn end and completion signal.
-        """
-        if chunk.type == ChunkType.AUDIO_RAW:
-            if chunk.data:
-                self._pending_audio.append(chunk.data)
-                self.logger.debug(f"Collected audio chunk, pending: {len(self._pending_audio)}")
-        
-        # Don't yield anything during collection
-        return
-        yield  # Makes this an async generator
-    
-    async def on_completion(self, event: EventChunk) -> AsyncIterator[Chunk]:
-        """
-        Handle completion event from TurnDetector.
-        
-        Processes all collected audio through streaming ASR provider,
-        yielding TEXT_DELTA chunks as results stream in.
+        TurnDetector sends a single merged audio chunk containing all buffered audio.
+        We process it immediately, allowing LatencyMonitorMiddleware to track output.
         
         Args:
-            event: EventChunk with EVENT_STREAM_COMPLETE from TurnDetector
+            chunk: AudioChunk with merged audio data
             
         Yields:
-            TEXT_DELTA chunks + completion event
+            EVENT_BOT_THINKING + TEXT_DELTA chunks + EVENT_STREAM_COMPLETE
         """
-        if not self._pending_audio:
-            self.logger.warning("Completion received but no audio collected")
+        if chunk.type != ChunkType.AUDIO_RAW or not chunk.data:
             return
-            yield  # Make this an async generator
+            yield  # Makes this an async generator
         
-        self.logger.info(f"Transcribing {len(self._pending_audio)} audio chunks (streaming)...")
+        self._is_processing = True
+        audio_data = chunk.data
+        self.logger.info(f"Processing {len(audio_data)} bytes of audio")
+        
+        # Emit EVENT_BOT_THINKING to let device switch to speaker early
+        # This reduces perceived latency by letting device prepare while ASR/Agent process
+        self.logger.info("ASR emitting EVENT_BOT_THINKING (device can switch to speaker)")
+        yield EventChunk(
+            type=ChunkType.EVENT_BOT_THINKING,
+            event_data={"stage": "asr_start"},
+            source=self.name,
+            session_id=chunk.session_id,
+            turn_id=chunk.turn_id
+        )
         
         # Stream transcription results from provider
         has_result = False
-        async for text in self.asr.transcribe_stream(self._pending_audio):
+        async for text in self.asr.transcribe_stream([audio_data]):
             if text:
                 has_result = True
                 self.logger.info(f"ASR result: '{text}'")
@@ -166,20 +150,19 @@ class ASRStation(StreamStation):
                     type=ChunkType.TEXT_DELTA,
                     data=text,
                     source=self.name,
-                    session_id=event.session_id,
-                    turn_id=event.turn_id
+                    session_id=chunk.session_id,
+                    turn_id=chunk.turn_id
                 )
         
         if not has_result:
             self.logger.warning("ASR returned no text")
         
-        # Clear collected audio
-        self._pending_audio.clear()
-        
         # Emit completion event to trigger downstream 
         self.logger.info("ASR emitting completion event to trigger downstream")
         yield self.emit_completion(
-            session_id=event.session_id,
-            turn_id=event.turn_id
+            session_id=chunk.session_id,
+            turn_id=chunk.turn_id
         )
-        self.logger.debug("ASR on_completion finished")
+        
+        self._is_processing = False
+        self.logger.debug("ASR process_chunk finished")

@@ -93,8 +93,13 @@ class XiaozhiTransport(TransportBase):
         # Maps session_id -> device_id after device sends hello message
         self._session_device_map: Dict[str, str] = {}
         
-        # ============ Protocol instance (shared) ============
-        self._protocol: Optional[XiaozhiProtocol] = None
+        # ============ Protocol instance (shared, created eagerly) ============
+        # Protocol is stateless and shared across all sessions, no need for lazy loading
+        self._protocol: XiaozhiProtocol = XiaozhiProtocol(
+            sample_rate=16000,
+            channels=1,
+            frame_duration=60
+        )
         
         # Check Opus availability
         if not OPUS_AVAILABLE:
@@ -219,13 +224,7 @@ class XiaozhiTransport(TransportBase):
             raise
     
     def _create_protocol(self) -> ProtocolBase:
-        """Create XiaozhiProtocol"""
-        if self._protocol is None:
-            self._protocol = XiaozhiProtocol(
-                sample_rate=16000, 
-                channels=1, 
-                frame_duration=60
-            )
+        """Return the protocol instance (already created in __init__)"""
         return self._protocol
     
     def _create_audio_codec(self, session_id: str) -> Optional[Any]:

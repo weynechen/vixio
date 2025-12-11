@@ -3,23 +3,17 @@ VADStation - Voice Activity Detection
 
 Input: AUDIO_RAW (PCM audio)
 Output: 
-  - Passthrough mode: AUDIO_RAW (realtime) + EVENT_VAD_START/END
-  - Buffer mode: AUDIO_RAW (buffered, on VAD_END) + EVENT_VAD_START/END + EVENT_STREAM_COMPLETE
+  - EVENT_VAD_START when voice starts
+  - Merged AUDIO_RAW + EVENT_VAD_END when voice ends
 
-Modes:
-- Passthrough (buffer_audio=False): Audio flows through in realtime, VAD events emitted.
-  Use with TurnDetector which handles buffering and completion.
-- Buffer (buffer_audio=True): Audio buffered during speech, output on VAD_END.
-  Use without TurnDetector for simple VAD-triggered ASR.
-
-Completion Contract:
-- Passthrough mode: EMITS_COMPLETION = False (TurnDetector handles completion)
-- Buffer mode: EMITS_COMPLETION = True (emits completion on VAD_END)
+Data Flow:
+- VAD detects voice activity in audio stream
+- Buffers audio during speech
+- On VAD_END, outputs merged audio chunk + VAD_END event
+- TurnDetector receives merged audio and decides if turn is complete
 
 Note: This station expects PCM audio data. Transport layers are responsible
 for format conversion (e.g., Opus -> PCM) before chunks enter the pipeline.
-
-Refactored with middleware pattern for clean separation of concerns.
 """
 
 from typing import AsyncIterator, List
@@ -37,59 +31,48 @@ from vixio.providers.vad import VADProvider, VADEvent
 )
 class VADStation(DetectorStation):
     """
-    VAD workstation: Detects voice activity in PCM audio stream.
+    VAD workstation: Detects voice activity and outputs buffered audio segments.
     
-    Input: AUDIO_RAW (PCM format)
-    Output: 
-      - Passthrough mode: AUDIO_RAW (realtime) + EVENT_VAD_START/END
-      - Buffer mode: AUDIO_RAW (buffered) + EVENT_VAD_START/END + EVENT_STREAM_COMPLETE
+    Input: AUDIO_RAW (PCM format, streaming)
+    Output: EVENT_VAD_START + (Merged AUDIO_RAW + EVENT_VAD_END) per speech segment
     
-    Modes:
-    - Passthrough (default): Audio flows through realtime, TurnDetector buffers.
-    - Buffer: Audio buffered here, output on VAD_END with completion signal.
+    Data Flow:
+    - Receives streaming audio chunks
+    - Detects voice activity using VAD provider
+    - Buffers audio during speech
+    - On VAD_END, outputs merged audio + VAD_END event
+    - TurnDetector/SmartTurn downstream decides if turn is complete
     
     Completion Contract:
-    - Passthrough: Does NOT emit completion (TurnDetector handles it)
-    - Buffer: Emits EVENT_STREAM_COMPLETE on VAD_END
-    
-    Note: Expects PCM audio data. Transport layers handle format conversion.
+    - EMITS_COMPLETION = False (TurnDetector decides when turn ends)
+    - VAD only emits VAD_START/END events and buffered audio
     """
     
     # DetectorStation configuration
     ALLOWED_INPUT_TYPES = [ChunkType.AUDIO_RAW]
     
-    # Default: passthrough mode, no completion
-    # Changed dynamically based on buffer_audio setting
+    # VAD does not emit completion - TurnDetector handles that
     EMITS_COMPLETION = False
     AWAITS_COMPLETION = False
     
     def __init__(
         self, 
         vad_provider: VADProvider, 
-        buffer_audio: bool = True,
-        name: str = "VAD"
+        name: str = "vad"
     ):
         """
         Initialize VAD station.
         
         Args:
             vad_provider: VAD provider instance
-            buffer_audio: If True, buffer audio and output on VAD_END with completion.
-                         If False (default), passthrough audio realtime.
             name: Station name
         """
         super().__init__(name=name)
         self.vad = vad_provider
         self._is_speaking = False
+        self._audio_buffer: List[AudioChunk] = []
         
-        # Buffer mode configuration
-        self.buffer_audio = buffer_audio
-        self._audio_buffer: List[Chunk] = []
-        
-        # Update completion contract based on mode
-        if buffer_audio:
-            self.EMITS_COMPLETION = True
-            self.logger.info("VAD running in buffer mode (emits completion on VAD_END)")
+        self.logger.info("VAD initialized (buffer mode, outputs merged audio on VAD_END)")
     
     def _configure_middlewares_hook(self, middlewares: list) -> None:
         """
@@ -110,13 +93,12 @@ class VADStation(DetectorStation):
         """
         # Reset VAD state on interrupt
         if self._is_speaking:
-            # Send END event if VAD was active
             await self.vad.detect(b'', VADEvent.END)
         self._is_speaking = False
         await self.vad.reset()
         
-        # Clear audio buffer if in buffer mode
-        if self.buffer_audio and self._audio_buffer:
+        # Clear audio buffer
+        if self._audio_buffer:
             self.logger.debug(f"Clearing {len(self._audio_buffer)} buffered audio chunks on interrupt")
             self._audio_buffer.clear()
         
@@ -127,8 +109,8 @@ class VADStation(DetectorStation):
         await super().reset_state()
         self._is_speaking = False
         
-        # Clear audio buffer if in buffer mode
-        if self.buffer_audio and self._audio_buffer:
+        # Clear audio buffer
+        if self._audio_buffer:
             self.logger.debug(f"Clearing {len(self._audio_buffer)} buffered audio chunks on state reset")
             self._audio_buffer.clear()
         
@@ -141,9 +123,7 @@ class VADStation(DetectorStation):
         Releases VAD provider resources to free memory.
         """
         try:
-            # Clear audio buffer
-            if self._audio_buffer:
-                self._audio_buffer.clear()
+            self._audio_buffer.clear()
             
             if self.vad and hasattr(self.vad, 'cleanup'):
                 await self.vad.cleanup()
@@ -151,23 +131,45 @@ class VADStation(DetectorStation):
         except Exception as e:
             self.logger.error(f"Error cleaning up VAD provider: {e}")
     
+    def _merge_audio_buffer(self, session_id: str, turn_id: int) -> AudioChunk:
+        """
+        Merge all buffered audio into a single AudioChunk.
+        
+        Returns:
+            Merged AudioChunk with all buffered audio data
+        """
+        if not self._audio_buffer:
+            return None
+        
+        # Merge audio data
+        merged_audio = b''.join(chunk.data for chunk in self._audio_buffer)
+        sample_rate = self._audio_buffer[0].sample_rate if self._audio_buffer else 16000
+        channels = self._audio_buffer[0].channels if self._audio_buffer else 1
+        
+        return AudioChunk(
+            type=ChunkType.AUDIO_RAW,
+            data=merged_audio,
+            source=self.name,
+            session_id=session_id,
+            turn_id=turn_id,
+            sample_rate=sample_rate,
+            channels=channels
+        )
+    
     async def process_chunk(self, chunk: Chunk) -> AsyncIterator[Chunk]:
         """
-        Process chunk through VAD - CORE LOGIC ONLY.
+        Process audio chunk through VAD.
         
-        DAG routing rules:
-        - Only process chunks matching ALLOWED_INPUT_TYPES (AUDIO_RAW)
-        - Output depends on mode:
-          * Passthrough: AUDIO_RAW (realtime) + EVENT_VAD_START/END
-          * Buffer: AUDIO_RAW (on VAD_END) + EVENT_VAD_START/END + EVENT_STREAM_COMPLETE
-        
-        Core logic:
+        Logic:
         - Detect voice activity in AUDIO_RAW chunks
-        - Emit EVENT_VAD_START/END on state change
-        - Passthrough mode: Output audio immediately
-        - Buffer mode: Buffer audio, output on VAD_END with completion
+        - Buffer audio during speech
+        - On VAD_START: emit EVENT_VAD_START
+        - On VAD_END: emit merged AUDIO_RAW + EVENT_VAD_END
         
-        Note: SignalHandlerMiddleware handles CONTROL_STATE_RESET (resets VAD via _handle_interrupt)
+        TurnDetector downstream will receive:
+        - EVENT_VAD_START (can update state)
+        - AUDIO_RAW (merged buffer from this speech segment)
+        - EVENT_VAD_END (can decide if turn is complete)
         """
         # Only process audio data (PCM)
         if chunk.type != ChunkType.AUDIO_RAW:
@@ -178,16 +180,17 @@ class VADStation(DetectorStation):
         audio_data = chunk.data if isinstance(chunk.data, bytes) else b''
         has_voice = await self.vad.detect(audio_data, VADEvent.CHUNK)
         
-        # Buffer audio if in buffer mode and speaking
-        if self.buffer_audio and self._is_speaking:
+        # Buffer audio while speaking
+        if self._is_speaking:
             self._audio_buffer.append(chunk)
-            self.logger.debug(f"Buffered audio chunk, total: {len(self._audio_buffer)}")
         
-        # Emit VAD events on state change
+        # State change: silence -> voice
         if has_voice and not self._is_speaking:
-            # Voice activity started
             await self.vad.detect(b'', VADEvent.START)
             self._is_speaking = True
+            
+            # Start buffering with this chunk
+            self._audio_buffer.append(chunk)
             
             self.logger.info("Voice activity started")
             yield EventChunk(
@@ -197,18 +200,22 @@ class VADStation(DetectorStation):
                 session_id=chunk.session_id,
                 turn_id=chunk.turn_id
             )
-            
-            # In buffer mode, start buffering (including this chunk)
-            if self.buffer_audio:
-                self._audio_buffer.append(chunk)
-                self.logger.debug("Started buffering audio")
         
+        # State change: voice -> silence
         elif not has_voice and self._is_speaking:
-            # Voice activity ended
             await self.vad.detect(b'', VADEvent.END)
             self._is_speaking = False
             
-            self.logger.info("Voice activity ended")
+            # Output merged audio
+            merged_chunk = self._merge_audio_buffer(chunk.session_id, chunk.turn_id)
+            if merged_chunk:
+                self.logger.info(f"Voice ended, outputting {len(merged_chunk.data)} bytes merged audio")
+                yield merged_chunk
+            
+            # Clear buffer
+            self._audio_buffer.clear()
+            
+            # Emit VAD_END event (TurnDetector uses this to decide turn completion)
             yield EventChunk(
                 type=ChunkType.EVENT_VAD_END,
                 event_data={"has_voice": False},
@@ -216,29 +223,3 @@ class VADStation(DetectorStation):
                 session_id=chunk.session_id,
                 turn_id=chunk.turn_id
             )
-            
-            # In buffer mode, output all buffered audio + completion
-            if self.buffer_audio:
-                self.logger.info(f"Outputting {len(self._audio_buffer)} buffered audio chunks")
-                for audio_chunk in self._audio_buffer:
-                    audio_chunk.source = self.name
-                    yield audio_chunk
-                
-                # Clear buffer
-                self._audio_buffer.clear()
-                
-                # Emit completion signal
-                yield EventChunk(
-                    type=ChunkType.EVENT_STREAM_COMPLETE,
-                    source=self.name,
-                    session_id=chunk.session_id,
-                    turn_id=chunk.turn_id,
-                    event_data={"reason": "vad_end"}
-                )
-                return
-                yield  # Exit early in buffer mode
-        
-        # Passthrough mode: output audio immediately
-        if not self.buffer_audio:
-            chunk.source = self.name
-            yield chunk

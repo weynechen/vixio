@@ -59,6 +59,9 @@ class ChunkType(str, Enum):
     EVENT_BOT_STARTED_SPEAKING = "event.bot.speaking.start"
     EVENT_BOT_STOPPED_SPEAKING = "event.bot.speaking.stop"
     
+    # Bot processing state - sent when ASR starts processing, device can switch to speaker early
+    EVENT_BOT_THINKING = "event.bot.thinking"
+    
     # ============ Completion Event (consumed by downstream, triggers on_completion) ============
     EVENT_STREAM_COMPLETE = "event.stream.complete"  # Upstream finished, trigger downstream flush
     

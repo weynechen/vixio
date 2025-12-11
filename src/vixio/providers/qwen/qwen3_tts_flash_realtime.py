@@ -110,7 +110,8 @@ class QwenTTSRealtimeProvider(TTSProvider):
         
         # Current synthesis state
         self._audio_queue: queue.Queue = queue.Queue()
-        self._synthesis_complete = threading.Event()
+        self._response_done = threading.Event()  # response.done received
+        self._session_finished = threading.Event()  # session.finished received
         self._current_error: Optional[Exception] = None
         
         # Cancellation
@@ -237,8 +238,8 @@ class QwenTTSRealtimeProvider(TTSProvider):
                 provider.logger.info(f"TTS WebSocket closed: {close_status_code}, {close_msg}")
                 with provider._connection_lock:
                     provider._is_connected = False
-                # Signal any pending synthesis
-                provider._synthesis_complete.set()
+                # Signal synthesis complete on close
+                provider._session_finished.set()
             
             def on_event(self, response) -> None:
                 try:
@@ -255,8 +256,9 @@ class QwenTTSRealtimeProvider(TTSProvider):
                             provider._audio_queue.put(audio_data)
                     
                     elif event_type == "response.done":
-                        provider.logger.debug("Response done")
-                        provider._synthesis_complete.set()
+                        # Response done, but audio may still be arriving
+                        provider.logger.debug("Response done (waiting for session.finished)")
+                        provider._response_done.set()
                     
                     elif event_type == "session.created":
                         provider.logger.debug(f"Session created: {response.get('session', {}).get('id', '')}")
@@ -265,19 +267,20 @@ class QwenTTSRealtimeProvider(TTSProvider):
                         provider.logger.debug("Session updated")
                     
                     elif event_type == "session.finished":
-                        provider.logger.debug("Session finished")
-                        provider._synthesis_complete.set()
+                        # Session finished - all audio has been sent
+                        provider.logger.debug("Session finished (all audio received)")
+                        provider._session_finished.set()
                     
                     elif event_type == "error":
                         error_msg = response.get("error", {}).get("message", "Unknown error")
                         provider._current_error = Exception(f"TTS error: {error_msg}")
                         provider.logger.error(f"TTS error: {error_msg}")
-                        provider._synthesis_complete.set()
+                        provider._session_finished.set()
                 
                 except Exception as e:
                     provider.logger.error(f"Error processing TTS event: {e}")
                     provider._current_error = e
-                    provider._synthesis_complete.set()
+                    provider._session_finished.set()
             
             def on_error(self, error) -> None:
                 provider.logger.error(f"TTS WebSocket error: {error}")
@@ -331,7 +334,8 @@ class QwenTTSRealtimeProvider(TTSProvider):
         
         # Reset state for new synthesis
         self._audio_queue = queue.Queue()
-        self._synthesis_complete.clear()
+        self._response_done.clear()
+        self._session_finished.clear()
         self._current_error = None
         
         # Send text in a thread
@@ -343,13 +347,14 @@ class QwenTTSRealtimeProvider(TTSProvider):
             except Exception as e:
                 self.logger.error(f"Error sending text: {e}")
                 self._current_error = e
-                self._synthesis_complete.set()
+                self._session_finished.set()
         
         # Start sending text
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, send_text)
         
         # Collect audio chunks
+        # Wait for session.finished (not just response.done) to ensure all audio is received
         accumulated_audio = []
         start_time = asyncio.get_event_loop().time()
         max_wait_time = 60  # Maximum wait time in seconds
@@ -366,9 +371,18 @@ class QwenTTSRealtimeProvider(TTSProvider):
                 self.logger.warning(f"TTS timeout after {elapsed:.1f}s")
                 break
             
-            # Check if synthesis complete and queue is empty
-            if self._synthesis_complete.is_set() and self._audio_queue.empty():
+            # Wait for session.finished to ensure all audio is received
+            # Note: We check session_finished OR (response_done + empty queue + small delay)
+            if self._session_finished.is_set() and self._audio_queue.empty():
                 break
+            
+            # Fallback: if response.done and queue is empty for a while, assume complete
+            if self._response_done.is_set() and self._audio_queue.empty():
+                # Wait a bit more to catch any late audio
+                await asyncio.sleep(0.2)
+                if self._audio_queue.empty():
+                    self.logger.debug("Response done and no more audio, finishing")
+                    break
             
             # Try to get audio chunk
             try:
@@ -456,7 +470,7 @@ class QwenTTSRealtimeProvider(TTSProvider):
         Sets cancellation flag to stop the synthesis loop.
         """
         self._cancelled = True
-        self._synthesis_complete.set()
+        self._session_finished.set()
         self.logger.debug("TTS synthesis cancellation requested")
     
     def get_config(self) -> Dict[str, Any]:

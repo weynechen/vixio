@@ -460,12 +460,19 @@ class OutputStation(Station):
         elif chunk.type == ChunkType.AUDIO_RAW:
             return None
         
+        # Bot thinking event - device can switch to speaker early
+        elif chunk.type == ChunkType.EVENT_BOT_THINKING:
+            self.logger.info(f"OutputStation received EVENT_BOT_THINKING (turn={chunk.turn_id})")
+            # Send TTS start event early so device can switch to speaker while processing
+            return self.protocol.send_bot_thinking_event(self._session_id)
+        
         # TTS events
         elif chunk.type == ChunkType.EVENT_TTS_START:
             text = None
             if hasattr(chunk, 'event_data') and isinstance(chunk.event_data, dict):
                 text = chunk.event_data.get("text")
             self.logger.info(f"OutputStation received EVENT_TTS_START (turn={chunk.turn_id})")
+            # Note: If EVENT_BOT_THINKING was sent, this is a duplicate but harmless
             return self.protocol.send_tts_event(self._session_id, "start", text)
         
         elif chunk.type == ChunkType.EVENT_TTS_SENTENCE_START:

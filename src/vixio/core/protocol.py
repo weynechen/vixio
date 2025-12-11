@@ -258,6 +258,24 @@ class ProtocolBase(ABC):
         """
         return None
     
+    def send_bot_thinking_event(
+            self, 
+            session_id: str, 
+            **params
+        ) -> Optional[Dict[str, Any]]:
+            """
+            Create bot thinking event message (for UI synchronization).
+            
+            Args:
+                session_id: Session ID
+                event: Event type
+                **params: Protocol-specific parameters
+                
+            Returns:
+                Bot thinking event message dictionary
+            """
+            return None
+
     def send_error(self, session_id: str, error: str, **params) -> Optional[Dict[str, Any]]:
         """
         Create error message.

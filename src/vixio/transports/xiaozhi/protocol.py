@@ -544,6 +544,14 @@ class XiaozhiProtocol(ProtocolBase):
             text=text,
             **params
         )
+
+    def send_bot_thinking_event(self, session_id: str, **params) -> Dict[str, Any]:
+        """Create bot thinking event message (business interface)."""
+        return self.create_tts_message(
+            session_id=session_id,
+            state="start",
+            **params
+        )
     
     def send_error(self, session_id: str, error: str, **params) -> Dict[str, Any]:
         """Create error message (business interface)."""

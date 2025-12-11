@@ -285,8 +285,6 @@ async def main():
         if asr_provider:
             # Main flow: transport_in -> vad -> turn_detector -> asr -> ... -> transport_out
             dag.add_edge("transport_in", "vad", "turn_detector", "asr", "text_agg", "agent", "sentence_agg", "tts", "transport_out")
-            # Audio branch: vad -> asr (audio data directly to ASR)
-            dag.add_edge("vad", "asr")
             # STT result branch: asr -> transport_out (show STT text to client)
             dag.add_edge("asr", "transport_out")
         else:

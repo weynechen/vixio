@@ -175,8 +175,6 @@ class TransportBase(ABC):
         Returns:
             ProtocolBase: Protocol instance
         """
-        if self._protocol is None:
-            self._protocol = self._create_protocol()
         return self._protocol
     
     def get_audio_codec(self, session_id: str) -> Optional[Any]:

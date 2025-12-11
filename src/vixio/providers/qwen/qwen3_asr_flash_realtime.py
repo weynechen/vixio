@@ -105,6 +105,11 @@ class QwenASRRealtimeProvider(ASRProvider):
         self._transcription_complete = threading.Event()
         self._current_error: Optional[Exception] = None
         
+        # Latency tracking
+        self._last_send_latency_ms: float = 0
+        self._last_first_result_latency_ms: float = 0
+        self._last_total_latency_ms: float = 0
+        
         self.logger.info(
             f"Initialized Qwen ASR Realtime provider "
             f"(model={model}, language={language})"
@@ -339,23 +344,34 @@ class QwenASRRealtimeProvider(ASRProvider):
         self._transcription_complete.clear()
         self._current_error = None
         
+        # Record start time for latency measurement
+        import time
+        send_start_time = time.time()
+        
         # Send audio in a thread
         def send_audio():
             try:
-                # Send audio data in chunks
                 chunk_size = 3200  # 100ms of 16kHz 16-bit mono audio
+                
+                # Send leading silence to prevent head loss
+                # Qwen ASR needs some "warm-up" time before processing real audio
+                leading_silence = bytes(chunk_size * 3)  # 300ms of silence
+                audio_b64 = base64.b64encode(leading_silence).decode('ascii')
+                self._conversation.append_audio(audio_b64)
+                self.logger.debug("Sent 300ms leading silence")
+                
+                # Send audio data in chunks
                 for i in range(0, len(audio_data), chunk_size):
                     chunk = audio_data[i:i + chunk_size]
                     audio_b64 = base64.b64encode(chunk).decode('ascii')
                     self._conversation.append_audio(audio_b64)
                 
-                # Send a small silence to help trigger transcription
-                silence_data = bytes(chunk_size)
-                for _ in range(5):
-                    audio_b64 = base64.b64encode(silence_data).decode('ascii')
-                    self._conversation.append_audio(audio_b64)
+                # Send trailing silence to trigger final transcription
+                trailing_silence = bytes(chunk_size * 5)  # 500ms of silence
+                audio_b64 = base64.b64encode(trailing_silence).decode('ascii')
+                self._conversation.append_audio(audio_b64)
                 
-                self.logger.debug(f"Sent {len(audio_data)} bytes of audio")
+                self.logger.debug(f"Sent {len(audio_data)} bytes of audio + padding")
             except Exception as e:
                 self.logger.error(f"Error sending audio: {e}")
                 self._current_error = e
@@ -365,13 +381,18 @@ class QwenASRRealtimeProvider(ASRProvider):
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, send_audio)
         
+        # Record send complete time
+        send_complete_time = time.time()
+        self._last_send_latency_ms = (send_complete_time - send_start_time) * 1000
+        
         # Wait for results with timeout
-        start_time = asyncio.get_event_loop().time()
+        wait_start_time = time.time()
         max_wait_time = 30  # Maximum wait time in seconds
+        first_result_time = None
         
         while True:
             # Check timeout
-            elapsed = asyncio.get_event_loop().time() - start_time
+            elapsed = time.time() - wait_start_time
             if elapsed > max_wait_time:
                 self.logger.warning(f"ASR timeout after {elapsed:.1f}s")
                 break
@@ -383,10 +404,22 @@ class QwenASRRealtimeProvider(ASRProvider):
             # Try to get result
             try:
                 result = self._result_queue.get(timeout=0.1)
+                
+                # Record first result time for latency measurement
+                if first_result_time is None:
+                    first_result_time = time.time()
+                    self._last_first_result_latency_ms = (first_result_time - send_start_time) * 1000
+                    self.logger.info(f"ASR first result latency: {self._last_first_result_latency_ms:.0f}ms")
+                
                 self.logger.debug(f"Yielding ASR result: {result[:50]}...")
                 yield result
             except queue.Empty:
                 await asyncio.sleep(0.05)
+        
+        # Record total latency
+        total_time = time.time()
+        self._last_total_latency_ms = (total_time - send_start_time) * 1000
+        self.logger.info(f"ASR total latency: {self._last_total_latency_ms:.0f}ms (send: {self._last_send_latency_ms:.0f}ms)")
         
         # Check for errors
         if self._current_error:
