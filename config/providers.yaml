@@ -1,5 +1,63 @@
 # Vixio Provider Configuration
-# Supports multiple deployment modes: dev, dev-local-cn, docker, k8s
+# Supports multiple deployment modes: dev, dev-local-cn, dev-qwen, docker, k8s
+
+# ==============================================================================
+# Development Mode - Qwen Cloud API (Alibaba DashScope)
+# ==============================================================================
+# Uses Alibaba Cloud's Qwen models for ASR and TTS via DashScope WebSocket API.
+# Local VAD for voice activity detection.
+# 
+# Usage:
+#   pip install vixio[dev-qwen]  # or: uv pip install -e ".[dev-qwen]"
+#   export DASHSCOPE_API_KEY="your-api-key"
+#   uv run python examples/agent_chat.py --env dev-qwen
+# ==============================================================================
+dev-qwen:
+  providers:
+    # VAD Provider (In-Process - Silero ONNX)
+    vad:
+      provider: silero-vad-local
+      config:
+        threshold: 0.35
+        threshold_low: 0.15
+        frame_window_threshold: 8
+        use_gpu: false
+    
+    # ASR Provider (Qwen Cloud - Realtime WebSocket)
+    asr:
+      provider: qwen-asr-realtime
+      config:
+        api_key: ${DASHSCOPE_API_KEY}
+        model: "qwen3-asr-flash-realtime"
+        language: "zh"
+        sample_rate: 16000
+    
+    # Agent Provider (Remote API)
+    agent:
+      provider: openai-agent
+      config:
+        api_key: ${API_KEY}
+        model: ${LITELLM_MODEL:deepseek/deepseek-chat}
+        base_url: ${BASE_URL:}
+        temperature: 0.7
+        max_tokens: 2000
+    
+    # TTS Provider (Qwen Cloud - Realtime WebSocket)
+    tts:
+      provider: qwen-tts-realtime
+      config:
+        api_key: ${DASHSCOPE_API_KEY}
+        model: "qwen3-tts-flash-realtime"
+        voice: "Cherry"
+        language_type: "Chinese"
+        sample_rate: 16000
+
+    vlm:
+      provider: openai-vlm-remote
+      config:
+        model: "glm-4v-flash"
+        api_key: "${GLM_API_KEY}"
+        base_url: "https://open.bigmodel.cn/api/paas/v4"
 
 # ==============================================================================
 # Development Mode - In-Process (No External Services)

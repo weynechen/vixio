@@ -107,9 +107,10 @@ edge-tts = [
     "pydub>=0.25.0",
 ]
 
-# qwen plantform provider(asr , tts)
+# qwen platform provider(asr, tts)
+# Requires dashscope>=1.25.2 for QwenTtsRealtime AudioFormat support
 qwen = [
-    "dashscope"
+    "dashscope>=1.25.2"
 ]
 
 # ----------convenience settings --------------
@@ -124,10 +125,9 @@ dev-grpc = [
     "vixio[xiaozhi,openai-agent,silero-vad-grpc,sherpa-onnx-asr-grpc,kokoro-cn-tts-grpc]",
 ]
 
-# dev qwen
+# dev qwen (cloud ASR/TTS + local VAD)
 dev-qwen = [
-    "vixio[xiaozhi,silero-vad-local,qwen]",
-    "qwen-agent"
+    "vixio[xiaozhi,openai-agent,silero-vad-local,qwen]",
 ]
 
 

@@ -188,6 +188,46 @@ def get_vision_describer():
         ) from e
 
 
+def get_qwen_asr_realtime_provider():
+    """
+    Load QwenASRRealtimeProvider class (qwen-asr-realtime).
+    
+    Real-time ASR using Alibaba Cloud's Qwen3-ASR-Flash model.
+    Requires: pip install vixio[dev-qwen]
+    
+    Returns:
+        QwenASRRealtimeProvider class
+    """
+    try:
+        from vixio.providers.qwen.qwen3_asr_flash_realtime import QwenASRRealtimeProvider
+        return QwenASRRealtimeProvider
+    except ImportError as e:
+        raise ImportError(
+            "QwenASRRealtimeProvider requires dashscope package. "
+            "Install with: pip install vixio[dev-qwen]"
+        ) from e
+
+
+def get_qwen_tts_realtime_provider():
+    """
+    Load QwenTTSRealtimeProvider class (qwen-tts-realtime).
+    
+    Real-time TTS using Alibaba Cloud's Qwen3-TTS-Flash model.
+    Requires: pip install vixio[dev-qwen]
+    
+    Returns:
+        QwenTTSRealtimeProvider class
+    """
+    try:
+        from vixio.providers.qwen.qwen3_tts_flash_realtime import QwenTTSRealtimeProvider
+        return QwenTTSRealtimeProvider
+    except ImportError as e:
+        raise ImportError(
+            "QwenTTSRealtimeProvider requires dashscope package. "
+            "Install with: pip install vixio[dev-qwen]"
+        ) from e
+
+
 # ============================================================
 # Export list
 # ============================================================
@@ -218,6 +258,9 @@ __all__ = [
     "get_silero_vad_grpc_provider",
     "get_sherpa_asr_grpc_provider",
     "get_kokoro_tts_grpc_provider",
+    # Lazy loaders - Qwen providers
+    "get_qwen_asr_realtime_provider",
+    "get_qwen_tts_realtime_provider",
 ]
 
 
@@ -286,5 +329,18 @@ except ImportError:
 try:
     from vixio.providers.kokoro_cn_tts_local.local_provider import LocalKokoroTTSInProcessProvider
     __all__.append("LocalKokoroTTSInProcessProvider")
+except ImportError:
+    pass
+
+# Qwen Realtime providers (requires dashscope)
+try:
+    from vixio.providers.qwen.qwen3_asr_flash_realtime import QwenASRRealtimeProvider
+    __all__.append("QwenASRRealtimeProvider")
+except ImportError:
+    pass
+
+try:
+    from vixio.providers.qwen.qwen3_tts_flash_realtime import QwenTTSRealtimeProvider
+    __all__.append("QwenTTSRealtimeProvider")
 except ImportError:
     pass

@@ -7,6 +7,9 @@
 - [x] 更改pipeline为DAG，充分解耦各个station的依赖
 - [x] 解决litellm网络卡住的问题
 - [x] 调整ASR为streamstation，引入流式ASR provider
+- [ ] 实现 dev-qwen ,使用 provider中增加qwen，其内部有asr/agent/tts的实现
+- [ ] 实现 https://github.com/huggingface/smolagents 的provider。
+- [ ] docker inference部署
 - [ ] 数字人station
 - [ ] 引入smartturn替换当前的默认turn
 - [ ] 更新intranscribe

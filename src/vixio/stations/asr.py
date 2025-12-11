@@ -177,7 +177,9 @@ class ASRStation(StreamStation):
         self._pending_audio.clear()
         
         # Emit completion event to trigger downstream 
+        self.logger.info("ASR emitting completion event to trigger downstream")
         yield self.emit_completion(
             session_id=event.session_id,
             turn_id=event.turn_id
         )
+        self.logger.debug("ASR on_completion finished")
