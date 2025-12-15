@@ -7,13 +7,16 @@
 - [x] 更改pipeline为DAG，充分解耦各个station的依赖
 - [x] 解决litellm网络卡住的问题
 - [x] 调整ASR为streamstation，引入流式ASR provider
-- [ ] 实现 dev-qwen ,使用 provider中增加qwen，其内部有asr/agent/tts的实现
+- [-] 实现 dev-qwen ,使用 provider中增加qwen，其内部有asr/agent/tts的实现 -- bug存在，ASR和TTS会吞字
+- [ ] Per-Session Transport 重构：消除 session_id 传递 → 设计文档: [per-session-transport.md](./design/per-session-transport.md)
+- [ ] 使用session 对象来彻底隔离session 资源，防止泄露
 - [ ] 实现 https://github.com/huggingface/smolagents 的provider。
 - [ ] docker inference部署
-- [ ] 数字人station
+- [ ] 数字人station,esp32-xiaozhi-pro
 - [ ] 引入smartturn替换当前的默认turn
 - [ ] 更新intranscribe
 - [ ] 更新realtimestation
 - [ ] 制作实时翻译示例
 - [ ] 使用https://github.com/antvis/x6 或者 https://github.com/microsoft/react-dag-editor 制作DAG前端图展示数据流，延时，调试信息等等
 - [ ] 在使用本地推理的情况下，tts往往会成为瓶颈点。每次推理需要100~1000ms。如果是100个并发，就要10~100s的排队了。
+- [ ] 提供一个web版本，方便测试

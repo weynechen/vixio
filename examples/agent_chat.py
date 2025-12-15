@@ -114,7 +114,7 @@ async def main():
         "--env",
         type=str,
         default="dev-grpc",
-        choices=["dev-grpc", "dev-local-cn", "dev-qwen", "docker", "k8s"],
+        choices=["dev-grpc", "dev-local-cn", "dev-qwen", "dev-realtime", "docker", "k8s"],
         help="Deployment environment (default: dev)"
     )
     parser.add_argument(

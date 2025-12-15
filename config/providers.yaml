@@ -1,5 +1,5 @@
 # Vixio Provider Configuration
-# Supports multiple deployment modes: dev, dev-local-cn, dev-qwen, docker, k8s
+# Supports multiple deployment modes: dev, dev-local-cn, dev-qwen, dev-realtime, docker, k8s
 
 # ==============================================================================
 # Development Mode - Qwen Cloud API (Alibaba DashScope)
@@ -51,6 +51,40 @@ dev-qwen:
         voice: "Cherry"
         language_type: "Chinese"
         sample_rate: 16000
+
+    vlm:
+      provider: openai-vlm-remote
+      config:
+        model: "glm-4v-flash"
+        api_key: "${GLM_API_KEY}"
+        base_url: "https://open.bigmodel.cn/api/paas/v4"
+
+# ==============================================================================
+# Development Mode - Qwen Omni Realtime (End-to-End Voice)
+# ==============================================================================
+# Uses Alibaba Cloud's Qwen-Omni-Realtime model for end-to-end voice conversation.
+# Integrates VAD + ASR + LLM + TTS in a single model.
+# No separate VAD, ASR, Agent, or TTS providers needed.
+# 
+# Usage:
+#   pip install vixio[dev-qwen]  # or: uv pip install -e ".[dev-qwen]"
+#   export DASHSCOPE_API_KEY="your-api-key"
+#   uv run python examples/realtime_chat.py --env dev-realtime
+# ==============================================================================
+dev-realtime:
+  providers:
+    # Realtime Provider (Qwen Omni - End-to-End Voice)
+    realtime:
+      provider: qwen-omni-realtime
+      config:
+        api_key: ${DASHSCOPE_API_KEY}
+        model: "qwen3-omni-flash-realtime"
+        voice: "Cherry"
+        instructions: "你是一个友好的AI语音助手，请用简洁自然的语言回答问题。回答要口语化，适合语音播放。"
+        input_sample_rate: 16000
+        output_sample_rate: 24000
+        vad_threshold: 0.5
+        silence_duration_ms: 800
 
     vlm:
       provider: openai-vlm-remote

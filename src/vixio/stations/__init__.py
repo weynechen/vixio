@@ -10,6 +10,7 @@ from vixio.stations.agent import AgentStation
 from vixio.stations.sentence_aggregator import SentenceAggregatorStation
 from vixio.stations.tts import TTSStation
 from vixio.stations.join_node import JoinNode
+from vixio.stations.realtime import RealtimeStation
 
 # Import will be added as stations are implemented
 # from vixio.stations.filter import FilterStation
@@ -24,5 +25,6 @@ __all__ = [
     "SentenceAggregatorStation",
     "TTSStation",
     "JoinNode",
+    "RealtimeStation",
 ]
 

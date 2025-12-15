@@ -228,6 +228,27 @@ def get_qwen_tts_realtime_provider():
         ) from e
 
 
+def get_qwen_omni_realtime_provider():
+    """
+    Load QwenOmniRealtimeProvider class (qwen-omni-realtime).
+    
+    End-to-end realtime voice conversation using Alibaba Cloud's 
+    Qwen-Omni-Realtime model. Integrates VAD + ASR + LLM + TTS.
+    Requires: pip install vixio[dev-qwen]
+    
+    Returns:
+        QwenOmniRealtimeProvider class
+    """
+    try:
+        from vixio.providers.qwen.qwen_omni_realtime import QwenOmniRealtimeProvider
+        return QwenOmniRealtimeProvider
+    except ImportError as e:
+        raise ImportError(
+            "QwenOmniRealtimeProvider requires dashscope package. "
+            "Install with: pip install vixio[dev-qwen]"
+        ) from e
+
+
 # ============================================================
 # Export list
 # ============================================================
@@ -261,6 +282,7 @@ __all__ = [
     # Lazy loaders - Qwen providers
     "get_qwen_asr_realtime_provider",
     "get_qwen_tts_realtime_provider",
+    "get_qwen_omni_realtime_provider",
 ]
 
 
@@ -342,5 +364,11 @@ except ImportError:
 try:
     from vixio.providers.qwen.qwen3_tts_flash_realtime import QwenTTSRealtimeProvider
     __all__.append("QwenTTSRealtimeProvider")
+except ImportError:
+    pass
+
+try:
+    from vixio.providers.qwen.qwen_omni_realtime import QwenOmniRealtimeProvider
+    __all__.append("QwenOmniRealtimeProvider")
 except ImportError:
     pass
