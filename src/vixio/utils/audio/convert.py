@@ -198,7 +198,7 @@ def get_opus_codec(
     frame_duration_ms: int = 60
 ) -> OpusCodec:
     """
-    Get Opus codec instance (cached for common configurations).
+    Get Opus codec instance.
     
     Args:
         sample_rate: Audio sample rate in Hz
@@ -206,17 +206,10 @@ def get_opus_codec(
         frame_duration_ms: Frame duration in milliseconds
         
     Returns:
-        OpusCodec instance
+        New OpusCodec instance
     """
-    global _opus_codec_16k_mono
-    
-    # Cache common configuration (16kHz mono)
-    if sample_rate == 16000 and channels == 1 and frame_duration_ms == 60:
-        if _opus_codec_16k_mono is None:
-            _opus_codec_16k_mono = OpusCodec(sample_rate, channels, frame_duration_ms)
-        return _opus_codec_16k_mono
-    
-    # Create new instance for other configurations
+    # Create new instance for each session to ensure isolation
+    # (Decoder state and bypass flag should not be shared)
     return OpusCodec(sample_rate, channels, frame_duration_ms)
 
 
