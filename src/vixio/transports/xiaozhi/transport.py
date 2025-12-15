@@ -456,6 +456,14 @@ class XiaozhiTransport(TransportBase):
             
             # Handle hello message - check for MCP support
             if msg_type == "hello":
+                # Check for audio parameters (PCM support)
+                audio_params = message.get("audio_params", {})
+                if audio_params.get("format") == "pcm":
+                    codec = self._opus_codecs.get(session_id)
+                    if codec:
+                        codec.bypass = True
+                        self.logger.info(f"Enabled PCM passthrough for session {session_id[:8]}")
+
                 features = message.get("features", {})
                 if features.get("mcp"):
                     self.logger.info(f"Device supports MCP, initializing tools for session {session_id[:8]}")

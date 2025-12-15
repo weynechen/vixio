@@ -53,6 +53,9 @@ class OpusCodec:
         self.frame_duration_ms = frame_duration_ms
         self.frame_size = int(sample_rate * frame_duration_ms / 1000)
         
+        # Bypass mode (for PCM passthrough)
+        self.bypass = False
+        
         # Initialize decoder and encoder
         self._decoder: Optional[opuslib_next.Decoder] = None
         self._encoder: Optional[opuslib_next.Encoder] = None
@@ -93,6 +96,9 @@ class OpusCodec:
         if not opus_data:
             return b''
         
+        if self.bypass:
+            return opus_data
+        
         try:
             pcm_data = self.decoder.decode(opus_data, self.frame_size)
             return pcm_data
@@ -115,6 +121,9 @@ class OpusCodec:
         """
         if not pcm_data:
             return b''
+            
+        if self.bypass:
+            return pcm_data
         
         # Ensure we have exactly frame_size samples
         expected_bytes = self.frame_size * 2  # 16-bit = 2 bytes per sample
