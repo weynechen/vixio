@@ -43,6 +43,14 @@ class ChunkType(str, Enum):
     VIDEO_FRAME = "video.frame"       # Video frame
     IMAGE = "image"                    # Single image
     
+    # Realtime events
+    EVENT_REALTIME_CONNECTED = "event.realtime.connected"
+    EVENT_REALTIME_SESSION_UPDATED = "event.realtime.session_updated"
+    
+    # Tool call related (Data Chunks)
+    TOOL_CALL = "tool.call"       # Model tool call request
+    TOOL_OUTPUT = "tool.output"   # Tool execution result
+
     # ============ Control Signals (Global - via ControlBus) ============
     # These affect all stations and go through ControlBus
     CONTROL_HANDSHAKE = "control.handshake"      # Handshake with client
@@ -267,6 +275,31 @@ class VideoChunk(Chunk):
         size_info = f"{self.width}x{self.height}" if self.width and self.height else "unknown"
         data_size = f", {len(self.data)} bytes" if self.data and isinstance(self.data, bytes) else ""
         return f"VideoChunk({size_info}, {self.format}{data_size}, session={session_short})"
+
+
+@dataclass
+class ToolCallChunk(Chunk):
+    """
+    Tool call request from the model.
+    """
+    type: ChunkType = ChunkType.TOOL_CALL
+    call_id: str = ""           # Unique call ID
+    tool_name: str = ""         # Tool name
+    arguments: Dict[str, Any] = field(default_factory=dict) # Tool arguments
+    
+    def __repr__(self) -> str:
+        return f"ToolCallChunk({self.tool_name}, id={self.call_id})"
+
+
+@dataclass
+class ToolOutputChunk(Chunk):
+    """
+    Tool execution result, to be sent back to the model.
+    """
+    type: ChunkType = ChunkType.TOOL_OUTPUT
+    call_id: str = ""           # Corresponding call ID
+    output: str = ""            # Execution result (usually JSON string)
+    is_error: bool = False      # Whether execution failed
 
 
 # ============ Specialized Signal Chunks ============

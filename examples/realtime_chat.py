@@ -41,7 +41,7 @@ from loguru import logger
 from vixio.core.dag import DAG
 from vixio.core.session import SessionManager
 from vixio.transports.xiaozhi import XiaozhiTransport
-from vixio.stations import RealtimeStation
+from vixio.stations import RealtimeStation, SentenceAggregatorStation
 from vixio.providers.factory import ProviderFactory
 from vixio.utils import get_local_ip
 from vixio.config import get_default_config_path
@@ -178,6 +178,11 @@ async def main():
         
         realtime_provider = session_providers["realtime"]
         
+        # Override output sample rate to 16000Hz to match Xiaozhi device requirements
+        if hasattr(realtime_provider, 'output_sample_rate'):
+            logger.info("Forcing output_sample_rate to 16000Hz for Xiaozhi compatibility")
+            realtime_provider.output_sample_rate = 16000
+        
         # Initialize provider (establishes WebSocket connection)
         await realtime_provider.initialize()
         
@@ -191,10 +196,26 @@ async def main():
             emit_events=True,    # Emit VAD/TTS events
         ))
         
-        # Define edges: transport_in -> realtime -> transport_out
-        dag.add_edge("transport_in", "realtime", "transport_out")
+        # Add sentence aggregator for Xiaozhi device compatibility (aggregates text deltas)
+        dag.add_node("sentence_aggregator", SentenceAggregatorStation(
+            min_sentence_length=1
+        ))
         
-        logger.debug("✓ DAG created with realtime provider")
+        # Define edges: 
+        # 1. transport_in -> realtime
+        dag.add_edge("transport_in", "realtime")
+        
+        # 2. realtime -> transport_out (for Audio and Events)
+        # AUDIO_RAW and Events go directly to transport_out
+        dag.add_edge("realtime", "transport_out")
+        
+        # 3. realtime -> sentence_aggregator -> transport_out (for TEXT_DELTA -> TEXT)
+        # TEXT_DELTA goes through aggregator to become complete sentences
+        dag.add_edge("realtime", "sentence_aggregator")
+        dag.add_edge("sentence_aggregator", "transport_out")
+
+        
+        logger.debug("✓ DAG created with realtime provider and text aggregator")
         
         return dag
     

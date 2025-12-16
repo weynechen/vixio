@@ -515,13 +515,30 @@ class XiaozhiProtocol(ProtocolBase):
         """Create HELLO handshake message (business interface)."""
         return self.create_hello_message(session_id=session_id, **params)
     
-    def send_stt(self, session_id: str, text: str, **params) -> Dict[str, Any]:
+    def send_stt(self, session_id: str, text: str, **params) -> Optional[Dict[str, Any]]:
         """Create STT message (business interface)."""
+        if params.get("is_delta", False):
+            return None
         return self.create_stt_message(text=text, session_id=session_id, **params)
     
-    def send_llm(self, session_id: str, text: str, **params) -> Dict[str, Any]:
-        """Create LLM message (business interface)."""
-        return self.create_llm_message(text=text, session_id=session_id, **params)
+    def send_llm(self, session_id: str, text: str, **params) -> Optional[Dict[str, Any]]:
+        """
+        Create LLM message (business interface).
+        
+        Note: For Xiaozhi devices, we map LLM text to TTS 'sentence_start' events
+        to ensure they are displayed as subtitles on the device screen.
+        The native 'llm' message type might not be supported for subtitle display in all firmware versions.
+        """
+        if params.get("is_delta", False):
+            return None
+            
+        # Map to TTS sentence_start event for subtitle display
+        return self.create_tts_message(
+            session_id=session_id,
+            state="sentence_start",
+            text=text,
+            **params
+        )
     
     def send_tts_audio(self, session_id: str, audio_data: bytes, **params) -> Dict[str, Any]:
         """Create TTS audio message (business interface)."""

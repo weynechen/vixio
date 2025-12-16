@@ -2,26 +2,39 @@
 RealtimeStation - End-to-End Voice Conversation Station
 
 Input: AUDIO_RAW (from transport)
-Output: AUDIO_RAW (streaming) + TEXT_DELTA (transcription) + Events
+Output: AUDIO_RAW (streaming) + TEXT_DELTA/TEXT + Events + ToolCallChunk
 
 This station uses a realtime model that integrates VAD + ASR + LLM + TTS,
 providing end-to-end voice conversation capability without separate
 VAD, ASR, Agent, and TTS stations.
 
+Processing Model: Two-Phase State Machine
+==========================================
+Phase 1 - INPUT: Continuously collect user audio until speech stops
+Phase 2 - OUTPUT: Stream provider response (like AgentStation)
+
+This mirrors the traditional VAD → ASR → Agent → TTS pipeline:
+- INPUT phase = VAD + ASR (collecting and transcribing)
+- OUTPUT phase = Agent + TTS (generating response)
+
+The phase transition is triggered by provider's speech_stopped event,
+similar to how VADStation triggers ASRStation.
+
 Data flow:
-    transport_in -> RealtimeStation -> transport_out
+    transport_in -> RealtimeStation -> [SentenceAggregator] -> transport_out
 
 The realtime model handles:
 - Voice Activity Detection (VAD): Detects when user starts/stops speaking
 - Speech Recognition (ASR): Transcribes user speech
-- Language Model (LLM): Generates response
+- Language Model (LLM): Generates response and handles tool usage
 - Text-to-Speech (TTS): Synthesizes response audio
 
 All processing happens server-side, minimizing latency.
 """
 
 import asyncio
-from typing import AsyncIterator, Optional
+from typing import AsyncIterator, Optional, List
+from enum import Enum
 
 from vixio.core.station import StreamStation, StationRole
 from vixio.core.chunk import (
@@ -29,28 +42,41 @@ from vixio.core.chunk import (
     ChunkType,
     AudioChunk,
     TextDeltaChunk,
+    TextChunk,
     EventChunk,
+    ToolCallChunk,
+    ToolOutputChunk,
 )
-from vixio.providers.qwen.qwen_omni_realtime import QwenOmniRealtimeProvider
+from vixio.providers.realtime import BaseRealtimeProvider, RealtimeEvent, RealtimeEventType
+from vixio.core.tools.types import ToolDefinition
+
+
+class ProcessingPhase(Enum):
+    """Processing phase for realtime station."""
+    INPUT = "input"    # Collecting user audio
+    OUTPUT = "output"  # Streaming provider response
 
 
 class RealtimeStation(StreamStation):
     """
     Realtime voice conversation station.
     
-    Uses Qwen-Omni-Realtime model for end-to-end voice processing.
+    Uses a BaseRealtimeProvider (e.g. Qwen, OpenAI) for end-to-end voice processing.
     Input audio is sent to the model, output audio and events are streamed back.
     
-    Input: AUDIO_RAW (user speech)
+    This station now uses the AsyncIterator pattern (stream_response) for clean,
+    AgentStation-like code, instead of callback-based queue management.
+    
+    Input: AUDIO_RAW (user speech), TOOL_OUTPUT (tool results)
     Output: 
         - AUDIO_RAW (model response audio)
         - TEXT_DELTA (response text for display)
         - EVENT_VAD_START/END (speech detection events)
-        - EVENT_TTS_START/STOP (response events)
+        - TOOL_CALL (tool execution request)
     """
     
     ROLE = StationRole.STREAM
-    ALLOWED_INPUT_TYPES = [ChunkType.AUDIO_RAW]
+    ALLOWED_INPUT_TYPES = [ChunkType.AUDIO_RAW, ChunkType.TOOL_OUTPUT]
     LATENCY_METRIC_NAME = "realtime_first_audio"
     LATENCY_OUTPUT_TYPES = [ChunkType.AUDIO_RAW]
     
@@ -60,206 +86,284 @@ class RealtimeStation(StreamStation):
     
     def __init__(
         self,
-        provider: QwenOmniRealtimeProvider,
+        provider: BaseRealtimeProvider,
         name: str = "realtime",
         emit_text: bool = True,
         emit_events: bool = True,
+        tools: Optional[List[ToolDefinition]] = None,
+        instructions: Optional[str] = None,
     ):
         """
         Initialize Realtime station.
         
         Args:
-            provider: QwenOmniRealtimeProvider instance
+            provider: Realtime provider instance
             name: Station name
             emit_text: Whether to emit TEXT_DELTA chunks for response text
             emit_events: Whether to emit VAD/TTS events
+            tools: Optional list of tools to register with the provider
+            instructions: Optional system instructions
         """
         super().__init__(name=name, enable_interrupt_detection=True)
         self.provider = provider
         self.emit_text = emit_text
         self.emit_events = emit_events
+        self.tools = tools or []
+        self.instructions = instructions
         
-        # State tracking
-        self._is_processing = False
-        self._output_task: Optional[asyncio.Task] = None
-        self._output_queue: asyncio.Queue = asyncio.Queue()
+        # State machine
+        self._phase = ProcessingPhase.INPUT
+        self._speech_stopped = False
+        self._pending_events: asyncio.Queue = asyncio.Queue()
         
-        # Register callbacks
-        self.provider.set_callbacks(
-            on_speech_started=self._on_speech_started,
-            on_speech_stopped=self._on_speech_stopped,
-            on_response_started=self._on_response_started,
-            on_response_done=self._on_response_done,
-        )
+        # Register event handler for phase detection
+        self.provider.set_event_handler(self._handle_provider_event)
     
-    def _on_speech_started(self) -> None:
-        """Callback when user starts speaking."""
-        self.logger.debug("User speech started")
-    
-    def _on_speech_stopped(self) -> None:
-        """Callback when user stops speaking."""
-        self.logger.debug("User speech stopped")
-    
-    def _on_response_started(self) -> None:
-        """Callback when model starts responding."""
-        self.logger.debug("Model response started")
-    
-    def _on_response_done(self) -> None:
-        """Callback when model finishes responding."""
-        self.logger.debug("Model response done")
-    
-    async def _start_output_collector(self, session_id: str, turn_id: int) -> None:
+    def _convert_event_to_chunk(self, event: RealtimeEvent) -> Optional[Chunk]:
         """
-        Start background task to collect outputs from provider.
+        Convert RealtimeEvent to Chunk for OUTPUT phase.
         
-        This runs continuously to collect audio, text, and events from the
-        provider and put them into the output queue.
+        These are response events: audio, text, tool calls.
+        Note: RESPONSE_START is handled separately before streaming starts.
+        
+        Args:
+            event: RealtimeEvent from provider
+            
+        Returns:
+            Corresponding Chunk or None
         """
-        if self._output_task and not self._output_task.done():
-            return  # Already running
+        chunk = None
         
-        async def collect_outputs():
-            while self._is_processing and self.provider.is_connected:
-                try:
-                    # Collect audio
-                    audio = await self.provider.get_audio_async(timeout=0.02)
-                    if audio:
-                        chunk = AudioChunk(
-                            type=ChunkType.AUDIO_RAW,
-                            data=audio,
-                            sample_rate=self.provider.output_sample_rate,
-                            channels=1,
-                            source=self.name,
-                            session_id=session_id,
-                            turn_id=turn_id,
-                        )
-                        await self._output_queue.put(chunk)
-                    
-                    # Collect text
-                    if self.emit_text:
-                        text_result = self.provider.get_text(timeout=0.01)
-                        if text_result:
-                            text_type, text = text_result
-                            if text_type == "delta":
-                                chunk = TextDeltaChunk(
-                                    type=ChunkType.TEXT_DELTA,
-                                    data=text,
-                                    source=self.name,
-                                    session_id=session_id,
-                                    turn_id=turn_id,
-                                )
-                                await self._output_queue.put(chunk)
-                    
-                    # Collect events
-                    if self.emit_events:
-                        event = self.provider.get_event(timeout=0.01)
-                        if event:
-                            event_chunk = self._create_event_chunk(
-                                event, session_id, turn_id
-                            )
-                            if event_chunk:
-                                await self._output_queue.put(event_chunk)
-                    
-                    await asyncio.sleep(0.005)
-                    
-                except asyncio.CancelledError:
-                    break
-                except Exception as e:
-                    self.logger.error(f"Error collecting outputs: {e}")
-                    await asyncio.sleep(0.1)
+        # 1. Audio Delta -> AUDIO_RAW
+        if event.type == RealtimeEventType.AUDIO_DELTA:
+            chunk = AudioChunk(
+                type=ChunkType.AUDIO_RAW,
+                data=event.data,
+                sample_rate=self.provider.output_sample_rate if hasattr(self.provider, 'output_sample_rate') else 24000,
+                channels=1,
+                source="agent",
+                session_id=self.current_session_id,
+                turn_id=self.current_turn_id,
+            )
+
+        # 2. Text Delta -> TEXT_DELTA
+        elif event.type == RealtimeEventType.TEXT_DELTA:
+            if self.emit_text and event.text:
+                chunk = TextDeltaChunk(
+                    type=ChunkType.TEXT_DELTA,
+                    data=event.text,
+                    source="agent",
+                    session_id=self.current_session_id,
+                    turn_id=self.current_turn_id,
+                )
+
+        # 3. Tool Call -> TOOL_CALL
+        elif event.type == RealtimeEventType.TOOL_CALL:
+            chunk = ToolCallChunk(
+                type=ChunkType.TOOL_CALL,
+                call_id=event.tool_call_id,
+                tool_name=event.tool_name,
+                arguments=event.tool_args,
+                source="agent",
+                session_id=self.current_session_id,
+                turn_id=self.current_turn_id,
+            )
         
-        self._output_task = asyncio.create_task(collect_outputs())
+        # 4. RESPONSE_DONE -> TTS_STOP
+        elif event.type == RealtimeEventType.RESPONSE_DONE:
+            if self.emit_events:
+                chunk = EventChunk(
+                    type=ChunkType.EVENT_TTS_STOP,
+                    source=self.name,
+                    session_id=self.current_session_id,
+                    turn_id=self.current_turn_id,
+                )
+        
+        # Note: RESPONSE_START is not handled here, it's emitted before streaming starts
+        
+        elif event.type == RealtimeEventType.ERROR:
+            self.logger.error(f"Realtime error: {event.text}")
+            # Optionally emit error chunk
+        
+        return chunk
+
+    # Track current context for event handling
+    current_session_id: str = ""
+    current_turn_id: int = 0
     
-    def _create_event_chunk(
-        self, event, session_id: str, turn_id: int
-    ) -> Optional[EventChunk]:
-        """Create EventChunk from provider event."""
-        event_mapping = {
-            "speech_started": ChunkType.EVENT_VAD_START,
-            "speech_stopped": ChunkType.EVENT_VAD_END,
-            "response_started": ChunkType.EVENT_TTS_START,
-            "response_done": ChunkType.EVENT_TTS_STOP,
-        }
+    def _handle_provider_event(self, event: RealtimeEvent) -> None:
+        """
+        Handle events from provider (callback thread).
         
-        chunk_type = event_mapping.get(event.event_type)
-        if not chunk_type:
-            return None
-        
-        event_data = {"event": event.event_type}
-        if event.data:
-            event_data["data"] = event.data
-        
-        return EventChunk(
-            type=chunk_type,
-            event_data=event_data,
-            source=self.name,
-            session_id=session_id,
-            turn_id=turn_id,
-        )
-    
-    async def _stop_output_collector(self) -> None:
-        """Stop the output collector task."""
-        if self._output_task:
-            self._output_task.cancel()
-            try:
-                await self._output_task
-            except asyncio.CancelledError:
-                pass
-            self._output_task = None
-    
+        This is used to detect phase transitions and collect immediate events
+        (VAD, user transcript) during INPUT phase.
+        """
+        try:
+            # Detect phase transition: INPUT -> OUTPUT
+            if event.type == RealtimeEventType.SPEECH_STOP:
+                self._speech_stopped = True
+                self.logger.info("Speech stopped detected, will switch to OUTPUT phase")
+            
+            # Enqueue immediate events (VAD, user transcript) for INPUT phase
+            if event.type in [
+                RealtimeEventType.SPEECH_START,
+                RealtimeEventType.SPEECH_STOP,
+                RealtimeEventType.TRANSCRIPT_COMPLETE
+            ]:
+                # Thread-safe: put_nowait is safe from callback thread
+                self._pending_events.put_nowait(event)
+                
+        except Exception as e:
+            self.logger.error(f"Error handling provider event: {e}")
+
     async def reset_state(self) -> None:
         """Reset station state for new turn."""
-        self._is_processing = False
-        # Clear output queue
-        while not self._output_queue.empty():
+        self._phase = ProcessingPhase.INPUT
+        self._speech_stopped = False
+        
+        # Clear pending events
+        while not self._pending_events.empty():
             try:
-                self._output_queue.get_nowait()
+                self._pending_events.get_nowait()
             except asyncio.QueueEmpty:
                 break
+        
         self.logger.info("Realtime station state reset")
     
     async def process_chunk(self, chunk: Chunk) -> AsyncIterator[Chunk]:
         """
-        Process audio chunk through realtime model.
+        Process incoming chunks with two-phase state machine.
         
-        For each audio input:
-        1. Send to provider
-        2. Yield any available outputs (audio, text, events)
+        Phase 1 - INPUT: Send audio, yield immediate events (VAD, transcript)
+        Phase 2 - OUTPUT: Stream full response (triggered by speech_stopped)
+        
+        This mimics the traditional VAD → Agent flow within a single station.
         
         Args:
-            chunk: Input audio chunk
+            chunk: Input chunk (AUDIO_RAW or TOOL_OUTPUT)
             
         Yields:
-            Output chunks (audio, text, events)
+            Output chunks (immediate events in INPUT, full response in OUTPUT)
         """
-        # Only process AUDIO_RAW
-        if chunk.type != ChunkType.AUDIO_RAW:
-            return
-            yield  # Make this an async generator
+        # Update context
+        self.current_session_id = chunk.session_id
+        self.current_turn_id = chunk.turn_id
         
-        # Start output collector if needed
-        if not self._is_processing:
-            self._is_processing = True
-            await self._start_output_collector(chunk.session_id, chunk.turn_id)
+        # Initialize session on first chunk
+        if self._phase == ProcessingPhase.INPUT:
+            if self.tools:
+                await self.provider.update_session(
+                    instructions=self.instructions,
+                    tools=self.tools
+                )
         
-        # Send audio to provider
-        if isinstance(chunk.data, bytes) and len(chunk.data) > 0:
-            await self.provider.send_audio_async(chunk.data)
+        # ===== PHASE 1: INPUT (like VAD + ASR) =====
+        if self._phase == ProcessingPhase.INPUT:
+            if chunk.type == ChunkType.AUDIO_RAW:
+                if isinstance(chunk.data, bytes) and len(chunk.data) > 0:
+                    # Send audio to provider (non-blocking)
+                    await self.provider.send_audio(chunk.data)
+                    self.logger.debug(f"Sent {len(chunk.data)} bytes audio to provider")
+                    
+                    # Yield immediate events (VAD, user transcript)
+                    while not self._pending_events.empty():
+                        try:
+                            event = self._pending_events.get_nowait()
+                            immediate_chunk = self._convert_immediate_event(event)
+                            if immediate_chunk:
+                                yield immediate_chunk
+                        except asyncio.QueueEmpty:
+                            break
+                    
+                    # Check if speech stopped -> switch to OUTPUT phase
+                    if self._speech_stopped:
+                        self.logger.info("=== Switching to OUTPUT phase ===")
+                        self._phase = ProcessingPhase.OUTPUT
+                        
+                        # Emit TTS_START to signal client to switch to speaker mode
+                        if self.emit_events:
+                            self.logger.info("Emitting TTS_START before streaming response")
+                            yield EventChunk(
+                                type=ChunkType.EVENT_TTS_START,
+                                source=self.name,
+                                session_id=chunk.session_id,
+                                turn_id=chunk.turn_id,
+                            )
+                        
+                        # ===== PHASE 2: OUTPUT (like Agent) =====
+                        # Now stream the full response (blocks until complete)
+                        self.logger.info("Streaming provider response...")
+                        async for event in self.provider.stream_response():
+                            output_chunk = self._convert_event_to_chunk(event)
+                            if output_chunk:
+                                yield output_chunk
+                            
+                            # Check for completion
+                            if event.type == RealtimeEventType.RESPONSE_DONE:
+                                self.logger.info("Response complete, resetting to INPUT phase")
+                                # Reset for next turn
+                                self._phase = ProcessingPhase.INPUT
+                                self._speech_stopped = False
+                                break
         
-        # Yield any available outputs
-        while not self._output_queue.empty():
-            try:
-                output_chunk = self._output_queue.get_nowait()
-                yield output_chunk
-            except asyncio.QueueEmpty:
-                break
+        # Handle tool output (less common, but supported)
+        elif chunk.type == ChunkType.TOOL_OUTPUT and isinstance(chunk, ToolOutputChunk):
+            self.logger.info(f"Sending tool output: {chunk.call_id}")
+            await self.provider.send_tool_output(chunk.call_id, chunk.output)
+            
+            # Stream response after tool output
+            async for event in self.provider.stream_response():
+                output_chunk = self._convert_event_to_chunk(event)
+                if output_chunk:
+                    yield output_chunk
+                
+                if event.type == RealtimeEventType.RESPONSE_DONE:
+                    break
+    
+    def _convert_immediate_event(self, event: RealtimeEvent) -> Optional[Chunk]:
+        """
+        Convert immediate events (VAD, transcript) to chunks.
+        
+        These are yielded during INPUT phase.
+        """
+        if event.type == RealtimeEventType.SPEECH_START:
+            if self.emit_events:
+                return EventChunk(
+                    type=ChunkType.EVENT_VAD_START,
+                    source=self.name,
+                    session_id=self.current_session_id,
+                    turn_id=self.current_turn_id,
+                )
+        
+        elif event.type == RealtimeEventType.SPEECH_STOP:
+            if self.emit_events:
+                return EventChunk(
+                    type=ChunkType.EVENT_VAD_END,
+                    source=self.name,
+                    session_id=self.current_session_id,
+                    turn_id=self.current_turn_id,
+                )
+        
+        elif event.type == RealtimeEventType.TRANSCRIPT_COMPLETE:
+            if self.emit_text and event.text:
+                return TextChunk(
+                    type=ChunkType.TEXT,
+                    data=event.text,
+                    source="asr",
+                    session_id=self.current_session_id,
+                    turn_id=self.current_turn_id,
+                )
+        
+        return None
     
     async def cleanup(self) -> None:
         """Cleanup station resources."""
-        self._is_processing = False
-        await self._stop_output_collector()
+        self._phase = ProcessingPhase.INPUT
+        self._speech_stopped = False
         
-        if self.provider and hasattr(self.provider, 'cleanup'):
+        if hasattr(self.provider, 'cleanup'):
             await self.provider.cleanup()
+        elif hasattr(self.provider, 'disconnect'):
+            await self.provider.disconnect()
         
         self.logger.debug("Realtime station cleaned up")

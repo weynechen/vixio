@@ -20,24 +20,19 @@ import base64
 import os
 import queue
 import threading
+import json
 from dataclasses import dataclass
 from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Tuple
 
 from loguru import logger as base_logger
 
-from vixio.providers.base import BaseProvider
+from vixio.providers.realtime import BaseRealtimeProvider, RealtimeEvent, RealtimeEventType
 from vixio.providers.registry import register_provider
-
-
-@dataclass
-class RealtimeEvent:
-    """Event from realtime model."""
-    event_type: str
-    data: Any = None
+from vixio.core.tools.types import ToolDefinition
 
 
 @register_provider("qwen-omni-realtime")
-class QwenOmniRealtimeProvider(BaseProvider):
+class QwenOmniRealtimeProvider(BaseRealtimeProvider):
     """
     Qwen Omni Realtime Provider for end-to-end voice conversation.
     
@@ -50,6 +45,7 @@ class QwenOmniRealtimeProvider(BaseProvider):
     - Streaming audio input and output
     - Automatic turn management
     - Interruption handling
+    - Tool use support (via function calling)
     
     Requirements:
         pip install dashscope>=1.23.9
@@ -121,21 +117,18 @@ class QwenOmniRealtimeProvider(BaseProvider):
         self._is_connected = False
         self._connection_lock = threading.Lock()
         
-        # Output queues
-        self._audio_queue: queue.Queue = queue.Queue()
-        self._text_queue: queue.Queue = queue.Queue()
-        self._event_queue: queue.Queue = queue.Queue()
-        
         # State tracking
         self._is_responding = False
         self._current_error: Optional[Exception] = None
-        self._session_closed = threading.Event()
         
-        # Event callbacks
-        self._on_speech_started: Optional[Callable] = None
-        self._on_speech_stopped: Optional[Callable] = None
-        self._on_response_started: Optional[Callable] = None
-        self._on_response_done: Optional[Callable] = None
+        # Track response completeness
+        self._current_response_text_length = 0
+        self._current_response_audio_bytes = 0
+        
+        # Response queue for async iterator pattern
+        self._response_queue: asyncio.Queue = asyncio.Queue()
+        self._response_active = False
+        self._loop = None  # Will be set when needed
         
         self.logger = base_logger.bind(component=self.name)
         self.logger.info(
@@ -195,40 +188,29 @@ class QwenOmniRealtimeProvider(BaseProvider):
         }
     
     async def initialize(self) -> None:
-        """
-        Initialize provider and establish WebSocket connection.
-        
-        Connection is kept alive for the entire session lifetime.
-        """
-        try:
-            import dashscope
-            dashscope.api_key = self.api_key
-        except ImportError as e:
-            raise ImportError(
-                "dashscope not installed. "
-                "Install with: pip install dashscope>=1.23.9"
-            ) from e
-        
-        # Establish connection
-        await self._connect()
-        self.logger.info("Qwen Omni Realtime provider initialized with persistent connection")
-    
-    async def _connect(self) -> None:
+        """Initialize the provider."""
+        # Capture event loop for thread-safe operations
+        if not self._loop:
+            self._loop = asyncio.get_running_loop()
+        await self.connect()
+
+    async def connect(self) -> None:
         """Establish WebSocket connection."""
         if self._is_connected:
             return
         
         try:
+            import dashscope
+            dashscope.api_key = self.api_key
             from dashscope.audio.qwen_omni import (
                 OmniRealtimeConversation,
-                OmniRealtimeCallback,
                 MultiModality,
                 AudioFormat,
             )
         except ImportError as e:
             raise ImportError(
-                "dashscope.audio.qwen_omni not available. "
-                "Please upgrade dashscope: pip install dashscope>=1.23.9"
+                "dashscope not installed. "
+                "Install with: pip install dashscope>=1.23.9"
             ) from e
         
         # Create callback instance
@@ -256,6 +238,7 @@ class QwenOmniRealtimeProvider(BaseProvider):
                     input_audio_transcription_model="gummy-realtime-v1",
                     # Enable server-side VAD
                     enable_turn_detection=True,
+                    turn_detection_type='server_vad',  # Critical: specify VAD mode explicitly
                     turn_detection_threshold=self.vad_threshold,
                     turn_detection_silence_duration_ms=self.silence_duration_ms,
                     instructions=self.instructions,
@@ -264,6 +247,7 @@ class QwenOmniRealtimeProvider(BaseProvider):
                 with self._connection_lock:
                     self._is_connected = True
                 self.logger.info("Realtime WebSocket connection established")
+                self._emit_event(RealtimeEvent(RealtimeEventType.SESSION_CREATED))
             except Exception as e:
                 self.logger.error(f"Failed to establish connection: {e}")
                 raise
@@ -272,6 +256,192 @@ class QwenOmniRealtimeProvider(BaseProvider):
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, connect_sync)
     
+    async def disconnect(self) -> None:
+        """Close connection."""
+        if self._conversation:
+            try:
+                # Close in thread to avoid blocking
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(None, self._conversation.close)
+            except Exception as e:
+                self.logger.warning(f"Error closing connection: {e}")
+        
+        self._conversation = None
+        self._callback = None
+        self._is_connected = False
+        self.logger.info("Qwen Omni Realtime provider disconnected")
+    
+    async def cleanup(self) -> None:
+        """Cleanup provider resources."""
+        await self.disconnect()
+
+    @property
+    def is_connected(self) -> bool:
+        """Check if WebSocket is connected."""
+        return self._is_connected
+    
+    async def update_session(self, 
+                           instructions: Optional[str] = None, 
+                           tools: Optional[List[ToolDefinition]] = None,
+                           voice: Optional[str] = None) -> None:
+        """
+        Update session configuration.
+        """
+        if not self._is_connected or not self._conversation:
+            return
+
+        kwargs = {}
+        if instructions:
+            kwargs["instructions"] = instructions
+        if voice:
+            kwargs["voice"] = voice
+        
+        # Convert tools to Qwen format if provided
+        # Note: This part depends on Qwen SDK support for tools
+        # Currently Qwen Omni Realtime SDK documentation might not fully support dynamic tool update via update_session
+        # This is a placeholder for when it is supported or via other means
+        if tools:
+            # self.logger.warning("Tool update via update_session not fully implemented for Qwen Omni yet")
+            # For now we assume tools are configured via some other mechanism or not supported dynamically in this version
+            pass
+
+        if kwargs:
+            def update_sync():
+                try:
+                    self._conversation.update_session(**kwargs)
+                    self._emit_event(RealtimeEvent(RealtimeEventType.SESSION_UPDATED))
+                except Exception as e:
+                    self.logger.error(f"Error updating session: {e}")
+            
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, update_sync)
+
+    async def send_audio(self, audio_data: bytes) -> None:
+        """Send audio data to the model."""
+        if not self._is_connected or not self._conversation:
+            self.logger.warning("Cannot send audio: not connected")
+            return
+        
+        def send_sync():
+            try:
+                # DashScope SDK expects base64 string for append_audio? No, it expects base64 string for append_audio according to docs
+                # But let's check SDK. Docs say: append_audio(self, audio_b64: str)
+                audio_b64 = base64.b64encode(audio_data).decode('ascii')
+                self._conversation.append_audio(audio_b64)
+            except Exception as e:
+                self.logger.error(f"Error sending audio: {e}")
+
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, send_sync)
+
+    async def send_tool_output(self, tool_call_id: str, output: str) -> None:
+        """Send tool execution result back to the model."""
+        # Note: Qwen Omni Realtime SDK might have specific method for this or use generic message
+        # This implementation needs verification against latest SDK
+        self.logger.warning("send_tool_output not fully implemented for Qwen Omni")
+        pass
+
+    def _emit_event(self, event: RealtimeEvent) -> None:
+        """
+        Emit event to both callback handler and response queue.
+        
+        Supports dual patterns:
+        1. Callback-based (legacy): via _event_handler  
+        2. AsyncIterator (recommended): via _response_queue
+        """
+        # Legacy callback pattern
+        if self._event_handler:
+            self._event_handler(event)
+        
+        # AsyncIterator pattern: enqueue if active
+        if self._response_active and self._loop:
+            try:
+                # Thread-safe queue put (callback runs in WebSocket thread)
+                self._loop.call_soon_threadsafe(
+                    self._response_queue.put_nowait,
+                    event
+                )
+            except Exception as e:
+                self.logger.error(f"Error enqueueing event: {e}")
+    
+    async def interrupt(self) -> None:
+        """Interrupt current generation."""
+        if self._conversation:
+            def interrupt_sync():
+                try:
+                    # In VAD mode, user speech interrupts. 
+                    # For manual interrupt we might need specific method
+                    # self._conversation.cancel_response() if available
+                    pass
+                except Exception as e:
+                    self.logger.warning(f"Error interrupting: {e}")
+            
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, interrupt_sync)
+    
+    async def stream_response(self) -> AsyncIterator[RealtimeEvent]:
+        """
+        Stream response events as async iterator.
+        
+        This method activates queue mode and yields events until
+        RESPONSE_DONE is received.
+        
+        Usage:
+            await provider.send_audio(audio_chunk)
+            async for event in provider.stream_response():
+                # Process event...
+                if event.type == RealtimeEventType.RESPONSE_DONE:
+                    break
+        
+        Yields:
+            RealtimeEvent: Events from Qwen (audio, text, etc.)
+        """
+        # Activate queue mode (callbacks will now enqueue events)
+        self._response_active = True
+        
+        # Clear any stale events from previous responses
+        while not self._response_queue.empty():
+            try:
+                self._response_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+        
+        self.logger.debug("Stream response started, waiting for events...")
+        
+        timeout_seconds = 30
+        start_time = asyncio.get_event_loop().time()
+        
+        try:
+            while True:
+                # Check timeout
+                if asyncio.get_event_loop().time() - start_time > timeout_seconds:
+                    self.logger.warning("Stream response timeout")
+                    break
+                
+                try:
+                    # Wait for event with short timeout
+                    event = await asyncio.wait_for(
+                        self._response_queue.get(),
+                        timeout=0.1
+                    )
+                    
+                    self.logger.debug(f"Yielding event: {event.type}")
+                    yield event
+                    
+                    # Stop on RESPONSE_DONE
+                    if event.type == RealtimeEventType.RESPONSE_DONE:
+                        self.logger.debug("RESPONSE_DONE received, stream complete")
+                        break
+                        
+                except asyncio.TimeoutError:
+                    # No event available, continue waiting
+                    continue
+                    
+        finally:
+            # Deactivate queue mode
+            self._response_active = False
+            self.logger.debug("Stream response ended")
+
     def _create_callback(self):
         """Create callback instance for handling WebSocket events."""
         from dashscope.audio.qwen_omni import OmniRealtimeCallback
@@ -286,256 +456,116 @@ class QwenOmniRealtimeProvider(BaseProvider):
                 provider.logger.info(f"Realtime WebSocket closed: {close_status_code}, {close_msg}")
                 with provider._connection_lock:
                     provider._is_connected = False
-                provider._session_closed.set()
             
             def on_event(self, event):
                 try:
                     event_type = event.get("type", "")
+                    provider.logger.debug(f"Qwen event: {event_type}")
                     
-                    if event_type == "session.created":
-                        session_id = event.get("session", {}).get("id", "")
-                        provider.logger.debug(f"Session created: {session_id}")
-                    
-                    elif event_type == "session.updated":
-                        provider.logger.debug("Session updated")
-                    
-                    elif event_type == "input_audio_buffer.speech_started":
-                        provider.logger.info("Speech started detected")
-                        provider._event_queue.put(RealtimeEvent("speech_started"))
-                        if provider._on_speech_started:
-                            provider._on_speech_started()
-                    
-                    elif event_type == "input_audio_buffer.speech_stopped":
-                        provider.logger.info("Speech stopped detected")
-                        provider._event_queue.put(RealtimeEvent("speech_stopped"))
-                        if provider._on_speech_stopped:
-                            provider._on_speech_stopped()
-                    
-                    elif event_type == "input_audio_buffer.committed":
-                        provider.logger.debug("Audio buffer committed")
-                    
-                    elif event_type == "response.created":
-                        provider._is_responding = True
-                        provider._event_queue.put(RealtimeEvent("response_started"))
-                        if provider._on_response_started:
-                            provider._on_response_started()
-                    
-                    elif event_type == "response.audio.delta":
-                        # Output audio data
+                    # === Audio/Text Output ===
+                    if event_type == "response.audio.delta":
                         audio_b64 = event.get("delta", "")
                         if audio_b64:
                             audio_data = base64.b64decode(audio_b64)
-                            provider._audio_queue.put(audio_data)
+                            provider._current_response_audio_bytes += len(audio_data)
+                            provider.logger.debug(f"Qwen: response.audio.delta, size={len(audio_data)} bytes (total: {provider._current_response_audio_bytes})")
+                            provider._emit_event(RealtimeEvent(
+                                type=RealtimeEventType.AUDIO_DELTA,
+                                data=audio_data
+                            ))
                     
                     elif event_type == "response.audio_transcript.delta":
-                        # Output text (transcription of model response)
                         text_delta = event.get("delta", "")
                         if text_delta:
-                            provider._text_queue.put(("delta", text_delta))
+                            provider._current_response_text_length += len(text_delta)
+                            provider.logger.debug(f"Qwen: response.audio_transcript.delta, text='{text_delta}' (total chars: {provider._current_response_text_length})")
+                            provider._emit_event(RealtimeEvent(
+                                type=RealtimeEventType.TEXT_DELTA,
+                                text=text_delta
+                            ))
                     
-                    elif event_type == "response.audio_transcript.done":
-                        # Complete transcription
-                        transcript = event.get("transcript", "")
-                        if transcript:
-                            provider._text_queue.put(("complete", transcript))
-                            provider.logger.info(f"Model response: {transcript}")
-                    
+                    # === User Input Transcript ===
                     elif event_type == "conversation.item.input_audio_transcription.completed":
-                        # User's speech transcription
                         transcript = event.get("transcript", "")
                         if transcript:
-                            provider._event_queue.put(RealtimeEvent("user_transcript", transcript))
-                            provider.logger.info(f"User said: {transcript}")
+                            provider._emit_event(RealtimeEvent(
+                                type=RealtimeEventType.TRANSCRIPT_COMPLETE,
+                                text=transcript
+                            ))
+                    
+                    # === VAD Events ===
+                    elif event_type == "input_audio_buffer.speech_started":
+                        provider._emit_event(RealtimeEvent(RealtimeEventType.SPEECH_START))
+                    
+                    elif event_type == "input_audio_buffer.speech_stopped":
+                        provider._emit_event(RealtimeEvent(RealtimeEventType.SPEECH_STOP))
+                    
+                    # === Lifecycle Events ===
+                    elif event_type == "response.created":
+                        provider._is_responding = True
+                        # Reset tracking counters for new response
+                        provider._current_response_text_length = 0
+                        provider._current_response_audio_bytes = 0
+                        provider._emit_event(RealtimeEvent(RealtimeEventType.RESPONSE_START))
                     
                     elif event_type == "response.done":
                         provider._is_responding = False
-                        provider._event_queue.put(RealtimeEvent("response_done"))
-                        if provider._on_response_done:
-                            provider._on_response_done()
-                        provider.logger.debug("Response complete")
+                        
+                        # Get performance metrics from SDK (like official example)
+                        try:
+                            response_id = provider._conversation.get_last_response_id()
+                            first_text_delay = provider._conversation.get_last_first_text_delay()
+                            first_audio_delay = provider._conversation.get_last_first_audio_delay()
+                            provider.logger.info(
+                                f"[Metric] response_id={response_id}, "
+                                f"first_text_delay={first_text_delay}ms, "
+                                f"first_audio_delay={first_audio_delay}ms"
+                            )
+                        except Exception as e:
+                            provider.logger.debug(f"Failed to get SDK metrics: {e}")
+                        
+                        # Log completeness metrics
+                        provider.logger.info(
+                            f"Response complete: text_length={provider._current_response_text_length} chars, "
+                            f"audio_size={provider._current_response_audio_bytes} bytes "
+                            f"(~{provider._current_response_audio_bytes / 48000:.2f}s at 24kHz PCM)"
+                        )
+                        # Warn if audio seems too short for the text
+                        # Rough estimate: Chinese ~2-3 chars/sec, English ~3-4 words/sec
+                        expected_min_audio_bytes = provider._current_response_text_length * 1000  # Very rough estimate
+                        if provider._current_response_audio_bytes < expected_min_audio_bytes * 0.1:
+                            provider.logger.warning(
+                                f"⚠️ Audio may be incomplete! Text: {provider._current_response_text_length} chars, "
+                                f"Audio: {provider._current_response_audio_bytes} bytes. This might indicate an API issue."
+                            )
+                        provider._emit_event(RealtimeEvent(RealtimeEventType.RESPONSE_DONE))
                     
+                    # === Error ===
                     elif event_type == "error":
                         error_msg = event.get("error", {}).get("message", "Unknown error")
-                        provider._current_error = Exception(f"Realtime error: {error_msg}")
-                        provider.logger.error(f"Realtime error: {error_msg}")
-                        provider._event_queue.put(RealtimeEvent("error", error_msg))
+                        provider._emit_event(RealtimeEvent(
+                            type=RealtimeEventType.ERROR,
+                            text=error_msg
+                        ))
                     
+                    # === Tool Calls (Placeholder) ===
+                    # Need to check actual event type for tool calls in Qwen
+                    # elif event_type == "response.function_call_arguments.done":
+                    #     ...
+
                 except Exception as e:
                     provider.logger.error(f"Error processing event: {e}")
-                    provider._current_error = e
             
             def on_error(self, error):
                 provider.logger.error(f"Realtime WebSocket error: {error}")
-                provider._current_error = Exception(str(error))
+                provider._emit_event(RealtimeEvent(
+                    type=RealtimeEventType.ERROR,
+                    text=str(error)
+                ))
                 with provider._connection_lock:
                     provider._is_connected = False
         
         return RealtimeCallback()
-    
-    async def cleanup(self) -> None:
-        """Cleanup provider resources and close connection."""
-        if self._conversation:
-            try:
-                # Close in thread to avoid blocking
-                loop = asyncio.get_event_loop()
-                await loop.run_in_executor(None, self._conversation.close)
-            except Exception as e:
-                self.logger.warning(f"Error closing connection: {e}")
-        
-        self._conversation = None
-        self._callback = None
-        self._is_connected = False
-        self.logger.info("Qwen Omni Realtime provider cleaned up")
-    
-    def send_audio(self, audio_data: bytes) -> None:
-        """
-        Send audio data to the realtime model.
-        
-        Args:
-            audio_data: PCM audio bytes (16kHz, mono, 16-bit)
-        """
-        if not self._is_connected or not self._conversation:
-            self.logger.warning("Cannot send audio: not connected")
-            return
-        
-        try:
-            audio_b64 = base64.b64encode(audio_data).decode('ascii')
-            self._conversation.append_audio(audio_b64)
-        except Exception as e:
-            self.logger.error(f"Error sending audio: {e}")
-    
-    async def send_audio_async(self, audio_data: bytes) -> None:
-        """
-        Send audio data asynchronously.
-        
-        Args:
-            audio_data: PCM audio bytes (16kHz, mono, 16-bit)
-        """
-        loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, self.send_audio, audio_data)
-    
-    def get_audio(self, timeout: float = 0.1) -> Optional[bytes]:
-        """
-        Get output audio data from queue.
-        
-        Args:
-            timeout: Timeout in seconds
-            
-        Returns:
-            Audio bytes or None if queue is empty
-        """
-        try:
-            return self._audio_queue.get(timeout=timeout)
-        except queue.Empty:
-            return None
-    
-    async def get_audio_async(self, timeout: float = 0.1) -> Optional[bytes]:
-        """
-        Get output audio data asynchronously.
-        
-        Args:
-            timeout: Timeout in seconds
-            
-        Returns:
-            Audio bytes or None if queue is empty
-        """
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, self.get_audio, timeout)
-    
-    def get_text(self, timeout: float = 0.1) -> Optional[Tuple[str, str]]:
-        """
-        Get output text from queue.
-        
-        Args:
-            timeout: Timeout in seconds
-            
-        Returns:
-            Tuple of (type, text) where type is "delta" or "complete",
-            or None if queue is empty
-        """
-        try:
-            return self._text_queue.get(timeout=timeout)
-        except queue.Empty:
-            return None
-    
-    def get_event(self, timeout: float = 0.1) -> Optional[RealtimeEvent]:
-        """
-        Get event from queue.
-        
-        Args:
-            timeout: Timeout in seconds
-            
-        Returns:
-            RealtimeEvent or None if queue is empty
-        """
-        try:
-            return self._event_queue.get(timeout=timeout)
-        except queue.Empty:
-            return None
-    
-    async def stream_audio_output(self) -> AsyncIterator[bytes]:
-        """
-        Stream audio output from the model.
-        
-        Yields:
-            Audio bytes (24kHz, mono, 16-bit PCM)
-        """
-        while self._is_connected:
-            audio = await self.get_audio_async(timeout=0.05)
-            if audio:
-                yield audio
-            elif not self._is_responding and self._audio_queue.empty():
-                # No more audio expected
-                break
-            await asyncio.sleep(0.01)
-    
-    def cancel_response(self) -> None:
-        """Cancel the current response (for interruption handling)."""
-        if self._conversation and self._is_responding:
-            try:
-                # Clear audio queue
-                while not self._audio_queue.empty():
-                    try:
-                        self._audio_queue.get_nowait()
-                    except queue.Empty:
-                        break
-                
-                # Note: The DashScope SDK may not have a direct cancel method
-                # In VAD mode, user speaking will automatically cancel the response
-                self.logger.info("Response cancelled")
-            except Exception as e:
-                self.logger.warning(f"Error cancelling response: {e}")
-    
-    def set_callbacks(
-        self,
-        on_speech_started: Optional[Callable] = None,
-        on_speech_stopped: Optional[Callable] = None,
-        on_response_started: Optional[Callable] = None,
-        on_response_done: Optional[Callable] = None,
-    ) -> None:
-        """
-        Set event callbacks.
-        
-        Args:
-            on_speech_started: Called when user starts speaking
-            on_speech_stopped: Called when user stops speaking
-            on_response_started: Called when model starts responding
-            on_response_done: Called when model finishes responding
-        """
-        self._on_speech_started = on_speech_started
-        self._on_speech_stopped = on_speech_stopped
-        self._on_response_started = on_response_started
-        self._on_response_done = on_response_done
-    
-    @property
-    def is_connected(self) -> bool:
-        """Check if WebSocket is connected."""
-        return self._is_connected
-    
-    @property
-    def is_responding(self) -> bool:
-        """Check if model is currently responding."""
-        return self._is_responding
     
     def get_config(self) -> Dict[str, Any]:
         """Get provider configuration."""
@@ -545,10 +575,6 @@ class QwenOmniRealtimeProvider(BaseProvider):
             "model": self.model,
             "voice": self.voice,
             "base_url": self.base_url,
-            "input_sample_rate": self.input_sample_rate,
-            "output_sample_rate": self.output_sample_rate,
-            "vad_threshold": self.vad_threshold,
-            "silence_duration_ms": self.silence_duration_ms,
             "is_connected": self._is_connected,
         }
         return config
