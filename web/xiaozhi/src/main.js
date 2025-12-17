@@ -255,14 +255,29 @@ class XiaozhiClient {
     
     const avatar = document.createElement('div');
     avatar.className = 'avatar';
-    avatar.textContent = role === 'user' ? '👤' : '🤖';
+    avatar.textContent = role === 'user' ? '👤' : '👧';
+    
+    const messageContent = document.createElement('div');
+    messageContent.className = 'message-content';
+    
+    const timestamp = document.createElement('div');
+    timestamp.className = 'timestamp';
+    const now = new Date();
+    const hours = String(now.getHours()).padStart(2, '0');
+    const minutes = String(now.getMinutes()).padStart(2, '0');
+    const seconds = String(now.getSeconds()).padStart(2, '0');
+    const milliseconds = String(now.getMilliseconds()).padStart(3, '0');
+    timestamp.textContent = `${hours}:${minutes}:${seconds}.${milliseconds}`;
     
     const bubble = document.createElement('div');
     bubble.className = 'bubble';
     bubble.textContent = text;
     
+    messageContent.appendChild(timestamp);
+    messageContent.appendChild(bubble);
+    
     div.appendChild(avatar);
-    div.appendChild(bubble);
+    div.appendChild(messageContent);
     
     this.chatContainer.appendChild(div);
     this.scrollToBottom();
