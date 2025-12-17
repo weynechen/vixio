@@ -18,14 +18,21 @@ Note: Outputs TEXT_DELTA for streaming scenarios.
 ASR Provider interface is streaming (AsyncIterator), even for batch engines.
 """
 
-from typing import AsyncIterator
+from typing import AsyncIterator, Optional
 from vixio.core.station import StreamStation
 from vixio.core.chunk import Chunk, ChunkType, TextDeltaChunk, EventChunk
 from vixio.core.middleware import with_middlewares
+from vixio.stations.middlewares import TimeoutHandlerMiddleware
 from vixio.providers.asr import ASRProvider
 
 
 @with_middlewares(
+    # Timeout handler for ASR processing
+    TimeoutHandlerMiddleware(
+        timeout_seconds=10.0,  # Will be overridden in __init__
+        emit_timeout_event=True,
+        send_interrupt_signal=True
+    )
     # Note: StreamStation base class automatically provides:
     # - InputValidatorMiddleware (validates ALLOWED_INPUT_TYPES)
     # - SignalHandlerMiddleware (handles CONTROL_STATE_RESET)
@@ -59,16 +66,23 @@ class ASRStation(StreamStation):
     EMITS_COMPLETION = True
     AWAITS_COMPLETION = False  # Process audio directly in process_chunk
     
-    def __init__(self, asr_provider: ASRProvider, name: str = "asr"):
+    def __init__(
+        self, 
+        asr_provider: ASRProvider, 
+        timeout_seconds: Optional[float] = 10.0,
+        name: str = "asr"
+    ):
         """
         Initialize ASR station.
         
         Args:
             asr_provider: ASR provider instance
+            timeout_seconds: Timeout for ASR processing (default: 10s, None = no timeout)
             name: Station name
         """
         super().__init__(name=name, enable_interrupt_detection=True)
         self.asr = asr_provider
+        self.timeout_seconds = timeout_seconds
         self._is_processing = False
         
     def _configure_middlewares_hook(self, middlewares: list) -> None:
@@ -77,9 +91,10 @@ class ASRStation(StreamStation):
         
         Allows customizing middleware settings after attachment.
         """
-        # Set interrupt callback
         for middleware in middlewares:
-            if middleware.__class__.__name__ == 'SignalHandlerMiddleware':
+            if middleware.__class__.__name__ == 'TimeoutHandlerMiddleware':
+                middleware.timeout_seconds = self.timeout_seconds
+            elif middleware.__class__.__name__ == 'SignalHandlerMiddleware':
                 middleware.on_interrupt = self._handle_interrupt
     
     async def _handle_interrupt(self) -> None:

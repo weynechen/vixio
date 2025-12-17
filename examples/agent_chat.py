@@ -303,7 +303,7 @@ async def main():
             # Main flow: transport_in -> vad -> turn_detector -> asr -> ... -> transport_out
             dag.add_edge("transport_in", "vad", "turn_detector", "asr", "text_agg", "agent", "sentence_agg", "tts", "transport_out")
             # STT result branch: asr -> transport_out (show STT text to client)
-            dag.add_edge("asr", "transport_out")
+            dag.add_edge("text_agg", "transport_out")
         else:
             raise ValueError("ASR provider not configured")
         

@@ -47,6 +47,9 @@ class TimeoutHandlerMiddleware(DataMiddleware):
         """
         Process data chunk with timeout monitoring.
         
+        Uses asyncio.wait_for to wrap each iteration of the async generator,
+        ensuring timeout is enforced even if the handler blocks without yielding.
+        
         Args:
             chunk: Data chunk (not signal)
             next_handler: Next handler in chain
@@ -62,56 +65,54 @@ class TimeoutHandlerMiddleware(DataMiddleware):
         
         # Monitor processing time
         start_time = asyncio.get_event_loop().time()
+        gen = next_handler(chunk)
         
         try:
-            async for result in next_handler(chunk):
-                # Check timeout
+            while True:
+                # Calculate remaining timeout
                 elapsed = asyncio.get_event_loop().time() - start_time
-                if elapsed > self.timeout_seconds:
-                    self.logger.warning(
-                        f"Processing timeout after {elapsed:.1f}s "
-                        f"(limit: {self.timeout_seconds}s)"
-                    )
-                    
-                    # Send interrupt signal via control bus
-                    if self.send_interrupt_signal and self.station and self.station.control_bus:
-                        await self.station.control_bus.send_interrupt(
-                            source=self.station.name,
-                            reason="timeout",
-                            metadata={
-                                "timeout_seconds": self.timeout_seconds,
-                                "elapsed_seconds": elapsed
-                            }
-                        )
-                    
-                    # Emit timeout event
-                    if self.emit_timeout_event:
-                        yield EventChunk(
-                            type=ChunkType.EVENT_TIMEOUT,
-                            event_data={
-                                "source": self.station.name if self.station else "Unknown",
-                                "timeout_seconds": self.timeout_seconds,
-                                "elapsed_seconds": elapsed
-                            },
-                            source=self.station.name if self.station else "Unknown",
-                            session_id=chunk.session_id,
-                            turn_id=chunk.turn_id
-                        )
-                    
-                    # Stop processing
-                    break
+                remaining = self.timeout_seconds - elapsed
                 
-                yield result
+                if remaining <= 0:
+                    # Timeout already exceeded
+                    raise asyncio.TimeoutError()
+                
+                try:
+                    # Wait for next result with remaining timeout
+                    # This ensures timeout works even if generator never yields
+                    result = await asyncio.wait_for(
+                        gen.__anext__(),
+                        timeout=remaining
+                    )
+                    yield result
+                    
+                except StopAsyncIteration:
+                    # Generator exhausted normally - exit cleanly
+                    break
         
         except asyncio.TimeoutError:
-            self.logger.error(f"Processing timed out after {self.timeout_seconds}s")
+            # Timeout occurred
+            elapsed = asyncio.get_event_loop().time() - start_time
+            self.logger.error(
+                f"Processing timed out after {elapsed:.1f}s "
+                f"(limit: {self.timeout_seconds}s)"
+            )
             
-            # Send interrupt signal
+            # Close the generator to cleanup resources
+            try:
+                await gen.aclose()
+            except Exception as e:
+                self.logger.warning(f"Error closing generator after timeout: {e}")
+            
+            # Send interrupt signal via control bus
             if self.send_interrupt_signal and self.station and self.station.control_bus:
                 await self.station.control_bus.send_interrupt(
                     source=self.station.name,
                     reason="timeout",
-                    metadata={"timeout_seconds": self.timeout_seconds}
+                    metadata={
+                        "timeout_seconds": self.timeout_seconds,
+                        "elapsed_seconds": elapsed
+                    }
                 )
             
             # Emit timeout event
@@ -120,10 +121,18 @@ class TimeoutHandlerMiddleware(DataMiddleware):
                     type=ChunkType.EVENT_TIMEOUT,
                     event_data={
                         "source": self.station.name if self.station else "Unknown",
-                        "timeout_seconds": self.timeout_seconds
+                        "timeout_seconds": self.timeout_seconds,
+                        "elapsed_seconds": elapsed
                     },
                     source=self.station.name if self.station else "Unknown",
                     session_id=chunk.session_id,
                     turn_id=chunk.turn_id
                 )
+        
+        finally:
+            # Ensure generator is closed on any exit path
+            try:
+                await gen.aclose()
+            except Exception:
+                pass
 

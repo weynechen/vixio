@@ -540,6 +540,15 @@ class OutputStation(Station):
             self.logger.info(f"OutputStation received EVENT_TTS_STOP (turn={chunk.turn_id})")
             return self.protocol.send_tts_event(self._session_id, "stop")
         
+        # Timeout event - reset client to Listen state
+        elif chunk.type == ChunkType.EVENT_TIMEOUT:
+            self.logger.warning(
+                f"OutputStation received EVENT_TIMEOUT (turn={chunk.turn_id}), "
+                f"sending TTS stop to reset client"
+            )
+            # Send TTS stop to let client return to Listen state
+            return self.protocol.send_tts_event(self._session_id, "stop")
+        
         # Other Chunks - try default conversion
         else:
             return self.protocol.chunk_to_message(chunk)

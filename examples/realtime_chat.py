@@ -202,7 +202,7 @@ async def main():
         # Create sentence aggregator provider (enhanced rule-based Chinese)
         sentence_provider = SimpleSentenceAggregatorProviderCN(
             min_sentence_length=5,
-            enable_conjunction_check=True,
+            enable_conjunction_check=False,
             enable_punctuation_pairing=True,
             enable_incomplete_start_check=True,
         )

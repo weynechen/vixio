@@ -14,17 +14,24 @@ Use SentenceAggregatorStation before this to convert TEXT_DELTA to TEXT.
 Refactored with middleware pattern for clean separation of concerns.
 """
 
-from typing import AsyncIterator
+from typing import AsyncIterator, Optional
 from vixio.core.station import StreamStation
 from vixio.core.chunk import Chunk, ChunkType, AudioChunk, EventChunk
 from vixio.core.middleware import with_middlewares
 from vixio.stations.middlewares import (
-    InputValidatorMiddleware
+    InputValidatorMiddleware,
+    TimeoutHandlerMiddleware
 )
 from vixio.providers.tts import TTSProvider
 
 
 @with_middlewares(
+    # Timeout handler for TTS processing
+    TimeoutHandlerMiddleware(
+        timeout_seconds=15.0,  # Will be overridden in __init__
+        emit_timeout_event=True,
+        send_interrupt_signal=True
+    ),
     # Validate input (only TEXT, non-empty)
     # Note: No source check - DAG routing ensures correct data flow
     InputValidatorMiddleware(
@@ -62,12 +69,18 @@ class TTSStation(StreamStation):
     EMITS_COMPLETION = True
     AWAITS_COMPLETION = True
     
-    def __init__(self, tts_provider: TTSProvider, name: str = "tts"): 
+    def __init__(
+        self, 
+        tts_provider: TTSProvider, 
+        timeout_seconds: Optional[float] = 15.0,
+        name: str = "tts"
+    ): 
         """
         Initialize TTS station.
         
         Args:
             tts_provider: TTS provider instance
+            timeout_seconds: Timeout for TTS processing (default: 15s, None = no timeout)
             name: Station name
         """
         super().__init__(
@@ -75,6 +88,7 @@ class TTSStation(StreamStation):
             enable_interrupt_detection=True  # TTS needs interrupt detection during synthesis
         )
         self.tts = tts_provider
+        self.timeout_seconds = timeout_seconds
         self._is_speaking = False
     
     def _configure_middlewares_hook(self, middlewares: list) -> None:
@@ -84,7 +98,9 @@ class TTSStation(StreamStation):
         Configure signal handlers for TTS-specific signals.
         """
         for middleware in middlewares:
-            if middleware.__class__.__name__ == 'SignalHandlerMiddleware':
+            if middleware.__class__.__name__ == 'TimeoutHandlerMiddleware':
+                middleware.timeout_seconds = self.timeout_seconds
+            elif middleware.__class__.__name__ == 'SignalHandlerMiddleware':
                 middleware.on_interrupt = self._handle_interrupt
     
     async def _handle_interrupt(self) -> None:
