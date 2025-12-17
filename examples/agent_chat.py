@@ -68,6 +68,7 @@ from vixio.stations import (
     TTSStation
 )
 from vixio.providers.factory import ProviderFactory
+from vixio.providers.sentence_aggregator import SimpleSentenceAggregatorProviderCN
 from vixio.utils import get_local_ip
 from vixio.config import get_default_config_path
 
@@ -283,7 +284,17 @@ async def main():
             dag.add_node("text_agg", TextAggregatorStation())
         
         dag.add_node("agent", AgentStation(agent_provider))
-        dag.add_node("sentence_agg", SentenceAggregatorStation(min_sentence_length=5))
+        
+        # Create sentence aggregator provider (enhanced rule-based Chinese)
+        sentence_provider = SimpleSentenceAggregatorProviderCN(
+            min_sentence_length=5,
+            enable_conjunction_check=True,
+            enable_punctuation_pairing=True,
+            enable_incomplete_start_check=True,
+        )
+        await sentence_provider.initialize()
+        
+        dag.add_node("sentence_agg", SentenceAggregatorStation(provider=sentence_provider))
         dag.add_node("tts", TTSStation(tts_provider))
         
         # Define edges (data flow)

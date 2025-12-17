@@ -31,6 +31,7 @@ from vixio.providers.asr import ASRProvider
 from vixio.providers.tts import TTSProvider
 from vixio.providers.agent import AgentProvider, Tool
 from vixio.providers.vision import VisionDescriber
+from vixio.providers.sentence_aggregator import SentenceAggregatorProvider
 
 # Provider registry and factory (always available)
 from vixio.providers.registry import ProviderRegistry, register_provider
@@ -263,6 +264,7 @@ __all__ = [
     "AgentProvider",
     "Tool",
     "VisionDescriber",
+    "SentenceAggregatorProvider",
     # Registry and Factory
     "ProviderRegistry",
     "register_provider",
@@ -370,5 +372,12 @@ except ImportError:
 try:
     from vixio.providers.qwen.qwen_omni_realtime import QwenOmniRealtimeProvider
     __all__.append("QwenOmniRealtimeProvider")
+except ImportError:
+    pass
+
+# Sentence aggregator providers (always available)
+try:
+    from vixio.providers.sentence_aggregator import SimpleSentenceAggregatorProviderCN
+    __all__.append("SimpleSentenceAggregatorProviderCN")
 except ImportError:
     pass

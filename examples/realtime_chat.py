@@ -43,6 +43,7 @@ from vixio.core.session import SessionManager
 from vixio.transports.xiaozhi import XiaozhiTransport
 from vixio.stations import RealtimeStation, SentenceAggregatorStation
 from vixio.providers.factory import ProviderFactory
+from vixio.providers.sentence_aggregator import SimpleSentenceAggregatorProviderCN
 from vixio.utils import get_local_ip
 from vixio.config import get_default_config_path
 
@@ -198,8 +199,17 @@ async def main():
         ))
         
         # Add sentence aggregator for Xiaozhi device compatibility (aggregates text deltas)
+        # Create sentence aggregator provider (enhanced rule-based Chinese)
+        sentence_provider = SimpleSentenceAggregatorProviderCN(
+            min_sentence_length=5,
+            enable_conjunction_check=True,
+            enable_punctuation_pairing=True,
+            enable_incomplete_start_check=True,
+        )
+        await sentence_provider.initialize()
+        
         dag.add_node("sentence_aggregator", SentenceAggregatorStation(
-            min_sentence_length=1
+            provider=sentence_provider
         ))
         
         # Define edges: 
