@@ -308,20 +308,31 @@ class ControlBus:
             
             # Timeout reached, send interrupt
             if not self._timeout_cancelled:
-                self.logger.warning(
-                    f"Turn timeout reached after {self._turn_timeout_seconds}s "
-                    f"(turn={self._current_turn_id}), sending interrupt"
-                )
-                await self.send_interrupt(
-                    source="ControlBus",
-                    reason="turn_timeout",
-                    metadata={
-                        "timeout_seconds": self._turn_timeout_seconds,
-                        "turn_id": self._current_turn_id
-                    }
-                )
+                # Check if logger still exists (defensive check for shutdown)
+                if self.logger:
+                    self.logger.warning(
+                        f"Turn timeout reached after {self._turn_timeout_seconds}s "
+                        f"(turn={self._current_turn_id}), sending interrupt"
+                    )
+                
+                # Try to send interrupt, but catch errors during shutdown
+                try:
+                    await self.send_interrupt(
+                        source="ControlBus",
+                        reason="turn_timeout",
+                        metadata={
+                            "timeout_seconds": self._turn_timeout_seconds,
+                            "turn_id": self._current_turn_id
+                        }
+                    )
+                except Exception:
+                    # Ignore errors during shutdown
+                    pass
         except asyncio.CancelledError:
             # Timeout cancelled (VAD detected or turn changed)
+            pass
+        except Exception:
+            # Silently ignore errors during shutdown
             pass
     
     def cancel_turn_timeout(self) -> None:
@@ -335,9 +346,23 @@ class ControlBus:
         
         if self._timeout_task and not self._timeout_task.done():
             self._timeout_task.cancel()
-            self.logger.debug(
-                f"Turn timeout cancelled (turn={self._current_turn_id})"
-            )
+            if self.logger:
+                self.logger.debug(
+                    f"Turn timeout cancelled (turn={self._current_turn_id})"
+                )
+    
+    def cleanup(self) -> None:
+        """
+        Cleanup control bus resources.
+        
+        Cancels any pending timeout tasks.
+        Should be called when session is ending.
+        """
+        # Cancel timeout task if running
+        if self._timeout_task and not self._timeout_task.done():
+            self._timeout_task.cancel()
+            if self.logger:
+                self.logger.debug("Turn timeout task cancelled during cleanup")
     
     def __str__(self) -> str:
         return f"ControlBus(turn_id={self._current_turn_id})"

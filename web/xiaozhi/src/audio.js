@@ -10,6 +10,9 @@ export class AudioController {
         this.nextStartTime = 0;
         this.audioQueue = [];
         this.isPlaying = false;
+        
+        // Track active audio sources for interrupt support
+        this.activeSources = [];
     }
 
     init(ws) {
@@ -76,17 +79,24 @@ export class AudioController {
         this.audioQueue = [];
         this.isPlaying = false;
         
-        // If we want to abruptly stop currently playing audio, we might need reference to current source
-        // For simple BufferSource implementation, we can't easily "stop all", but closing/reopening context is drastic.
-        // A better way is to track the last source or suspend context.
-        // Since we schedule ahead, we can just cancel scheduled events or close context.
-        // For this demo, let's just close and re-init context to "stop" immediately or suspend.
+        // Stop all active audio sources immediately
+        if (this.activeSources.length > 0) {
+            console.log(`Stopping ${this.activeSources.length} active audio sources`);
+            for (const source of this.activeSources) {
+                try {
+                    // Stop the source if it hasn't already stopped
+                    source.stop();
+                } catch (e) {
+                    // Source may have already stopped naturally, ignore error
+                }
+            }
+            // Clear the active sources array
+            this.activeSources = [];
+        }
+        
+        // Reset playback timing
         if (this.context) {
-             this.context.suspend().then(() => {
-                 // IMPORTANT: Resume immediately to allow new recording/playback
-                 this.context.resume();
-                 this.nextStartTime = this.context.currentTime;
-             });
+            this.nextStartTime = this.context.currentTime;
         }
     }
 
@@ -114,6 +124,17 @@ export class AudioController {
         if (this.nextStartTime < this.context.currentTime) {
             this.nextStartTime = this.context.currentTime;
         }
+        
+        // Track this source for interrupt support
+        this.activeSources.push(source);
+        
+        // Remove from active sources when playback ends
+        source.onended = () => {
+            const index = this.activeSources.indexOf(source);
+            if (index > -1) {
+                this.activeSources.splice(index, 1);
+            }
+        };
         
         source.start(this.nextStartTime);
         this.nextStartTime += buffer.duration;

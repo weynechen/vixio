@@ -495,9 +495,13 @@ class SessionManager:
         if connection_id in self._sessions:
             del self._sessions[connection_id]
         
-        # Cleanup ControlBus (clear logger reference to help GC)
+        # Cleanup ControlBus (cancel timeout tasks and clear references)
         if connection_id in self._control_buses:
             control_bus = self._control_buses[connection_id]
+            # Cancel any pending timeout tasks
+            if hasattr(control_bus, "cleanup"):
+                control_bus.cleanup()
+            # Clear logger reference to help GC
             if hasattr(control_bus, "logger"):
                 control_bus.logger = None
             del self._control_buses[connection_id]
@@ -580,6 +584,12 @@ class SessionManager:
                     await asyncio.wait_for(task, timeout=1.0)
                 except (asyncio.CancelledError, asyncio.TimeoutError):
                     pass
+        
+        # Cleanup ControlBus timeout tasks before cleaning up session
+        if connection_id in self._control_buses:
+            control_bus = self._control_buses[connection_id]
+            if hasattr(control_bus, "cleanup"):
+                control_bus.cleanup()
         
         # Cleanup session resources (critical for preventing memory leaks)
         self._cleanup_session(connection_id)
