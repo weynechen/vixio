@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import Optional
 from loguru import logger
+import numpy as np
 
 # Opus codec support
 try:
@@ -19,6 +20,15 @@ except ImportError:
     logger.error("opuslib_next not available, Opus codec disabled")
     logger.warning("if you are in windows,please install opus from https://github.com/ShiftMediaProject/opus/releases")
     logger.warning("if you are in linux,please install opus with sudo apt-get install libopus-dev")
+
+# Resampling support (try scipy first, fallback to numpy)
+try:
+    from scipy import signal as scipy_signal
+    SCIPY_AVAILABLE = True
+except ImportError:
+    scipy_signal = None  # type: ignore
+    SCIPY_AVAILABLE = False
+    logger.warning("scipy not available, will use numpy-based resampling (lower quality)")
 
 
 class OpusCodec:
@@ -324,5 +334,78 @@ def pcm_to_mp3(pcm_data: bytes, sample_rate: int = 16000, channels: int = 1) -> 
         return mp3_data
     except Exception as e:
         logger.error(f"PCM to MP3 conversion error: {e}")
+        raise
+
+
+def resample_pcm(
+    pcm_data: bytes,
+    from_rate: int,
+    to_rate: int,
+    channels: int = 1,
+    sample_width: int = 2
+) -> bytes:
+    """
+    Resample PCM audio data from one sample rate to another.
+    
+    Uses scipy.signal.resample if available (high quality), otherwise falls back
+    to numpy linear interpolation (lower quality but no extra dependency).
+    
+    Args:
+        pcm_data: Input PCM audio bytes (16-bit signed little-endian)
+        from_rate: Source sample rate in Hz
+        to_rate: Target sample rate in Hz
+        channels: Number of audio channels (default: 1)
+        sample_width: Bytes per sample (default: 2 for 16-bit)
+    
+    Returns:
+        Resampled PCM audio bytes
+    
+    Example:
+        # Resample 24kHz audio to 16kHz
+        pcm_16k = resample_pcm(pcm_24k, from_rate=24000, to_rate=16000)
+    """
+    if not pcm_data:
+        return b''
+    
+    # No resampling needed
+    if from_rate == to_rate:
+        return pcm_data
+    
+    try:
+        # Convert bytes to numpy array
+        dtype = np.int16 if sample_width == 2 else np.int8
+        audio_array = np.frombuffer(pcm_data, dtype=dtype)
+        
+        # Handle multi-channel audio
+        if channels > 1:
+            audio_array = audio_array.reshape(-1, channels)
+        
+        # Calculate target length
+        num_samples = len(audio_array)
+        target_length = int(num_samples * to_rate / from_rate)
+        
+        # Resample using scipy (high quality) or numpy (fallback)
+        if SCIPY_AVAILABLE:
+            # scipy.signal.resample uses FFT-based resampling (high quality)
+            resampled = scipy_signal.resample(audio_array, target_length, axis=0)
+        else:
+            # Fallback: linear interpolation using numpy
+            x_old = np.linspace(0, num_samples - 1, num_samples)
+            x_new = np.linspace(0, num_samples - 1, target_length)
+            if channels > 1:
+                resampled = np.zeros((target_length, channels), dtype=np.float64)
+                for ch in range(channels):
+                    resampled[:, ch] = np.interp(x_new, x_old, audio_array[:, ch])
+            else:
+                resampled = np.interp(x_new, x_old, audio_array)
+        
+        # Clip and convert back to original dtype
+        resampled = np.clip(resampled, np.iinfo(dtype).min, np.iinfo(dtype).max)
+        resampled = resampled.astype(dtype)
+        
+        return resampled.tobytes()
+    
+    except Exception as e:
+        logger.error(f"PCM resampling error ({from_rate}Hz -> {to_rate}Hz): {e}")
         raise
 

@@ -352,9 +352,12 @@ class OutputStation(Station):
         # Log chunk reception for debugging
         self.logger.debug(f"OutputStation.process_chunk: type={chunk.type.value}, turn={chunk.turn_id}")
         
-        # Special handling for AUDIO_RAW: split into frames, encode, and send
+        # Special handling for AUDIO_RAW: delegate to protocol for processing
         if chunk.type == ChunkType.AUDIO_RAW and chunk.data:
-            await self._send_audio_frames(chunk.data, chunk.turn_id)
+            # Extract audio metadata from chunk
+            sample_rate = getattr(chunk, 'sample_rate', 16000)
+            channels = getattr(chunk, 'channels', 1)
+            await self._send_audio_frames(chunk.data, chunk.turn_id, sample_rate, channels)
             return
             yield  # Keep as generator
         
@@ -492,9 +495,21 @@ class OutputStation(Station):
         else:
             return self.protocol.chunk_to_message(chunk)
     
-    async def _send_audio_frames(self, pcm_data: bytes, turn_id: int) -> None:
+    async def _send_audio_frames(
+        self, 
+        pcm_data: bytes, 
+        turn_id: int, 
+        sample_rate: int = 16000,
+        channels: int = 1
+    ) -> None:
         """
-        Split audio into frames and put into send queue.
+        Process and send audio frames.
+        
+        Delegates to Protocol for transport-specific processing:
+        - Resampling (if needed)
+        - Frame splitting (protocol-specific requirements)
+        
+        Then encodes each frame and puts into send queue.
         
         Queue data format: (encoded_message, metadata)
         - metadata = {"type": "audio", "turn_id": turn_id, "is_first": bool}
@@ -502,12 +517,12 @@ class OutputStation(Station):
         Args:
             pcm_data: PCM audio data (may be large, from TTS)
             turn_id: Turn ID for latency tracking
+            sample_rate: Input sample rate in Hz
+            channels: Number of audio channels
         """
-        # Split PCM into 60ms frames (16kHz, mono, 16-bit = 1920 bytes per 60ms)
-        frame_size = 1920  # 60ms at 16kHz mono
-        frames = []
-        for i in range(0, len(pcm_data), frame_size):
-            frames.append(pcm_data[i:i + frame_size])
+        # Delegate to Protocol for transport-specific audio processing
+        # Protocol handles resampling + frame splitting based on its requirements
+        frames = self.protocol.prepare_audio_data(pcm_data, sample_rate, channels)
         
         self.logger.debug(f"Sending {len(frames)} audio frames for turn {turn_id}")
         

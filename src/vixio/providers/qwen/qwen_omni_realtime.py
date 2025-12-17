@@ -87,8 +87,8 @@ class QwenOmniRealtimeProvider(BaseRealtimeProvider):
             voice: Voice name for TTS output (Cherry, Ethan, etc.)
             instructions: System prompt for the model
             base_url: WebSocket API URL
-            input_sample_rate: Input audio sample rate (default: 16000)
-            output_sample_rate: Output audio sample rate (default: 24000)
+            input_sample_rate: Input audio sample rate (only support 16000): 16000
+            output_sample_rate: Output audio sample rate (only support 24000): 24000
             vad_threshold: VAD detection threshold (0.0-1.0)
             silence_duration_ms: Silence duration to trigger response (ms)
         """
@@ -228,12 +228,11 @@ class QwenOmniRealtimeProvider(BaseRealtimeProvider):
             try:
                 self._conversation.connect()
                 
-                # Configure session for realtime voice conversation (VAD mode)
                 self._conversation.update_session(
                     output_modalities=[MultiModality.AUDIO, MultiModality.TEXT],
                     voice=self.voice,
-                    input_audio_format=AudioFormat.PCM_16000HZ_MONO_16BIT,
-                    output_audio_format=AudioFormat.PCM_24000HZ_MONO_16BIT,
+                    input_audio_format=AudioFormat.PCM_16000HZ_MONO_16BIT, # Only support 16000Hz input
+                    output_audio_format=AudioFormat.PCM_24000HZ_MONO_16BIT, # Only support 24000Hz output
                     enable_input_audio_transcription=True,
                     input_audio_transcription_model="gummy-realtime-v1",
                     # Enable server-side VAD

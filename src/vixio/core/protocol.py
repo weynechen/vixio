@@ -86,6 +86,35 @@ class ProtocolBase(ABC):
         """
         pass
     
+    @abstractmethod
+    def prepare_audio_data(
+        self, 
+        pcm_data: bytes, 
+        sample_rate: int, 
+        channels: int = 1
+    ) -> list[bytes]:
+        """
+        Prepare audio data for transport-specific sending.
+        
+        Protocol-specific processing includes:
+        - Resample to target sample rate (if needed)
+        - Split into frames according to transport requirements
+        - Return list of PCM frame chunks (NOT encoded yet, encoding done by OutputStation)
+        
+        Different protocols have different requirements:
+        - Xiaozhi: 16kHz, 60ms frames (1920 bytes)
+        - WebRTC: 48kHz, 20ms frames
+        
+        Args:
+            pcm_data: Raw PCM audio data
+            sample_rate: Input sample rate in Hz
+            channels: Number of audio channels (default: 1)
+            
+        Returns:
+            List of PCM frames ready for encoding by codec
+        """
+        pass
+    
     # ============ Business interface layer (optional implementation) ============
     # These methods are called by OutputStation based on Chunk type
     # Returns message dictionary (not encoded data)

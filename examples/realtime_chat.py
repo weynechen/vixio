@@ -178,11 +178,6 @@ async def main():
         
         realtime_provider = session_providers["realtime"]
         
-        # Override output sample rate to 16000Hz to match Xiaozhi device requirements
-        if hasattr(realtime_provider, 'output_sample_rate'):
-            logger.info("Forcing output_sample_rate to 16000Hz for Xiaozhi compatibility")
-            realtime_provider.output_sample_rate = 16000
-        
         # Initialize provider (establishes WebSocket connection)
         await realtime_provider.initialize()
         

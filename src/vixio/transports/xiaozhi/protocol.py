@@ -239,6 +239,70 @@ class XiaozhiProtocol(ProtocolBase):
         # OutputStation will call corresponding business methods based on chunk.type and chunk.source
         return None
     
+    def prepare_audio_data(
+        self, 
+        pcm_data: bytes, 
+        sample_rate: int, 
+        channels: int = 1
+    ) -> list[bytes]:
+        """
+        Prepare audio data for Xiaozhi transport.
+        
+        Xiaozhi requirements:
+        - Sample rate: 16kHz
+        - Frame duration: 60ms (configurable)
+        - Frame size: sample_rate * frame_duration_ms / 1000 * 2 * channels bytes
+        
+        Args:
+            pcm_data: Raw PCM audio data (16-bit signed little-endian)
+            sample_rate: Input sample rate in Hz
+            channels: Number of audio channels
+            
+        Returns:
+            List of PCM frames ready for Opus encoding
+        """
+        if not pcm_data:
+            return []
+        
+        # 1. Resample to target sample rate if needed
+        if sample_rate != self.sample_rate:
+            from vixio.utils.audio.convert import resample_pcm
+            self.logger.debug(
+                f"Resampling audio from {sample_rate}Hz to {self.sample_rate}Hz "
+                f"for Xiaozhi protocol"
+            )
+            try:
+                pcm_data = resample_pcm(
+                    pcm_data,
+                    from_rate=sample_rate,
+                    to_rate=self.sample_rate,
+                    channels=channels,
+                    sample_width=2
+                )
+            except Exception as e:
+                self.logger.error(f"Failed to resample audio: {e}, using original data")
+                # Continue with original data on error
+        
+        # 2. Calculate frame size
+        # frame_duration (ms) * sample_rate (Hz) / 1000 = samples per frame
+        # samples * 2 bytes (16-bit) * channels = bytes per frame
+        samples_per_frame = int(self.sample_rate * self.frame_duration / 1000)
+        frame_size = samples_per_frame * 2 * channels
+        
+        # 3. Split into frames
+        frames = []
+        for i in range(0, len(pcm_data), frame_size):
+            frame = pcm_data[i:i + frame_size]
+            if frame:  # Skip empty frames
+                frames.append(frame)
+        
+        self.logger.debug(
+            f"Split {len(pcm_data)} bytes into {len(frames)} frames "
+            f"({self.frame_duration}ms @ {self.sample_rate}Hz)"
+        )
+        
+        return frames
+    
     def create_hello_message(self, session_id: str = None, **kwargs) -> Dict[str, Any]:
         """
         Create HELLO handshake message.
