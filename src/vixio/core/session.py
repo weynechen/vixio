@@ -50,6 +50,7 @@ class SessionManager:
         self,
         transport: TransportBase,
         dag_factory: Callable[[], DAG],
+        turn_timeout_seconds: Optional[float] = None,
     ):
         """
         Initialize session manager.
@@ -57,9 +58,14 @@ class SessionManager:
         Args:
             transport: Transport to manage connections for
             dag_factory: Factory function that creates a fresh DAG for each connection
+            turn_timeout_seconds: Optional timeout for turn inactivity (None = no timeout).
+                If set, sessions will automatically timeout if no VAD start event
+                is detected within this many seconds after turn increment.
+                Default is None (no timeout).
         """
         self.transport = transport
         self.dag_factory = dag_factory
+        self.turn_timeout_seconds = turn_timeout_seconds
         
         self._is_async_factory = asyncio.iscoroutinefunction(dag_factory)
         self._sessions: Dict[str, asyncio.Task] = {}  # connection_id -> task
@@ -136,9 +142,15 @@ class SessionManager:
         """
         self.logger.info(f"New connection: {connection_id[:8]}")
         
-        # Create ControlBus for this session
-        control_bus = ControlBus()
+        # Create ControlBus for this session with timeout configuration
+        control_bus = ControlBus(turn_timeout_seconds=self.turn_timeout_seconds)
         self._control_buses[connection_id] = control_bus
+        
+        if self.turn_timeout_seconds:
+            self.logger.info(
+                f"Turn timeout enabled: {self.turn_timeout_seconds}s "
+                f"for connection {connection_id[:8]}"
+            )
         
         # Inject ControlBus into Transport (for turn_id management)
         self.transport.set_control_bus(connection_id, control_bus)
@@ -225,6 +237,17 @@ class SessionManager:
                 self.logger.warning(
                     f"[{connection_id[:8]}] DAG interrupt received: {interrupt.source} - {interrupt.reason}"
                 )
+                
+                # Handle turn timeout - close session
+                if interrupt.reason == "turn_timeout":
+                    timeout_seconds = interrupt.metadata.get("timeout_seconds", "unknown")
+                    self.logger.warning(
+                        f"[{connection_id[:8]}] Turn timeout ({timeout_seconds}s) detected, "
+                        f"closing session"
+                    )
+                    # Cancel the session
+                    await self.cancel_session(connection_id)
+                    break
                 
                 # Note: ControlBus.send_interrupt() already:
                 # 1. Notifies all registered handlers (middlewares subscribed)

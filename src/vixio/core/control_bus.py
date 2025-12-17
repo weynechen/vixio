@@ -77,14 +77,27 @@ class ControlBus:
         turn_id = bus.get_current_turn_id()
     """
     
-    def __init__(self):
-        """Initialize control bus."""
+    def __init__(self, turn_timeout_seconds: Optional[float] = None):
+        """
+        Initialize control bus.
+        
+        Args:
+            turn_timeout_seconds: Optional timeout for turn inactivity (None = no timeout).
+                If set, a timeout timer starts when turn increments. If no VAD start
+                event is detected before timeout, session is automatically interrupted.
+        """
         self._current_turn_id = 0
         self._interrupt_queue = asyncio.Queue()
         self._interrupt_event = asyncio.Event()
         self._latest_interrupt: Optional[InterruptSignal] = None
         self._interrupt_handlers: list = []  # List of async/sync interrupt handlers
         self._lock = asyncio.Lock()
+        
+        # Turn timeout detection
+        self._turn_timeout_seconds = turn_timeout_seconds
+        self._timeout_task: Optional[asyncio.Task] = None
+        self._timeout_cancelled = False
+        
         self.logger = logger.bind(component="ControlBus")
     
     def get_current_turn_id(self) -> int:
@@ -240,6 +253,11 @@ class ControlBus:
         async with self._lock:
             self._current_turn_id += 1
             self.logger.info(f"Turn incremented to {self._current_turn_id} (source={source}, reason={reason})")
+            
+            # Start turn timeout timer if configured
+            if self._turn_timeout_seconds and reason != "turn_timeout":
+                self._start_turn_timeout()
+            
             return self._current_turn_id
     
     
@@ -256,6 +274,70 @@ class ControlBus:
             "interrupt_event_set": self._interrupt_event.is_set(),
             "latest_interrupt": str(self._latest_interrupt) if self._latest_interrupt else None
         }
+    
+    def _start_turn_timeout(self) -> None:
+        """
+        Start turn timeout timer.
+        
+        Called automatically after turn increment. If no VAD start event
+        is detected before timeout, send_interrupt() is called automatically.
+        """
+        # Cancel previous timeout task if exists
+        if self._timeout_task and not self._timeout_task.done():
+            self._timeout_task.cancel()
+        
+        self._timeout_cancelled = False
+        
+        # Create new timeout task
+        self._timeout_task = asyncio.create_task(
+            self._timeout_worker(),
+            name=f"turn-timeout-{self._current_turn_id}"
+        )
+        
+        self.logger.debug(
+            f"Turn timeout timer started: {self._turn_timeout_seconds}s "
+            f"(turn={self._current_turn_id})"
+        )
+    
+    async def _timeout_worker(self) -> None:
+        """
+        Worker task that waits for timeout and triggers interrupt.
+        """
+        try:
+            await asyncio.sleep(self._turn_timeout_seconds)
+            
+            # Timeout reached, send interrupt
+            if not self._timeout_cancelled:
+                self.logger.warning(
+                    f"Turn timeout reached after {self._turn_timeout_seconds}s "
+                    f"(turn={self._current_turn_id}), sending interrupt"
+                )
+                await self.send_interrupt(
+                    source="ControlBus",
+                    reason="turn_timeout",
+                    metadata={
+                        "timeout_seconds": self._turn_timeout_seconds,
+                        "turn_id": self._current_turn_id
+                    }
+                )
+        except asyncio.CancelledError:
+            # Timeout cancelled (VAD detected or turn changed)
+            pass
+    
+    def cancel_turn_timeout(self) -> None:
+        """
+        Cancel turn timeout timer.
+        
+        Should be called when VAD start event is detected, indicating
+        user activity has begun.
+        """
+        self._timeout_cancelled = True
+        
+        if self._timeout_task and not self._timeout_task.done():
+            self._timeout_task.cancel()
+            self.logger.debug(
+                f"Turn timeout cancelled (turn={self._current_turn_id})"
+            )
     
     def __str__(self) -> str:
         return f"ControlBus(turn_id={self._current_turn_id})"

@@ -107,6 +107,12 @@ async def main():
         default=None,
         help="Enable DEBUG logging for specific components (e.g., LatencyMonitor InputValidator)"
     )
+    parser.add_argument(
+        "--turn-timeout",
+        type=float,
+        default=30.0,
+        help="Turn inactivity timeout in seconds (default: 30.0). Set to 0 to disable."
+    )
     args = parser.parse_args()
     
     # Configure logger with debug components if specified
@@ -210,9 +216,16 @@ async def main():
         )
     
     # Step 4: Create session manager
+    turn_timeout = args.turn_timeout if args.turn_timeout > 0 else None
+    if turn_timeout:
+        logger.info(f"Turn timeout enabled: {turn_timeout}s")
+    else:
+        logger.info("Turn timeout disabled")
+    
     manager = SessionManager(
         transport=transport,
-        pipeline_factory=create_pipeline
+        pipeline_factory=create_pipeline,
+        turn_timeout_seconds=turn_timeout
     )
     
     # Step 5: Start server

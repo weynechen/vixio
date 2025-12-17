@@ -193,6 +193,11 @@ class VADStation(DetectorStation):
             self._audio_buffer.append(chunk)
             
             self.logger.info("Voice activity started")
+            
+            # Cancel turn timeout if configured
+            if self.control_bus:
+                self.control_bus.cancel_turn_timeout()
+            
             yield EventChunk(
                 type=ChunkType.EVENT_VAD_START,
                 event_data={"has_voice": True},

@@ -327,6 +327,10 @@ class RealtimeStation(StreamStation):
         These are yielded during INPUT phase.
         """
         if event.type == RealtimeEventType.SPEECH_START:
+            # Cancel turn timeout if configured
+            if self.control_bus:
+                self.control_bus.cancel_turn_timeout()
+            
             if self.emit_events:
                 return EventChunk(
                     type=ChunkType.EVENT_VAD_START,

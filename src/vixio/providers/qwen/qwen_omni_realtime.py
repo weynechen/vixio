@@ -427,9 +427,12 @@ class QwenOmniRealtimeProvider(BaseRealtimeProvider):
                     self.logger.debug(f"Yielding event: {event.type}")
                     yield event
                     
-                    # Stop on RESPONSE_DONE
+                    # Stop on RESPONSE_DONE or ERROR
                     if event.type == RealtimeEventType.RESPONSE_DONE:
                         self.logger.debug("RESPONSE_DONE received, stream complete")
+                        break
+                    elif event.type == RealtimeEventType.ERROR:
+                        self.logger.warning(f"ERROR event received: {event.text}, stopping stream")
                         break
                         
                 except asyncio.TimeoutError:
@@ -455,6 +458,12 @@ class QwenOmniRealtimeProvider(BaseRealtimeProvider):
                 provider.logger.info(f"Realtime WebSocket closed: {close_status_code}, {close_msg}")
                 with provider._connection_lock:
                     provider._is_connected = False
+                
+                # Emit error event to notify session that connection is closed
+                provider._emit_event(RealtimeEvent(
+                    type=RealtimeEventType.ERROR,
+                    text=f"WebSocket connection closed: {close_status_code}"
+                ))
             
             def on_event(self, event):
                 try:
