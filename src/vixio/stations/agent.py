@@ -91,6 +91,7 @@ class AgentStation(StreamStation):
         """
         super().__init__(
             name=name,
+            output_role="bot",
             timeout_seconds=timeout_seconds,
             enable_interrupt_detection=True
         )

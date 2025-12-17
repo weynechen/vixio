@@ -67,16 +67,20 @@ class Station(ABC):
     EMITS_COMPLETION: bool = False          # Emits completion signal when done
     AWAITS_COMPLETION: bool = False         # Needs completion signal to trigger
     
-    def __init__(self, name: Optional[str] = None):
+    def __init__(self, name: Optional[str] = None, output_role: Optional[str] = None):
         """
         Initialize station.
         
         Args:
             name: Station name for logging (defaults to class name)
+            output_role: Output chunk role ("user" or "bot"), None means don't override chunk's role
         """
         self.name = name or self.__class__.__name__
         self._session_id: Optional[str] = None
         self.logger = logger.bind(component=self.name)
+        
+        # Role management: station can declare output role to override chunk's default
+        self.output_role = output_role
         
         # Turn tracking
         self.current_turn_id = 0
@@ -123,6 +127,8 @@ class Station(ABC):
                     async for output_chunk in self.on_completion(chunk):
                         # Propagate turn ID
                         output_chunk.turn_id = self.current_turn_id
+                        # Apply station output role if configured
+                        self._apply_output_role(output_chunk)
                         self.logger.debug(f"[{self.name}] Yield from on_completion: {output_chunk}")
                         yield output_chunk
                 except Exception as e:
@@ -135,12 +141,27 @@ class Station(ABC):
                 async for output_chunk in self.process_chunk(chunk):
                     # Propagate turn ID
                     output_chunk.turn_id = self.current_turn_id
+                    # Apply station output role if configured
+                    self._apply_output_role(output_chunk)
                     self.logger.debug(f"[{self.name}] Yield: {output_chunk}")
                     yield output_chunk
             except Exception as e:
                 chunk_type = "signal" if chunk.is_signal() else "data"
                 chunk_str = str(chunk).replace('{', '{{').replace('}', '}}')  # Escape braces for loguru
                 self.logger.error(f"[{self.name}] Error processing {chunk_type} {chunk_str}: {e}", exc_info=True)
+    
+    def _apply_output_role(self, chunk: Chunk) -> None:
+        """
+        Apply station-level output role to chunk if configured.
+        
+        If self.output_role is set, override the chunk's role attribute.
+        This allows stations to declare their output role uniformly.
+        
+        Args:
+            chunk: Output chunk to modify (in-place)
+        """
+        if self.output_role is not None:
+            chunk.role = self.output_role
     
     async def reset_state(self) -> None:
         """
@@ -356,6 +377,7 @@ class StreamStation(Station):
         timeout_seconds: Optional[float] = None,
         enable_interrupt_detection: bool = True,
         name: Optional[str] = None,
+        output_role: Optional[str] = None,
         **kwargs
     ):
         """
@@ -365,9 +387,10 @@ class StreamStation(Station):
             timeout_seconds: Processing timeout in seconds (None = no timeout)
             enable_interrupt_detection: Enable interrupt detection during streaming
             name: Station name (defaults to class name)
+            output_role: Output chunk role ("user" or "bot"), None means don't override
             **kwargs: Additional arguments for base Station
         """
-        super().__init__(name=name, **kwargs)
+        super().__init__(name=name, output_role=output_role, **kwargs)
         self.timeout_seconds = timeout_seconds
         self.enable_interrupt_detection = enable_interrupt_detection
         
@@ -417,15 +440,16 @@ class BufferStation(Station):
     EMITS_COMPLETION: bool = False  # Subclass can override
     AWAITS_COMPLETION: bool = True  # Buffer stations need completion signal
     
-    def __init__(self, name: Optional[str] = None, **kwargs):
+    def __init__(self, name: Optional[str] = None, output_role: Optional[str] = None, **kwargs):
         """
         Initialize buffer station.
         
         Args:
             name: Station name (defaults to class name)
+            output_role: Output chunk role ("user" or "bot"), None means don't override
             **kwargs: Additional arguments for base Station
         """
-        super().__init__(name=name, **kwargs)
+        super().__init__(name=name, output_role=output_role, **kwargs)
     
     @property
     def INPUT_TYPES(self) -> list:
@@ -464,15 +488,16 @@ class DetectorStation(Station):
     EMITS_COMPLETION: bool = True
     AWAITS_COMPLETION: bool = False
     
-    def __init__(self, name: Optional[str] = None, **kwargs):
+    def __init__(self, name: Optional[str] = None, output_role: Optional[str] = None, **kwargs):
         """
         Initialize detector station.
         
         Args:
             name: Station name (defaults to class name)
+            output_role: Output chunk role ("user" or "bot"), None means don't override
             **kwargs: Additional arguments for base Station
         """
-        super().__init__(name=name, **kwargs)
+        super().__init__(name=name, output_role=output_role, **kwargs)
     
     @property
     def INPUT_TYPES(self) -> list:

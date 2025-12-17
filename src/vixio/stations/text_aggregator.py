@@ -55,7 +55,7 @@ class TextAggregatorStation(BufferStation):
         Args:
             name: Station name
         """
-        super().__init__(name=name)
+        super().__init__(name=name, output_role=None)  # Don't override role, pass through
         self._text_buffer = ""
         self._source = ""  # Remember the source of accumulated text
     

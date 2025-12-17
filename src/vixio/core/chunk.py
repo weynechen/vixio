@@ -131,6 +131,7 @@ class Chunk:
         type: Chunk type
         data: Data payload
         source: Source station name (e.g., "asr", "agent", "user")
+        role: Role of the content owner ("user" or "bot")
         metadata: Additional metadata
         timestamp: Creation timestamp
         session_id: Session identifier
@@ -140,6 +141,7 @@ class Chunk:
     type: ChunkType
     data: Any = None
     source: str = ""  # Source station name (asr, agent, user, etc.)
+    role: str = "user"  # Content owner: "user" or "bot"
     metadata: Dict[str, Any] = field(default_factory=dict)
     timestamp: float = field(default_factory=time.time)
     session_id: Optional[str] = None

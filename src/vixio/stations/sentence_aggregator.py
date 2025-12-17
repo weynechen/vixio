@@ -66,7 +66,7 @@ class SentenceAggregatorStation(BufferStation):
             provider: Sentence aggregator provider implementation
             name: Station name
         """
-        super().__init__(name=name)
+        super().__init__(name=name, output_role=None)  # Don't override role, pass through
         self.provider = provider
         self.logger.info(f"Using provider: {provider.name}")
         

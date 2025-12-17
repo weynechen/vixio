@@ -80,7 +80,7 @@ class ASRStation(StreamStation):
             timeout_seconds: Timeout for ASR processing (default: 10s, None = no timeout)
             name: Station name
         """
-        super().__init__(name=name, enable_interrupt_detection=True)
+        super().__init__(name=name, output_role="user", enable_interrupt_detection=True)
         self.asr = asr_provider
         self.timeout_seconds = timeout_seconds
         self._is_processing = False

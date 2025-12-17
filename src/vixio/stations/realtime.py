@@ -114,7 +114,7 @@ class RealtimeStation(StreamStation):
             tools: Optional list of tools to register with the provider
             instructions: Optional system instructions
         """
-        super().__init__(name=name, enable_interrupt_detection=True)
+        super().__init__(name=name, output_role=None, enable_interrupt_detection=True)
         self.provider = provider
         self.emit_text = emit_text
         self.emit_events = emit_events
@@ -155,6 +155,7 @@ class RealtimeStation(StreamStation):
                 sample_rate=self.provider.output_sample_rate if hasattr(self.provider, 'output_sample_rate') else 24000,
                 channels=1,
                 source=self.name,  # Use station name for latency monitoring
+                role="bot",  # Bot response audio
                 session_id=self.current_session_id,
                 turn_id=self.current_turn_id,
             )
@@ -170,6 +171,7 @@ class RealtimeStation(StreamStation):
                     type=ChunkType.TEXT_DELTA,
                     data=event.text,
                     source=self.name,  # Use station name for consistency
+                    role="bot",  # Bot response text
                     session_id=self.current_session_id,
                     turn_id=self.current_turn_id,
                 )
@@ -403,6 +405,7 @@ class RealtimeStation(StreamStation):
                     type=ChunkType.TEXT,
                     data=event.text,
                     source="asr",
+                    role="user",  # User transcript
                     session_id=self.current_session_id,
                     turn_id=self.current_turn_id,
                 )

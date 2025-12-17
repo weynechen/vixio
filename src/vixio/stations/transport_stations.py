@@ -500,13 +500,15 @@ class OutputStation(Station):
         if chunk.type == ChunkType.TEXT:
             text = chunk.data
             source = chunk.source or ""
-            return self.protocol.send_text(self._session_id, text, source)
+            role = chunk.role if hasattr(chunk, 'role') else "user"
+            return self.protocol.send_text(self._session_id, text, source, role)
         
-        # TEXT_DELTA chunks - pass source to Protocol
+        # TEXT_DELTA chunks - pass role to Protocol
         elif chunk.type == ChunkType.TEXT_DELTA:
             text = chunk.data
             source = chunk.source or ""
-            return self.protocol.send_text_delta(self._session_id, text, source)
+            role = chunk.role if hasattr(chunk, 'role') else "user"
+            return self.protocol.send_text_delta(self._session_id, text, source, role)
         
         # AUDIO chunks - skip here, handled separately in process_chunk
         elif chunk.type == ChunkType.AUDIO_RAW:

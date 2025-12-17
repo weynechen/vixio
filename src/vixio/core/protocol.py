@@ -161,78 +161,76 @@ class ProtocolBase(ABC):
         session_id: str, 
         text: str, 
         source: str = "",
+        role: str = "user",
         **params
     ) -> Optional[Dict[str, Any]]:
         """
-        Create TEXT message with source information.
+        Create TEXT message with role information.
         
-        DAG decoupling: OutputStation passes type + source to Protocol.
-        Protocol decides message format based on source.
+        DAG decoupling: OutputStation passes type + role to Protocol.
+        Protocol decides message format based on chunk role.
         
-        Default implementation routes based on source:
-        - "asr" or similar -> send_stt()
-        - "agent" or similar -> send_llm()
-        - others -> generic text message
+        Default implementation routes based on role:
+        - "user" -> send_stt() (user speech text)
+        - "bot" -> send_llm() (bot response text)
         
         Subclasses can override for custom routing.
         
         Args:
             session_id: Session ID
             text: Text content
-            source: Source station name (e.g., "asr", "agent", "TextAggregator")
+            source: Source station name (for logging, not used for routing)
+            role: Content owner role ("user" or "bot")
             **params: Protocol-specific parameters
             
         Returns:
             Text message dictionary
         """
-        source_lower = source.lower() if source else ""
-        
-        if "asr" in source_lower:
+        if role == "user":
             return self.send_stt(session_id, text, **params)
-        elif "agent" in source_lower:
+        elif role == "bot":
             return self.send_llm(session_id, text, **params)
         else:
-            # Default: try send_llm as fallback
-            return self.send_llm(session_id, text, **params)
+            # Default: treat as user input
+            return self.send_stt(session_id, text, **params)
     
     def send_text_delta(
         self, 
         session_id: str, 
         text: str, 
         source: str = "",
+        role: str = "user",
         **params
     ) -> Optional[Dict[str, Any]]:
         """
-        Create TEXT_DELTA (streaming text) message with source information.
+        Create TEXT_DELTA (streaming text) message with role information.
         
-        DAG decoupling: OutputStation passes type + source to Protocol.
-        Protocol decides message format based on source.
+        DAG decoupling: OutputStation passes type + role to Protocol.
+        Protocol decides message format based on chunk role.
         
-        Default implementation routes based on source:
-        - "asr" -> send_stt() for streaming ASR
-        - "agent" -> send_llm() for streaming LLM
-        - others -> generic text delta message
+        Default implementation routes based on role:
+        - "user" -> send_stt() for streaming user speech
+        - "bot" -> send_llm() for streaming bot response
         
         Subclasses can override for custom routing.
         
         Args:
             session_id: Session ID
             text: Text delta content
-            source: Source station name (e.g., "asr", "agent")
+            source: Source station name (for logging, not used for routing)
+            role: Content owner role ("user" or "bot")
             **params: Protocol-specific parameters
             
         Returns:
             Text delta message dictionary
         """
-        source_lower = source.lower() if source else ""
-        
-        if "asr" in source_lower:
+        if role == "user":
             return self.send_stt(session_id, text, is_delta=True, **params)
-        elif "agent" in source_lower:
+        elif role == "bot":
             return self.send_llm(session_id, text, is_delta=True, **params)
         else:
-            # Default: try send_llm as fallback
-            return self.send_llm(session_id, text, is_delta=True, **params)
+            # Default: treat as user input
+            return self.send_stt(session_id, text, is_delta=True, **params)
     
     def send_stt(self, session_id: str, text: str, **params) -> Optional[Dict[str, Any]]:
         """

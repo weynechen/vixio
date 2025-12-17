@@ -85,6 +85,7 @@ class TTSStation(StreamStation):
         """
         super().__init__(
             name=name,
+            output_role="bot",
             enable_interrupt_detection=True  # TTS needs interrupt detection during synthesis
         )
         self.tts = tts_provider
