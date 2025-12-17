@@ -140,6 +140,7 @@ class OpusCodec:
         if len(pcm_data) < expected_bytes:
             # Pad with zeros if not enough data
             pcm_data = pcm_data + b'\x00' * (expected_bytes - len(pcm_data))
+            logger.warning(f"PCM data too short ({len(pcm_data)} bytes), padding with zeros to {expected_bytes} bytes")
         elif len(pcm_data) > expected_bytes:
             # Truncate if too much data
             logger.warning(f"PCM data too long ({len(pcm_data)} bytes), truncating to {expected_bytes}")

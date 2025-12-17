@@ -367,6 +367,55 @@ class OutputStation(Station):
             return
             yield  # Keep as generator
         
+        # Special handling for EVENT_TTS_STOP: flush audio buffer first
+        if chunk.type == ChunkType.EVENT_TTS_STOP:
+            # Step 1: Flush remaining audio buffer BEFORE sending TTS_STOP
+            if hasattr(self.protocol, 'flush_audio_buffer'):
+                remaining_frames = self.protocol.flush_audio_buffer(self._session_id)
+                
+                if remaining_frames:
+                    self.logger.info(
+                        f"Flushing {len(remaining_frames)} remaining audio frames "
+                        f"BEFORE TTS_STOP (turn={chunk.turn_id})"
+                    )
+                    
+                    for frame_idx, frame in enumerate(remaining_frames):
+                        if not frame:
+                            continue
+                        
+                        # Encode frame
+                        if self.audio_codec:
+                            try:
+                                encoded_data = self.audio_codec.encode(frame)
+                            except Exception as e:
+                                self.logger.error(f"Failed to encode flushed frame: {e}")
+                                continue
+                        else:
+                            encoded_data = frame
+                        
+                        # Create audio message
+                        message = self.protocol.send_tts_audio(self._session_id, encoded_data)
+                        if not message:
+                            continue
+                        
+                        # Encode message
+                        try:
+                            encoded_message = self.protocol.encode_message(message)
+                        except Exception as e:
+                            self.logger.error(f"Failed to encode flushed audio message: {e}")
+                            continue
+                        
+                        # Put into send queue
+                        metadata = {
+                            "type": "audio",
+                            "turn_id": chunk.turn_id,
+                            "is_first": False,
+                            "is_flushed": True  # Mark as flushed frame
+                        }
+                        await self._send_queue.put((encoded_message, metadata))
+            
+            # Step 2: Continue to send TTS_STOP message (falls through to normal handling)
+        
         # 1. Call Protocol business methods based on Chunk type
         message = await self._chunk_to_message(chunk)
         
@@ -507,6 +556,7 @@ class OutputStation(Station):
         
         Delegates to Protocol for transport-specific processing:
         - Resampling (if needed)
+        - Frame buffering (keeps incomplete tail for next chunk)
         - Frame splitting (protocol-specific requirements)
         
         Then encodes each frame and puts into send queue.
@@ -521,8 +571,13 @@ class OutputStation(Station):
             channels: Number of audio channels
         """
         # Delegate to Protocol for transport-specific audio processing
-        # Protocol handles resampling + frame splitting based on its requirements
-        frames = self.protocol.prepare_audio_data(pcm_data, sample_rate, channels)
+        # Protocol handles resampling + frame buffering + frame splitting
+        frames = self.protocol.prepare_audio_data(
+            pcm_data, 
+            sample_rate, 
+            channels,
+            session_id=self._session_id
+        )
         
         self.logger.debug(f"Sending {len(frames)} audio frames for turn {turn_id}")
         

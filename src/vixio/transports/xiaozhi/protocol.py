@@ -5,7 +5,7 @@ Defines message format and encoding/decoding for Xiaozhi devices
 """
 
 import json
-from typing import Union, Dict, Any, Optional
+from typing import Union, Dict, Any, Optional, List
 from vixio.core.protocol import ProtocolBase
 from vixio.core.chunk import Chunk, ChunkType, AudioChunk, TextChunk, ControlChunk
 from loguru import logger
@@ -67,6 +67,10 @@ class XiaozhiProtocol(ProtocolBase):
         self.channels = channels
         self.frame_duration = frame_duration
         self.logger = logger.bind(component="XiaozhiProtocol")
+        
+        # Audio frame buffering (per-session)
+        # Keeps incomplete tail frames for next chunk
+        self._audio_buffers: Dict[str, bytes] = {}
     # ============ ProtocolBase interface implementation ============
     
     def decode_message(self, data: Union[bytes, str]) -> Dict[str, Any]:
@@ -243,26 +247,38 @@ class XiaozhiProtocol(ProtocolBase):
         self, 
         pcm_data: bytes, 
         sample_rate: int, 
-        channels: int = 1
-    ) -> list[bytes]:
+        channels: int = 1,
+        session_id: str = None
+    ) -> List[bytes]:
         """
-        Prepare audio data for Xiaozhi transport.
+        Prepare audio data for Xiaozhi transport with frame buffering.
         
         Xiaozhi requirements:
         - Sample rate: 16kHz
         - Frame duration: 60ms (configurable)
         - Frame size: sample_rate * frame_duration_ms / 1000 * 2 * channels bytes
         
+        Buffering strategy:
+        1. Prepend residual bytes from previous call (if any)
+        2. Split into complete frames only
+        3. Keep incomplete tail for next call
+        4. Use flush_audio_buffer() to get final padded frame
+        
         Args:
             pcm_data: Raw PCM audio data (16-bit signed little-endian)
             sample_rate: Input sample rate in Hz
             channels: Number of audio channels
+            session_id: Session ID for stateful buffering (required)
             
         Returns:
-            List of PCM frames ready for Opus encoding
+            List of COMPLETE PCM frames ready for Opus encoding
         """
         if not pcm_data:
             return []
+        
+        if not session_id:
+            self.logger.warning("session_id not provided, buffering disabled")
+            session_id = "default"
         
         # 1. Resample to target sample rate if needed
         if sample_rate != self.sample_rate:
@@ -283,25 +299,80 @@ class XiaozhiProtocol(ProtocolBase):
                 self.logger.error(f"Failed to resample audio: {e}, using original data")
                 # Continue with original data on error
         
-        # 2. Calculate frame size
+        # 2. Prepend residual from previous chunk (if any)
+        residual = self._audio_buffers.get(session_id, b'')
+        if residual:
+            self.logger.debug(
+                f"Prepending {len(residual)} residual bytes from previous chunk "
+                f"(session={session_id[:8]})"
+            )
+            pcm_data = residual + pcm_data
+        
+        # 3. Calculate frame size
         # frame_duration (ms) * sample_rate (Hz) / 1000 = samples per frame
         # samples * 2 bytes (16-bit) * channels = bytes per frame
         samples_per_frame = int(self.sample_rate * self.frame_duration / 1000)
         frame_size = samples_per_frame * 2 * channels
         
-        # 3. Split into frames
+        # 4. Split into COMPLETE frames only
         frames = []
-        for i in range(0, len(pcm_data), frame_size):
-            frame = pcm_data[i:i + frame_size]
-            if frame:  # Skip empty frames
-                frames.append(frame)
+        offset = 0
+        while offset + frame_size <= len(pcm_data):
+            frame = pcm_data[offset:offset + frame_size]
+            frames.append(frame)
+            offset += frame_size
+        
+        # 5. Keep incomplete tail for next chunk
+        tail = pcm_data[offset:]
+        if tail:
+            self._audio_buffers[session_id] = tail
+            self.logger.debug(
+                f"Buffered {len(tail)} bytes for next chunk "
+                f"(session={session_id[:8]}, {len(tail)}/{frame_size} bytes)"
+            )
+        else:
+            # No tail, clear buffer
+            self._audio_buffers[session_id] = b''
         
         self.logger.debug(
-            f"Split {len(pcm_data)} bytes into {len(frames)} frames "
-            f"({self.frame_duration}ms @ {self.sample_rate}Hz)"
+            f"Split {len(pcm_data)} bytes into {len(frames)} complete frames "
+            f"(session={session_id[:8]}, {self.frame_duration}ms @ {self.sample_rate}Hz)"
         )
         
         return frames
+    
+    def flush_audio_buffer(self, session_id: str) -> List[bytes]:
+        """
+        Flush remaining audio buffer (called on TTS_STOP).
+        
+        Returns any incomplete tail frame padded to complete frame size.
+        
+        Args:
+            session_id: Session ID to flush buffer for
+            
+        Returns:
+            List containing 0 or 1 padded frame
+        """
+        tail = self._audio_buffers.pop(session_id, b'')
+        
+        if not tail:
+            self.logger.debug(f"No residual audio to flush (session={session_id[:8]})")
+            return []
+        
+        # Calculate frame size
+        samples_per_frame = int(self.sample_rate * self.frame_duration / 1000)
+        frame_size = samples_per_frame * 2 * self.channels
+        
+        # Pad tail to complete frame
+        padding_size = frame_size - len(tail)
+        padded_frame = tail + (b'\x00' * padding_size)
+        
+        self.logger.info(
+            f"Flushed audio buffer: padded {len(tail)} bytes with {padding_size} zero bytes "
+            f"to complete {frame_size}-byte frame (session={session_id[:8]})"
+        )
+        
+        return [padded_frame]
     
     def create_hello_message(self, session_id: str = None, **kwargs) -> Dict[str, Any]:
         """

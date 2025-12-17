@@ -91,7 +91,8 @@ class ProtocolBase(ABC):
         self, 
         pcm_data: bytes, 
         sample_rate: int, 
-        channels: int = 1
+        channels: int = 1,
+        session_id: str = None
     ) -> list[bytes]:
         """
         Prepare audio data for transport-specific sending.
@@ -99,7 +100,8 @@ class ProtocolBase(ABC):
         Protocol-specific processing includes:
         - Resample to target sample rate (if needed)
         - Split into frames according to transport requirements
-        - Return list of PCM frame chunks (NOT encoded yet, encoding done by OutputStation)
+        - Buffer incomplete tail for next call (stateful protocols)
+        - Return list of COMPLETE PCM frame chunks (NOT encoded yet)
         
         Different protocols have different requirements:
         - Xiaozhi: 16kHz, 60ms frames (1920 bytes)
@@ -109,11 +111,31 @@ class ProtocolBase(ABC):
             pcm_data: Raw PCM audio data
             sample_rate: Input sample rate in Hz
             channels: Number of audio channels (default: 1)
+            session_id: Session ID for stateful buffering (optional)
             
         Returns:
-            List of PCM frames ready for encoding by codec
+            List of complete PCM frames ready for encoding by codec
         """
         pass
+    
+    def flush_audio_buffer(self, session_id: str) -> list[bytes]:
+        """
+        Flush remaining audio buffer (called on TTS_STOP).
+        
+        For stateful protocols with frame buffering, this method should:
+        1. Return any incomplete tail frame (padded to complete frame)
+        2. Clear the buffer for this session
+        
+        For stateless protocols, simply return empty list.
+        
+        Args:
+            session_id: Session ID to flush buffer for
+            
+        Returns:
+            List of remaining frames (usually 0 or 1 frame)
+        """
+        # Default implementation: no buffering
+        return []
     
     # ============ Business interface layer (optional implementation) ============
     # These methods are called by OutputStation based on Chunk type
