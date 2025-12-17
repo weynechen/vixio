@@ -263,6 +263,15 @@ class DAGNode:
             event_emitter: Optional event emitter
         """
         sent = False
+        
+        # Debug logging for TEXT_DELTA routing
+        if chunk.type == ChunkType.TEXT_DELTA:
+            text_preview = str(chunk.data)[:30] if chunk.data else ""
+            self.logger.debug(
+                f"[DAG_ROUTE] {self.name} routing TEXT_DELTA: '{text_preview}' "
+                f"to {len(self.downstream)} downstream(s)"
+            )
+        
         for downstream in self.downstream:
             if downstream.accepts(chunk):
                 await downstream.input_queue.put(chunk)
@@ -277,14 +286,32 @@ class DAGNode:
                 self.stats.chunks_forwarded += 1
                 sent = True
 
+                # Debug logging for TEXT_DELTA routing
+                if chunk.type == ChunkType.TEXT_DELTA:
+                    self.logger.debug(
+                        f"[DAG_ROUTE] {self.name} -> {downstream.name}: TEXT_DELTA accepted"
+                    )
+
                 # Emit edge active event
                 if event_emitter:
                     await event_emitter.emit_edge_active(
                         self.name, downstream.name, chunk
                     )
+            else:
+                # Debug logging for rejected chunks
+                if chunk.type == ChunkType.TEXT_DELTA:
+                    self.logger.debug(
+                        f"[DAG_ROUTE] {self.name} -> {downstream.name}: TEXT_DELTA REJECTED "
+                        f"(allowed_types={downstream.allowed_input_types})"
+                    )
 
         # If no downstream accepted or no downstream at all, send to output
         if not sent or not self.downstream:
+            if chunk.type == ChunkType.TEXT_DELTA:
+                self.logger.debug(
+                    f"[DAG_ROUTE] {self.name}: TEXT_DELTA sent to output_queue "
+                    f"(sent={sent}, downstream_count={len(self.downstream)})"
+                )
             await output_queue.put(chunk)
 
     async def _input_iterator(self) -> AsyncIterator[Chunk]:

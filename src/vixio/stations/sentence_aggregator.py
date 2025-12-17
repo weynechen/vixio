@@ -81,6 +81,25 @@ class SentenceAggregatorStation(BufferStation):
         self.provider.reset()
         self.logger.debug("sentence aggregator provider reset")
     
+    async def reset_state(self) -> None:
+        """
+        Reset state for new turn.
+        
+        Called automatically when turn changes. Flushes remaining buffer
+        and resets provider state.
+        """
+        # Flush remaining buffer before reset
+        remaining = self.provider.flush()
+        if remaining:
+            self.logger.warning(
+                f"[SENTENCE_AGG] Turn reset with unflushed buffer: '{remaining[:50]}...' "
+                f"(length={len(remaining)})"
+            )
+        
+        # Reset provider state
+        self.provider.reset()
+        self.logger.debug(f"[SENTENCE_AGG] State reset, buffer cleared")
+    
     async def process_chunk(self, chunk: Chunk) -> AsyncIterator[Chunk]:
         """
         Process chunk through sentence aggregator - CORE LOGIC ONLY.
@@ -103,9 +122,20 @@ class SentenceAggregatorStation(BufferStation):
             # Extract text from data attribute (unified API)
             delta = chunk.data if isinstance(chunk.data, str) else (str(chunk.data) if chunk.data else "")
             
+            self.logger.debug(
+                f"[SENTENCE_AGG] Received TEXT_DELTA: '{delta}' "
+                f"(source={chunk.source}, session={chunk.session_id[:8] if chunk.session_id else 'N/A'}, "
+                f"turn={chunk.turn_id})"
+            )
+            
             if delta:
                 # Add delta to provider and get complete sentences
                 sentences = self.provider.add_chunk(delta)
+                
+                self.logger.debug(
+                    f"[SENTENCE_AGG] Provider returned {len(sentences)} sentence(s), "
+                    f"buffer_size={len(self.provider.buffer)}"
+                )
                 
                 # Yield each complete sentence as TEXT chunk
                 for sentence in sentences:
@@ -118,6 +148,8 @@ class SentenceAggregatorStation(BufferStation):
                         session_id=chunk.session_id,
                         turn_id=chunk.turn_id
                     )
+            else:
+                self.logger.debug(f"[SENTENCE_AGG] Empty delta, skipped")
     
     async def on_completion(self, event: EventChunk) -> AsyncIterator[Chunk]:
         """
@@ -131,6 +163,11 @@ class SentenceAggregatorStation(BufferStation):
         Yields:
             Final TEXT chunk (if any) + completion event
         """
+        self.logger.debug(
+            f"[SENTENCE_AGG] Received COMPLETION event from {event.source}, "
+            f"buffer_size={len(self.provider.buffer)}"
+        )
+        
         remaining = self.provider.flush()
         if remaining:
             self.logger.info(f"Flushing final sentence: '{remaining[:50]}...'")
@@ -141,8 +178,11 @@ class SentenceAggregatorStation(BufferStation):
                 session_id=event.session_id,
                 turn_id=event.turn_id
             )
+        else:
+            self.logger.debug(f"[SENTENCE_AGG] No remaining text to flush")
         
         # Emit completion event (triggers TTS stop)
+        self.logger.debug(f"[SENTENCE_AGG] Emitting completion event")
         yield self.emit_completion(
             session_id=event.session_id,
             turn_id=event.turn_id

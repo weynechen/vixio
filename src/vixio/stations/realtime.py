@@ -91,7 +91,7 @@ class RealtimeStation(StreamStation):
     LATENCY_OUTPUT_TYPES = [ChunkType.AUDIO_RAW]
     
     # Completion contract
-    EMITS_COMPLETION = False  # Realtime model handles turn management
+    EMITS_COMPLETION = True   # Emit completion to flush downstream aggregators
     AWAITS_COMPLETION = False  # Processes audio continuously
     
     def __init__(
@@ -162,6 +162,10 @@ class RealtimeStation(StreamStation):
         # 2. Text Delta -> TEXT_DELTA
         elif event.type == RealtimeEventType.TEXT_DELTA:
             if self.emit_text and event.text:
+                self.logger.debug(
+                    f"[REALTIME] Emitting TEXT_DELTA: '{event.text}' "
+                    f"(session={self.current_session_id[:8]}, turn={self.current_turn_id})"
+                )
                 chunk = TextDeltaChunk(
                     type=ChunkType.TEXT_DELTA,
                     data=event.text,
@@ -327,6 +331,15 @@ class RealtimeStation(StreamStation):
                             # Check for completion
                             if event.type == RealtimeEventType.RESPONSE_DONE:
                                 self.logger.info("Response complete, resetting to INPUT phase")
+                                
+                                # Emit completion signal to flush downstream aggregators
+                                completion_chunk = self.emit_completion(
+                                    session_id=self.current_session_id,
+                                    turn_id=self.current_turn_id
+                                )
+                                self.logger.debug(f"[REALTIME] Emitting completion event to flush aggregators")
+                                yield completion_chunk
+                                
                                 # Reset for next turn
                                 self._phase = ProcessingPhase.INPUT
                                 self._speech_stopped = False
@@ -342,8 +355,15 @@ class RealtimeStation(StreamStation):
                 output_chunk = self._convert_event_to_chunk(event)
                 if output_chunk:
                     yield output_chunk
-                
+
                 if event.type == RealtimeEventType.RESPONSE_DONE:
+                    # Emit completion signal to flush downstream aggregators
+                    completion_chunk = self.emit_completion(
+                        session_id=self.current_session_id,
+                        turn_id=self.current_turn_id
+                    )
+                    self.logger.debug(f"[REALTIME] Emitting completion event after tool output")
+                    yield completion_chunk
                     break
     
     def _convert_immediate_event(self, event: RealtimeEvent) -> Optional[Chunk]:
