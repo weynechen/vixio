@@ -1,0 +1,41 @@
+# Qwen Omni Realtime Mode
+# Low latency, end-to-end voice conversation
+#
+# Architecture:
+#   Audio → RealtimeStation → Audio
+#
+# The Qwen Omni Realtime model integrates:
+#   - VAD (Voice Activity Detection)
+#   - ASR (Speech Recognition)
+#   - LLM (Language Model)
+#   - TTS (Text-to-Speech)
+# All in a single model with minimal latency.
+#
+# Requirements:
+#   - DashScope API Key
+#   - Install: pip install vixio[quickstart]
+#
+# Usage:
+#   uvx vixio run xiaozhi-server --preset qwen-realtime --dashscope-key sk-xxx
+
+providers:
+  # Realtime Provider (Qwen Omni - End-to-End Voice)
+  realtime:
+    provider: qwen-omni-realtime
+    config:
+      api_key: ${DASHSCOPE_API_KEY}
+      model: "qwen3-omni-flash-realtime"
+      voice: "Cherry"              # Available: Cherry, Zhichu, Zhixiaobai, etc.
+      instructions: ${VIXIO_PROMPT:你是一个友好的AI语音助手。用简洁自然的语气回答问题，像和朋友聊天一样。回答要简短，适合语音播放。总是先用一个简短的句子回答核心问题，以句号结束，不要用逗号。如果需要详细说明，再分成多个简短的句子。}
+      input_sample_rate: 16000
+      output_sample_rate: 24000
+      vad_threshold: 0.5           # Voice activity detection threshold
+      silence_duration_ms: 800     # Silence duration to trigger turn end
+
+  # Vision Provider (Optional - for image analysis)
+  vlm:
+    provider: openai-vlm-remote
+    config:
+      model: "qwen-vl-max"
+      api_key: "${DASHSCOPE_API_KEY}"
+      base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"

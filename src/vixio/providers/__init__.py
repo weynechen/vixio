@@ -317,23 +317,27 @@ except ImportError:
 
 # Local inference providers (gRPC clients - always available)
 # These are renamed to follow the dual-mode pattern
-# Note: Catch both ImportError (package not installed) and RuntimeError (grpc version mismatch)
+# Note: Catch ImportError (package not installed), RuntimeError (grpc version mismatch),
+#       and any protobuf version errors
 try:
     from vixio.providers.silero_vad.grpc_provider import LocalSileroVADProvider
     __all__.append("LocalSileroVADProvider")
-except (ImportError, RuntimeError):
+except Exception:
+    # Silently skip if gRPC or protobuf dependencies are not available
     pass
 
 try:
     from vixio.providers.sherpa_onnx_local.grpc_provider import LocalSherpaASRProvider
     __all__.append("LocalSherpaASRProvider")
-except (ImportError, RuntimeError):
+except Exception:
+    # Silently skip if gRPC or protobuf dependencies are not available
     pass
 
 try:
     from vixio.providers.kokoro_cn_tts_local.grpc_provider import LocalKokoroTTSProvider
     __all__.append("LocalKokoroTTSProvider")
-except (ImportError, RuntimeError):
+except Exception:
+    # Silently skip if gRPC or protobuf dependencies are not available
     pass
 
 # In-process local inference providers (requires heavy dependencies)

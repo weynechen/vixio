@@ -2,22 +2,29 @@
 Vixio CLI - Command Line Interface
 
 Usage:
+    # Quick start - run from package
+    vixio run xiaozhi-server --dashscope-key sk-xxx
+    
+    # Initialize project template
+    vixio init xiaozhi-server
+    
+    # Serve inference services
     vixio serve vad --port 50051
     vixio serve asr --port 50052
     vixio serve tts --port 50053
     vixio serve all
+    
+    # Show version
     vixio --version
-
-Note:
-    Services are located in the inference/ directory (workspace members).
-    Run them with: uv run --package <service-name> python server.py
-    Or: cd inference/<service> && uv run python server.py
 """
 
 import argparse
+import asyncio
 import os
+import shutil
 import subprocess
 import sys
+from pathlib import Path
 from typing import Optional
 
 
@@ -218,6 +225,171 @@ def list_services() -> None:
     print("  cd inference/silero_vad && uv run python server.py --port 50051")
 
 
+def run_server_command(args) -> int:
+    """Run xiaozhi-server from package"""
+    from vixio.xiaozhi.presets import get_preset_path, AVAILABLE_PRESETS
+    
+    # Get preset
+    preset_name = args.preset
+    
+    try:
+        preset_path = get_preset_path(preset_name)
+    except (ValueError, FileNotFoundError) as e:
+        print(f"Error: {e}")
+        return 1
+    
+    # Check API Key
+    api_key = args.dashscope_key or os.getenv("DASHSCOPE_API_KEY")
+    if not api_key:
+        print("Error: DashScope API Key not provided!")
+        print("")
+        print("Please provide API key via:")
+        print("  1. Command line: --dashscope-key sk-xxx")
+        print("  2. Environment variable: export DASHSCOPE_API_KEY=sk-xxx")
+        print("")
+        print("Get your API key from: https://dashscope.console.aliyun.com/")
+        return 1
+    
+    # Set environment variables
+    os.environ["DASHSCOPE_API_KEY"] = api_key
+    
+    # Disable LiteLLM model cost map download to avoid startup delay
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    
+    # Set prompt
+    if args.prompt:
+        os.environ["VIXIO_PROMPT"] = args.prompt
+        print(f"   Using custom prompt (from --prompt)")
+    elif args.prompt_file:
+        prompt_path = Path(args.prompt_file)
+        if not prompt_path.exists():
+            print(f"Error: Prompt file not found: {prompt_path}")
+            return 1
+        with open(prompt_path) as f:
+            custom_prompt = f.read().strip()
+            os.environ["VIXIO_PROMPT"] = custom_prompt
+            print(f"   Using custom prompt from file: {prompt_path}")
+            print(f"   Prompt preview: {custom_prompt[:80]}..." if len(custom_prompt) > 80 else f"   Prompt: {custom_prompt}")
+    elif not os.getenv("VIXIO_PROMPT"):
+        # Set default prompt
+        default_prompt = (
+            "你是一个友好的AI语音助手。用简洁自然的语气回答问题，像和朋友聊天一样。"
+            "回答要简短，适合语音播放。总是先用一个简短的句子回答核心问题，以句号结束，不要用逗号。"
+            "如果需要详细说明，再分成多个简短的句子。"
+        )
+        os.environ["VIXIO_PROMPT"] = default_prompt
+    
+    # Determine mode from preset
+    if preset_name == "qwen-realtime":
+        mode = "realtime"
+    else:
+        mode = "pipeline"
+    
+    print(f"Starting Xiaozhi Server...")
+    print(f"   Preset: {preset_name}")
+    print(f"   Mode:   {mode}")
+    print(f"   Host:   {args.host}")
+    print(f"   Port:   {args.port}")
+    print("")
+    
+    # Import and run
+    try:
+        if mode == "realtime":
+            from vixio.xiaozhi.runners import run_realtime_server
+            asyncio.run(run_realtime_server(
+                config_path=str(preset_path),
+                env=None,  # Preset configs don't have env
+                host=args.host,
+                port=args.port,
+                turn_timeout=args.turn_timeout,
+                prompt=os.getenv("VIXIO_PROMPT"),
+            ))
+        else:
+            from vixio.xiaozhi.runners import run_pipeline_server
+            asyncio.run(run_pipeline_server(
+                config_path=str(preset_path),
+                env=None,  # Preset configs don't have env
+                host=args.host,
+                port=args.port,
+                turn_timeout=args.turn_timeout,
+                prompt=os.getenv("VIXIO_PROMPT"),
+            ))
+    except KeyboardInterrupt:
+        print("\nShutting down...")
+        return 0
+    except Exception as e:
+        print(f"\nError: {e}")
+        import traceback
+        traceback.print_exc()
+        return 1
+    
+    return 0
+
+
+def init_project_command(args) -> int:
+    """Initialize project from template"""
+    from vixio.xiaozhi.templates import get_template_path, AVAILABLE_TEMPLATES
+    from vixio.xiaozhi.presets import get_preset_path, AVAILABLE_PRESETS
+    
+    template_name = args.template
+    preset_name = args.preset
+    output_dir = Path(args.output) if args.output else Path(f"./{template_name}")
+    
+    # Validate template
+    try:
+        template_path = get_template_path(template_name)
+    except (ValueError, FileNotFoundError) as e:
+        print(f"Error: {e}")
+        return 1
+    
+    # Validate preset
+    try:
+        preset_path = get_preset_path(preset_name)
+    except (ValueError, FileNotFoundError) as e:
+        print(f"Error: {e}")
+        return 1
+    
+    # Check if output directory exists
+    if output_dir.exists():
+        print(f"Error: Directory already exists: {output_dir}")
+        return 1
+    
+    # Copy template
+    print(f"Creating project from template...")
+    print(f"   Template: {template_name}")
+    print(f"   Preset:   {preset_name}")
+    print(f"   Output:   {output_dir}")
+    print("")
+    
+    try:
+        shutil.copytree(template_path, output_dir)
+        
+        # Copy preset config to config.yaml
+        shutil.copy(preset_path, output_dir / "config.yaml")
+        
+        print(f"Project created successfully!")
+        print("")
+        print("Next steps:")
+        print(f"   cd {output_dir}")
+        print(f"   cp .env.example .env")
+        print(f"   # Edit .env and set DASHSCOPE_API_KEY")
+        print(f"   # Edit prompt.txt (optional)")
+        print(f"   # Edit config.yaml (optional)")
+        print(f"   uv run python run.py")
+        print("")
+        print(f"Or run directly with:")
+        print(f"   cd {output_dir}")
+        print(f"   DASHSCOPE_API_KEY=sk-xxx uv run python run.py")
+        
+        return 0
+        
+    except Exception as e:
+        print(f"Error creating project: {e}")
+        import traceback
+        traceback.print_exc()
+        return 1
+
+
 def main(args: Optional[list] = None) -> int:
     """Main entry point"""
     parser = argparse.ArgumentParser(
@@ -232,7 +404,74 @@ def main(args: Optional[list] = None) -> int:
     
     subparsers = parser.add_subparsers(dest="command", help="Commands")
     
-    # serve command
+    # run command - Quick start
+    run_parser = subparsers.add_parser(
+        "run",
+        help="Run xiaozhi-server from package (quick start)"
+    )
+    run_parser.add_argument(
+        "template",
+        choices=["xiaozhi-server"],
+        help="Template to run"
+    )
+    run_parser.add_argument(
+        "--preset", "-p",
+        choices=["qwen", "qwen-realtime"],
+        default="qwen",
+        help="Preset configuration (default: qwen)"
+    )
+    run_parser.add_argument(
+        "--dashscope-key", "-k",
+        help="DashScope API Key (or set DASHSCOPE_API_KEY env var)"
+    )
+    run_parser.add_argument(
+        "--prompt",
+        help="Custom system prompt"
+    )
+    run_parser.add_argument(
+        "--prompt-file",
+        help="Load prompt from file"
+    )
+    run_parser.add_argument(
+        "--host",
+        default="0.0.0.0",
+        help="Server host (default: 0.0.0.0)"
+    )
+    run_parser.add_argument(
+        "--port",
+        type=int,
+        default=8000,
+        help="Server port (default: 8000)"
+    )
+    run_parser.add_argument(
+        "--turn-timeout",
+        type=float,
+        default=30.0,
+        help="Turn timeout in seconds (default: 30.0, 0 to disable)"
+    )
+    
+    # init command - Create project from template
+    init_parser = subparsers.add_parser(
+        "init",
+        help="Initialize project from template"
+    )
+    init_parser.add_argument(
+        "template",
+        choices=["xiaozhi-server"],
+        help="Template name"
+    )
+    init_parser.add_argument(
+        "--preset", "-p",
+        choices=["qwen", "qwen-realtime"],
+        default="qwen",
+        help="Preset configuration (default: qwen)"
+    )
+    init_parser.add_argument(
+        "--output", "-o",
+        help="Output directory (default: ./<template>)"
+    )
+    
+    # serve command - Start inference services
     serve_parser = subparsers.add_parser("serve", help="Start inference services")
     serve_parser.add_argument(
         "service",
@@ -260,7 +499,13 @@ def main(args: Optional[list] = None) -> int:
         return 0
     
     # Handle commands
-    if parsed_args.command == "serve":
+    if parsed_args.command == "run":
+        return run_server_command(parsed_args)
+    
+    elif parsed_args.command == "init":
+        return init_project_command(parsed_args)
+    
+    elif parsed_args.command == "serve":
         if parsed_args.list or not parsed_args.service:
             list_services()
             return 0

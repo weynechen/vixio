@@ -133,7 +133,7 @@ class QwenOmniRealtimeProvider(BaseRealtimeProvider):
         self.logger = base_logger.bind(component=self.name)
         self.logger.info(
             f"Initialized Qwen Omni Realtime provider "
-            f"(model={model}, voice={voice})"
+            f"(model={model}, voice={voice}, instructions={instructions})"
         )
     
     @classmethod

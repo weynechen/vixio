@@ -130,6 +130,11 @@ dev-qwen = [
     "vixio[xiaozhi,openai-agent,silero-vad-local,qwen]",
 ]
 
+# quick start (same as dev-qwen, for beginners)
+quickstart = [
+    "vixio[xiaozhi,openai-agent,silero-vad-local,qwen]",
+]
+
 
 # ------------ Development and test tools ------------
 test = [
@@ -198,6 +203,13 @@ package-dir = {"" = "src"}
 where = ["src"]
 include = ["vixio*"]
 exclude = ["tests*", "docs*", "examples*", "inference*"]
+
+[tool.setuptools.package-data]
+vixio = [
+    "xiaozhi/presets/*.yaml",
+    "xiaozhi/templates/**/*",
+    "xiaozhi/templates/**/.env.example",
+]
 
 # ============================================================
 # Tool configurations

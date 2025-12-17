@@ -21,6 +21,47 @@ A streaming voice-powered agent framework based on pipeline architecture
 - Python 3.12 or higher
 - [uv](https://docs.astral.sh/uv/) (recommended package manager)
 
+## 🚀 Quick Start
+
+Get started with Vixio in just one command! Experience real-time voice conversation powered by Qwen Omni:
+
+```bash
+# Install and run in one step (requires DashScope API key)
+uvx vixio run xiaozhi-server \
+  --preset qwen-realtime \
+  --dashscope-key sk-your-key-here
+```
+
+**What you get:**
+- 🎙️ WebSocket server running at `http://localhost:8000`
+- 🤖 End-to-end voice AI with Qwen Omni Realtime
+- ⚡ Low latency, integrated VAD + ASR + LLM + TTS
+- 📱 Ready for xiaozhi devices or custom clients
+
+**Get your API key:** [DashScope Console](https://dashscope.console.aliyun.com/)
+
+### Customize Your Bot
+
+```bash
+# Use custom prompt
+uvx vixio run xiaozhi-server \
+  --preset qwen-realtime \
+  --dashscope-key sk-xxx \
+  --prompt "你是一个专业的编程助手"
+
+# Use pipeline mode (more control)
+uvx vixio run xiaozhi-server \
+  --dashscope-key sk-xxx
+
+# Export template for full customization
+uvx vixio init xiaozhi-server
+cd xiaozhi-server
+# Edit .env, config.yaml, prompt.txt
+python run.py
+```
+
+---
+
 ## Installation
 
 ### Using uv (Recommended)

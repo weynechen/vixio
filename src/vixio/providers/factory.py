@@ -2,7 +2,7 @@
 Provider factory for creating providers from configuration
 """
 
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from loguru import logger
 from vixio.providers.base import BaseProvider
 from vixio.providers.registry import ProviderRegistry
@@ -66,13 +66,17 @@ class ProviderFactory:
         return provider
     
     @staticmethod
-    def create_from_config_file(config_path: str, env: str = "dev") -> Dict[str, BaseProvider]:
+    def create_from_config_file(config_path: str, env: Optional[str] = None) -> Dict[str, BaseProvider]:
         """
         Create all providers from YAML config file.
         
+        Supports two config formats:
+        1. Single-environment: { providers: {...} }
+        2. Multi-environment: { dev: { providers: {...} }, prod: {...} }
+        
         Args:
             config_path: Path to YAML config file
-            env: Environment name (dev/docker/k8s)
+            env: Environment name (dev/docker/k8s). If None, auto-detect format.
             
         Returns:
             Dictionary of {category: provider}
@@ -95,12 +99,25 @@ class ProviderFactory:
         with open(config_path) as f:
             config = yaml.safe_load(f)
         
-        if env not in config:
-            raise ValueError(f"Environment '{env}' not found in config. Available: {list(config.keys())}")
+        # Determine config format and extract providers config
+        if "providers" in config:
+            # Single-environment config (e.g., preset files)
+            env_config = config
+        elif env is not None:
+            # Multi-environment config with specified env
+            if env not in config:
+                raise ValueError(f"Environment '{env}' not found in config. Available: {list(config.keys())}")
+            env_config = config[env]
+        else:
+            # Multi-environment config without specified env - use first available
+            available_envs = [k for k in config.keys() if k != "version"]
+            if not available_envs:
+                raise ValueError("No environment found in config")
+            env = available_envs[0]
+            env_config = config[env]
         
-        env_config = config[env]
         if 'providers' not in env_config:
-            raise ValueError(f"No 'providers' section in {env} config")
+            raise ValueError(f"No 'providers' section in config")
         
         providers = {}
         for category, provider_config in env_config['providers'].items():
