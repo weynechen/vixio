@@ -49,6 +49,8 @@ from vixio.core.chunk import (
 )
 from vixio.providers.realtime import BaseRealtimeProvider, RealtimeEvent, RealtimeEventType
 from vixio.core.tools.types import ToolDefinition
+from vixio.utils import get_latency_monitor
+from vixio.core.middleware import with_middlewares
 
 
 class ProcessingPhase(Enum):
@@ -56,7 +58,13 @@ class ProcessingPhase(Enum):
     INPUT = "input"    # Collecting user audio
     OUTPUT = "output"  # Streaming provider response
 
-
+@with_middlewares(
+    # Note: StreamStation base class automatically provides:
+    # - InputValidatorMiddleware (validates ALLOWED_INPUT_TYPES)
+    # - LatencyMonitorMiddleware (monitors first AUDIO_RAW output)
+    # - InterruptDetectorMiddleware (if enable_interrupt_detection=True)
+    # - ErrorHandlerMiddleware (graceful error handling)
+)
 class RealtimeStation(StreamStation):
     """
     Realtime voice conversation station.
@@ -77,7 +85,9 @@ class RealtimeStation(StreamStation):
     
     ROLE = StationRole.STREAM
     ALLOWED_INPUT_TYPES = [ChunkType.AUDIO_RAW, ChunkType.TOOL_OUTPUT]
-    LATENCY_METRIC_NAME = "realtime_first_audio"
+    # Use "tts_first_audio_ready" to integrate with LatencyMonitor's standard metrics
+    # For realtime station, this represents the first audio output from the integrated model
+    LATENCY_METRIC_NAME = "tts_first_audio_ready"
     LATENCY_OUTPUT_TYPES = [ChunkType.AUDIO_RAW]
     
     # Completion contract
@@ -116,6 +126,9 @@ class RealtimeStation(StreamStation):
         self._speech_stopped = False
         self._pending_events: asyncio.Queue = asyncio.Queue()
         
+        # Latency monitoring for realtime station
+        self._latency_monitor = get_latency_monitor()
+        
         # Register event handler for phase detection
         self.provider.set_event_handler(self._handle_provider_event)
     
@@ -141,7 +154,7 @@ class RealtimeStation(StreamStation):
                 data=event.data,
                 sample_rate=self.provider.output_sample_rate if hasattr(self.provider, 'output_sample_rate') else 24000,
                 channels=1,
-                source="agent",
+                source=self.name,  # Use station name for latency monitoring
                 session_id=self.current_session_id,
                 turn_id=self.current_turn_id,
             )
@@ -152,7 +165,7 @@ class RealtimeStation(StreamStation):
                 chunk = TextDeltaChunk(
                     type=ChunkType.TEXT_DELTA,
                     data=event.text,
-                    source="agent",
+                    source=self.name,  # Use station name for consistency
                     session_id=self.current_session_id,
                     turn_id=self.current_turn_id,
                 )
@@ -164,7 +177,7 @@ class RealtimeStation(StreamStation):
                 call_id=event.tool_call_id,
                 tool_name=event.tool_name,
                 arguments=event.tool_args,
-                source="agent",
+                source=self.name,  # Use station name for consistency
                 session_id=self.current_session_id,
                 turn_id=self.current_turn_id,
             )
@@ -202,7 +215,19 @@ class RealtimeStation(StreamStation):
             # Detect phase transition: INPUT -> OUTPUT
             if event.type == RealtimeEventType.SPEECH_STOP:
                 self._speech_stopped = True
-                self.logger.info("Speech stopped detected, will switch to OUTPUT phase")
+                
+                # Record T0: user_speech_end IMMEDIATELY when VAD detects speech stop
+                # This must be done here (not in _convert_immediate_event) to capture
+                # the exact moment when speech stops, not when the event is processed
+                self._latency_monitor.record(
+                    self.current_session_id,
+                    self.current_turn_id,
+                    "user_speech_end",
+                )
+                self.logger.info(
+                    f"Speech stopped detected, recorded user_speech_end "
+                    f"(session={self.current_session_id[:8]}, turn={self.current_turn_id})"
+                )
             
             # Enqueue immediate events (VAD, user transcript) for INPUT phase
             if event.type in [
@@ -340,6 +365,9 @@ class RealtimeStation(StreamStation):
                 )
         
         elif event.type == RealtimeEventType.SPEECH_STOP:
+            # Note: user_speech_end is already recorded in _handle_provider_event
+            # for accurate timing (at the moment speech stops, not when event is processed)
+            
             if self.emit_events:
                 return EventChunk(
                     type=ChunkType.EVENT_VAD_END,
