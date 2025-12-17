@@ -78,15 +78,23 @@ class TextAggregatorStation(BufferStation):
         
         DAG routing rules:
         - Only process chunks matching ALLOWED_INPUT_TYPES (TEXT_DELTA)
-        - Do NOT passthrough - DAG handles routing to downstream nodes
+        - Passthrough signals (EVENT_*) for downstream nodes
         - Accumulate text into buffer (output triggered by on_completion)
         
         Core logic:
         - Accumulate TEXT_DELTA chunks into buffer
         - Output is triggered by on_completion() when upstream sends EVENT_STREAM_COMPLETE
+        - Passthrough signal chunks to allow event propagation
         
         Note: SignalHandlerMiddleware handles CONTROL_STATE_RESET (clears buffer via _handle_interrupt)
         """
+        # Passthrough signal chunks (events need to reach OutputStation)
+        # DAG accepts all signals, but BufferStation doesn't process them
+        if chunk.is_signal():
+            self.logger.debug(f"Passthrough signal: {chunk.type}")
+            yield chunk
+            return
+        
         # Accumulate TEXT_DELTA chunks
         if chunk.type == ChunkType.TEXT_DELTA:
             # Extract text from data attribute (unified API)
