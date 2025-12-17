@@ -42,13 +42,52 @@ class LatencyMonitor:
         """
         self.sessions: Dict[str, Dict[int, Dict[str, float]]] = {}
         self.log_dir = log_dir
+        self._handler_id: Optional[int] = None
         
         # Ensure log directory exists
         os.makedirs(log_dir, exist_ok=True)
         
-        # Configure loguru for latency logging (JSON format)
-        log_file = os.path.join(log_dir, "latency_{time:YYYY-MM-DD}.json")
-        logger.add(
+        # Add latency JSON handler
+        self._ensure_handler()
+    
+    def _check_handler_exists(self) -> bool:
+        """
+        Check if the latency handler still exists.
+        
+        Returns:
+            True if handler exists, False otherwise
+        """
+        if self._handler_id is None:
+            return False
+        
+        # Check if handler ID is still valid
+        try:
+            # Try to access handler by checking logger's handlers
+            # This is a workaround since loguru doesn't provide direct API
+            # to check if a handler ID is valid
+            from loguru._logger import Logger
+            if hasattr(logger, '_core'):
+                handlers = logger._core.handlers
+                return self._handler_id in handlers
+        except Exception:
+            pass
+        
+        return False
+    
+    def _ensure_handler(self) -> None:
+        """
+        Ensure latency JSON handler is added to logger.
+        
+        This method is idempotent - it only adds the handler if it doesn't exist.
+        This handles the case where logger.remove() is called elsewhere (e.g., in logger_config).
+        """
+        # Check if handler already exists and is valid
+        if self._check_handler_exists():
+            return
+        
+        # Add or re-add the handler
+        log_file = os.path.join(self.log_dir, "latency_{time:YYYY-MM-DD}.json")
+        self._handler_id = logger.add(
             log_file,
             rotation="00:00",  # Rotate daily
             retention="30 days",
@@ -57,6 +96,7 @@ class LatencyMonitor:
             filter=lambda record: "latency_report" in record["extra"],
             serialize=True,  # Output as JSON
         )
+        logger.debug(f"Latency JSON handler added/re-added with ID: {self._handler_id}")
     
     def record(
         self,
@@ -191,6 +231,9 @@ class LatencyMonitor:
             turn_id: Turn number
             extra_data: Additional data to include in report
         """
+        # Ensure handler exists before logging (in case logger.remove() was called)
+        self._ensure_handler()
+        
         timestamps = self.get_timestamps(session_id, turn_id)
         latencies = self.calculate_latencies(session_id, turn_id)
         
