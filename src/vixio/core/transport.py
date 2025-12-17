@@ -618,6 +618,12 @@ class TransportBase(ABC):
                 if not is_priority and is_flow_control and is_audio:
                     await output_controller.wait_for_next()
                 
+                # 2.5. Special handling for TTS_STOP: delay to allow client buffer playback
+                # Client doesn't wait for buffer completion, so delay before sending TTS_STOP
+                if is_tts_stop:
+                    delay_ms = 150
+                    await asyncio.sleep(delay_ms / 1000.0)
+                
                 # 3. Send data
                 try:
                     await self._do_write(session_id, data)
