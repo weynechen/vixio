@@ -395,15 +395,8 @@ class QwenOmniRealtimeProvider(BaseRealtimeProvider):
         Yields:
             RealtimeEvent: Events from Qwen (audio, text, etc.)
         """
-        # Activate queue mode (callbacks will now enqueue events)
-        self._response_active = True
-        
-        # Clear any stale events from previous responses
-        while not self._response_queue.empty():
-            try:
-                self._response_queue.get_nowait()
-            except asyncio.QueueEmpty:
-                break
+        # Note: Queue activation happens in response.created event handler, not here.
+        # This ensures we don't miss events that arrive before stream_response() is called.
         
         self.logger.debug("Stream response started, waiting for events...")
         
@@ -440,8 +433,7 @@ class QwenOmniRealtimeProvider(BaseRealtimeProvider):
                     continue
                     
         finally:
-            # Deactivate queue mode
-            self._response_active = False
+            # Note: Queue deactivation happens in response.done event handler
             self.logger.debug("Stream response ended")
 
     def _create_callback(self):
@@ -458,6 +450,9 @@ class QwenOmniRealtimeProvider(BaseRealtimeProvider):
                 provider.logger.info(f"Realtime WebSocket closed: {close_status_code}, {close_msg}")
                 with provider._connection_lock:
                     provider._is_connected = False
+                
+                # Deactivate queue on connection close
+                provider._response_active = False
                 
                 # Emit error event to notify session that connection is closed
                 provider._emit_event(RealtimeEvent(
@@ -514,6 +509,13 @@ class QwenOmniRealtimeProvider(BaseRealtimeProvider):
                         # Reset tracking counters for new response
                         provider._current_response_text_length = 0
                         provider._current_response_audio_bytes = 0
+                        
+                        # Activate queue mode IMMEDIATELY when response starts
+                        # This ensures we capture all events (text, audio) that arrive
+                        # before stream_response() is called (race condition fix)
+                        provider._response_active = True
+                        provider.logger.debug("Response queue activated (response.created)")
+                        
                         provider._emit_event(RealtimeEvent(RealtimeEventType.RESPONSE_START))
                     
                     elif event_type == "response.done":
@@ -546,7 +548,13 @@ class QwenOmniRealtimeProvider(BaseRealtimeProvider):
                                 f"⚠️ Audio may be incomplete! Text: {provider._current_response_text_length} chars, "
                                 f"Audio: {provider._current_response_audio_bytes} bytes. This might indicate an API issue."
                             )
+                        
+                        # Emit RESPONSE_DONE event first
                         provider._emit_event(RealtimeEvent(RealtimeEventType.RESPONSE_DONE))
+                        
+                        # Deactivate queue mode after RESPONSE_DONE is sent
+                        provider._response_active = False
+                        provider.logger.debug("Response queue deactivated (response.done)")
                     
                     # === Error ===
                     elif event_type == "error":
@@ -555,6 +563,9 @@ class QwenOmniRealtimeProvider(BaseRealtimeProvider):
                             type=RealtimeEventType.ERROR,
                             text=error_msg
                         ))
+                        # Deactivate queue on error
+                        provider._response_active = False
+                        provider.logger.debug("Response queue deactivated (error)")
                     
                     # === Tool Calls (Placeholder) ===
                     # Need to check actual event type for tool calls in Qwen
@@ -566,6 +577,8 @@ class QwenOmniRealtimeProvider(BaseRealtimeProvider):
             
             def on_error(self, error):
                 provider.logger.error(f"Realtime WebSocket error: {error}")
+                # Deactivate queue on error
+                provider._response_active = False
                 provider._emit_event(RealtimeEvent(
                     type=RealtimeEventType.ERROR,
                     text=str(error)

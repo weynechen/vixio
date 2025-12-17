@@ -275,6 +275,7 @@ class RealtimeStation(StreamStation):
         self.current_turn_id = chunk.turn_id
         
         # Initialize session on first chunk
+        # tools not supported yet
         if self._phase == ProcessingPhase.INPUT:
             if self.tools:
                 await self.provider.update_session(
