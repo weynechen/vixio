@@ -117,14 +117,14 @@ networks:
 #      https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html
 #
 # Start services:
-#   docker-compose -f docker-compose-inference-gpu.yml up -d --build
+#   docker-compose -f inference/docker-compose-inference-gpu.yml up -d --build
 #
 # For China users (with PyPI mirror):
-#   docker-compose -f docker-compose-inference-gpu.yml -f docker-compose-inference-gpu-cn.yml up -d --build
+#   docker-compose -f inference/docker-compose-inference-gpu.yml -f inference/docker-compose-inference-gpu-cn.yml up -d --build
 #
 # View logs:
-#   docker-compose -f docker-compose-inference-gpu.yml logs -f
+#   docker-compose -f inference/docker-compose-inference-gpu.yml logs -f
 #
 # Stop services:
-#   docker-compose -f docker-compose-inference-gpu.yml down
+#   docker-compose -f inference/docker-compose-inference-gpu.yml down
 

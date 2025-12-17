@@ -1,5 +1,5 @@
 # Docker Compose Override for GPU version with China PyPI Mirror
-# Usage: docker-compose -f docker-compose-inference-gpu.yml -f docker-compose-inference-gpu-cn.yml up -d --build
+# Usage: docker-compose -f inference/docker-compose-inference-gpu.yml -f inference/docker-compose-inference-gpu-cn.yml up -d --build
 
 version: '3.8'
 

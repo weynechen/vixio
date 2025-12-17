@@ -120,20 +120,20 @@ pip install "vixio[dev-local-cn]"
 ### docker 
 CPU version
 ```bash
-docker compose -f docker-compose-inference.yml up -d --build
+docker compose -f inference/docker-compose-inference.yml up -d --build
 ```
 for China user
 ```bash
-docker compose -f docker-compose-inference.yml -f docker-compose-inference-cn.yml up -d --build
+docker compose -f inference/docker-compose-inference.yml -f inference/docker-compose-inference-cn.yml up -d --build
 ```
 
 GPU version
 ```bash
-docker compose -f docker-compose-inference-gpu.yml up -d --build
+docker compose -f inference/docker-compose-inference-gpu.yml up -d --build
 ```
 for china user:
 ```bash
-docker compose -f docker-compose-inference-gpu.yml -f docker-compose-inference-gpu-cn.yml up -d --build
+docker compose -f inference/docker-compose-inference-gpu.yml -f inference/docker-compose-inference-gpu-cn.yml up -d --build
 ```
 
 ## Getting Started
