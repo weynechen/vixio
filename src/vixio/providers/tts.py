@@ -3,7 +3,8 @@ TTS provider interface
 """
 
 from abc import abstractmethod
-from typing import AsyncIterator, Dict, Any
+from collections.abc import AsyncIterator
+from typing import Dict, Any
 from vixio.providers.base import BaseProvider
 
 

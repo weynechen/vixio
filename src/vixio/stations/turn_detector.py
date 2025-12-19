@@ -29,7 +29,8 @@ Completion Contract:
 
 import asyncio
 import time
-from typing import AsyncIterator, Optional, List
+from collections.abc import AsyncIterator, AsyncGenerator
+from typing import Optional, List, cast
 from vixio.core.station import DetectorStation
 from vixio.core.chunk import Chunk, ChunkType, EventChunk, AudioChunk
 from vixio.utils import get_latency_monitor
@@ -143,7 +144,7 @@ class TurnDetectorStation(DetectorStation):
             channels=channels
         )
     
-    async def process_chunk(self, chunk: Chunk) -> AsyncIterator[Chunk]:
+    async def process_chunk(self, chunk: Chunk) -> AsyncGenerator[Chunk, None]:
         """
         Process chunk for turn detection and interrupt handling.
         
@@ -155,7 +156,8 @@ class TurnDetectorStation(DetectorStation):
         """
         # Collect audio segments from VAD
         if chunk.type == ChunkType.AUDIO_RAW:
-            self._audio_segments.append(chunk)
+            # Type assertion: chunk is AudioChunk when type is AUDIO_RAW
+            self._audio_segments.append(cast(AudioChunk, chunk))
             self.logger.debug(f"Collected audio segment ({len(chunk.data)} bytes), total segments: {len(self._audio_segments)}")
             return
             yield  # Makes this an async generator

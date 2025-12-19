@@ -302,8 +302,14 @@ class ControlBus:
     async def _timeout_worker(self) -> None:
         """
         Worker task that waits for timeout and triggers interrupt.
+        
+        Note: This method is only called when _turn_timeout_seconds is not None.
         """
         try:
+            # Type assertion: _turn_timeout_seconds is guaranteed to be non-None here
+            # because _timeout_worker is only called from _start_turn_timeout,
+            # which is only called when _turn_timeout_seconds is not None
+            assert self._turn_timeout_seconds is not None, "Timeout seconds should not be None"
             await asyncio.sleep(self._turn_timeout_seconds)
             
             # Timeout reached, send interrupt

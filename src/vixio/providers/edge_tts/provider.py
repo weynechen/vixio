@@ -3,7 +3,8 @@ Edge TTS provider implementation
 """
 
 import asyncio
-from typing import AsyncIterator, Dict, Any
+from collections.abc import AsyncIterator
+from typing import Dict, Any
 from vixio.providers.tts import TTSProvider
 from vixio.providers.registry import register_provider
 from vixio.utils.audio import mp3_to_pcm, MP3_AVAILABLE

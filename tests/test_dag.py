@@ -4,7 +4,7 @@ Unit tests for DAG (Directed Acyclic Graph) implementation
 
 import asyncio
 import pytest
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
 
 from vixio.core.chunk import Chunk, ChunkType, TextChunk, AudioChunk, EventChunk
 from vixio.core.station import Station, PassthroughStation
@@ -23,7 +23,7 @@ class TextOnlyStation(Station):
     def __init__(self, name: str = "TextOnlyStation"):
         super().__init__(name=name)
 
-    async def process_chunk(self, chunk: Chunk) -> AsyncIterator[Chunk]:
+    async def process_chunk(self, chunk: Chunk) -> AsyncIterator[Chunk]:  # type: ignore[override]
         # Transform text to uppercase
         if chunk.type == ChunkType.TEXT:
             yield TextChunk(
@@ -43,7 +43,7 @@ class AudioOnlyStation(Station):
     def __init__(self, name: str = "AudioOnlyStation"):
         super().__init__(name=name)
 
-    async def process_chunk(self, chunk: Chunk) -> AsyncIterator[Chunk]:
+    async def process_chunk(self, chunk: Chunk) -> AsyncIterator[Chunk]:  # type: ignore[override]
         # Just pass through audio
         chunk.source = self.name
         yield chunk
@@ -57,7 +57,7 @@ class MultiTypeStation(Station):
     def __init__(self, name: str = "MultiTypeStation"):
         super().__init__(name=name)
 
-    async def process_chunk(self, chunk: Chunk) -> AsyncIterator[Chunk]:
+    async def process_chunk(self, chunk: Chunk) -> AsyncIterator[Chunk]:  # type: ignore[override]
         chunk.source = self.name
         yield chunk
 

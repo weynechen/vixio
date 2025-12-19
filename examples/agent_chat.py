@@ -52,11 +52,15 @@ import asyncio
 import os
 import signal
 import argparse
+from typing import cast
 from loguru import logger
 from vixio.core.dag import DAG
 from vixio.core.session import SessionManager
 from vixio.core.tools import get_builtin_local_tools
-from vixio.providers.agent import Tool
+from vixio.providers.agent import Tool, AgentProvider
+from vixio.providers.vad import VADProvider
+from vixio.providers.asr import ASRProvider
+from vixio.providers.tts import TTSProvider
 from vixio.transports.xiaozhi import XiaozhiTransport
 from vixio.stations import (
     VADStation,
@@ -241,14 +245,14 @@ async def main():
             env=args.env
         )
         
-        vad_provider = session_providers["vad"]
+        vad_provider = cast(VADProvider, session_providers["vad"])
         await vad_provider.initialize()
         
-        asr_provider = session_providers.get("asr")
+        asr_provider = cast(ASRProvider, session_providers.get("asr")) if "asr" in session_providers else None
         if asr_provider:
             await asr_provider.initialize()
         
-        agent_provider = session_providers["agent"]
+        agent_provider = cast(AgentProvider, session_providers["agent"])
         
         # Convert builtin local tools to Agent Tool format
         local_tool_defs = get_builtin_local_tools()
@@ -268,7 +272,7 @@ async def main():
             system_prompt=agent_system_prompt
         )
         
-        tts_provider = session_providers["tts"]
+        tts_provider = cast(TTSProvider, session_providers["tts"])
         if hasattr(tts_provider, "initialize"):
             await tts_provider.initialize()
         

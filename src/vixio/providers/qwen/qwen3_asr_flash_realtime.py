@@ -19,7 +19,8 @@ import base64
 import os
 import queue
 import threading
-from typing import Any, AsyncIterator, Dict, List, Optional
+from collections.abc import AsyncIterator
+from typing import Any, Dict, List, Optional
 
 from vixio.providers.asr import ASRProvider
 from vixio.providers.registry import register_provider

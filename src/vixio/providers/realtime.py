@@ -10,7 +10,8 @@ Two usage patterns:
 """
 
 from abc import ABC, abstractmethod
-from typing import Optional, List, Callable, Any, Dict, Union, AsyncIterator
+from collections.abc import AsyncIterator
+from typing import Optional, List, Callable, Any, Dict, Union
 from enum import Enum
 from dataclasses import dataclass
 

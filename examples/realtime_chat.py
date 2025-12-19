@@ -37,12 +37,14 @@ import asyncio
 import os
 import signal
 import argparse
+from typing import cast
 from loguru import logger
 from vixio.core.dag import DAG
 from vixio.core.session import SessionManager
 from vixio.transports.xiaozhi import XiaozhiTransport
 from vixio.stations import RealtimeStation, SentenceAggregatorStation
 from vixio.providers.factory import ProviderFactory
+from vixio.providers.realtime import BaseRealtimeProvider
 from vixio.providers.sentence_aggregator import SimpleSentenceAggregatorProviderCN
 from vixio.utils import get_local_ip
 from vixio.config import get_default_config_path
@@ -183,7 +185,7 @@ async def main():
             env=args.env
         )
         
-        realtime_provider = session_providers["realtime"]
+        realtime_provider = cast(BaseRealtimeProvider, session_providers["realtime"])
         
         # Initialize provider (establishes WebSocket connection)
         await realtime_provider.initialize()

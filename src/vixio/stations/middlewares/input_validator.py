@@ -4,7 +4,8 @@ Input Validator Middleware
 Validates and filters input chunks before processing.
 """
 
-from typing import AsyncIterator, Callable, Optional
+from collections.abc import AsyncIterator, AsyncGenerator
+from typing import Callable, Optional
 from vixio.core.middleware import DataMiddleware, NextHandler
 from vixio.core.chunk import Chunk, ChunkType, is_text_chunk
 
@@ -57,7 +58,7 @@ class InputValidatorMiddleware(DataMiddleware):
                 "Stations should not check chunk.source. Ignoring."
             )
     
-    async def process_data(self, chunk: Chunk, next_handler: NextHandler) -> AsyncIterator[Chunk]:
+    async def process_data(self, chunk: Chunk, next_handler: NextHandler) -> AsyncGenerator[Chunk, None]:
         """
         Validate data chunk and forward to next handler if valid.
         

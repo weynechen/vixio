@@ -4,7 +4,8 @@ Event Emitter Middleware
 Emits events before/after processing (START, STOP, etc.).
 """
 
-from typing import AsyncIterator, Optional, Dict, Any
+from collections.abc import AsyncIterator, AsyncGenerator
+from typing import Optional, Dict, Any
 from vixio.core.middleware import UniversalMiddleware, NextHandler
 from vixio.core.chunk import Chunk, ChunkType, EventChunk
 
@@ -46,7 +47,7 @@ class EventEmitterMiddleware(UniversalMiddleware):
         self.stop_data = stop_data or {}
         self.emit_on_interrupt = emit_on_interrupt
     
-    async def _emit_events(self, chunk: Chunk, next_handler: NextHandler) -> AsyncIterator[Chunk]:
+    async def _emit_events(self, chunk: Chunk, next_handler: NextHandler) -> AsyncGenerator[Chunk, None]:
         """
         Common event emission logic for both data and signal chunks.
         
@@ -109,7 +110,7 @@ class EventEmitterMiddleware(UniversalMiddleware):
                 f"(count={output_count}, interrupted={interrupted})"
             )
     
-    async def process_data(self, chunk: Chunk, next_handler: NextHandler) -> AsyncIterator[Chunk]:
+    async def process_data(self, chunk: Chunk, next_handler: NextHandler) -> AsyncGenerator[Chunk, None]:
         """
         Process data chunk with event emission.
         
@@ -123,7 +124,7 @@ class EventEmitterMiddleware(UniversalMiddleware):
         async for result in self._emit_events(chunk, next_handler):
             yield result
     
-    async def process_signal(self, chunk: Chunk, next_handler: NextHandler) -> AsyncIterator[Chunk]:
+    async def process_signal(self, chunk: Chunk, next_handler: NextHandler) -> AsyncGenerator[Chunk, None]:
         """
         Process signal chunk with event emission.
         

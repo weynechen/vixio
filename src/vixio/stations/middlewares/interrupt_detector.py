@@ -4,7 +4,7 @@ Interrupt Detector Middleware
 Detects interrupts during processing (turn ID changes).
 """
 
-from typing import AsyncIterator
+from collections.abc import AsyncIterator, AsyncGenerator
 from vixio.core.middleware import DataMiddleware, NextHandler
 from vixio.core.chunk import Chunk
 
@@ -31,7 +31,7 @@ class InterruptDetectorMiddleware(DataMiddleware):
         self.check_interval = check_interval
         self._chunk_count = 0
     
-    async def process_data(self, chunk: Chunk, next_handler: NextHandler) -> AsyncIterator[Chunk]:
+    async def process_data(self, chunk: Chunk, next_handler: NextHandler) -> AsyncGenerator[Chunk, None]:
         """
         Process data chunk with interrupt detection.
         

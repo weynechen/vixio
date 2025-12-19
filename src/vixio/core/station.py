@@ -13,8 +13,9 @@ Completion Contract:
 """
 
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator, AsyncGenerator
 from enum import Enum
-from typing import AsyncIterator, List, Optional, TYPE_CHECKING
+from typing import List, Optional, TYPE_CHECKING, cast
 from vixio.core.chunk import Chunk, ChunkType, EventChunk, is_completion_event
 from loguru import logger
 
@@ -124,7 +125,9 @@ class Station(ABC):
             if is_completion_event(chunk) and self.AWAITS_COMPLETION:
                 try:
                     self.logger.debug(f"[{self.name}] Processing completion event from {chunk.source}")
-                    async for output_chunk in self.on_completion(chunk):
+                    # Type assertion: chunk is guaranteed to be EventChunk here due to is_completion_event check
+                    event_chunk = cast(EventChunk, chunk)
+                    async for output_chunk in self.on_completion(event_chunk):
                         # Propagate turn ID
                         output_chunk.turn_id = self.current_turn_id
                         # Apply station output role if configured
@@ -252,7 +255,7 @@ class Station(ABC):
         self.logger = logger.bind(component=self.name, session_id=session_id_short)
     
     @abstractmethod
-    async def process_chunk(self, chunk: Chunk) -> AsyncIterator[Chunk]:
+    async def process_chunk(self, chunk: Chunk) -> AsyncGenerator[Chunk, None]:
         """
         Process a single chunk.
         

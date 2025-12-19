@@ -5,7 +5,8 @@ Handles processing timeouts and emits timeout events.
 """
 
 import asyncio
-from typing import AsyncIterator, Optional
+from collections.abc import AsyncIterator, AsyncGenerator
+from typing import Optional
 from vixio.core.middleware import DataMiddleware, NextHandler
 from vixio.core.chunk import Chunk, ChunkType, EventChunk
 
@@ -43,7 +44,7 @@ class TimeoutHandlerMiddleware(DataMiddleware):
         self.emit_timeout_event = emit_timeout_event
         self.send_interrupt_signal = send_interrupt_signal
     
-    async def process_data(self, chunk: Chunk, next_handler: NextHandler) -> AsyncIterator[Chunk]:
+    async def process_data(self, chunk: Chunk, next_handler: NextHandler) -> AsyncGenerator[Chunk, None]:
         """
         Process data chunk with timeout monitoring.
         

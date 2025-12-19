@@ -3,7 +3,8 @@ OpenAI Agent provider implementation using OpenAI Agents framework and LiteLLM
 """
 
 import asyncio
-from typing import Any, AsyncIterator, Dict, List, Optional, Union
+from collections.abc import AsyncIterator
+from typing import Any, Dict, List, Optional, Union
 from . import dump_promt
 from vixio.providers.agent import AgentProvider, Tool
 from vixio.providers.vision import MultimodalMessage

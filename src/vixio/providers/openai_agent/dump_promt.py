@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import inspect
 import threading
+from typing import Optional
 
 
 # Global state for prompt capture
@@ -184,7 +185,7 @@ def _make_json_serializable(obj):
     return obj
 
 
-def _format_prompt(messages: list, tools: list = None) -> str:
+def _format_prompt(messages: list, tools: Optional[list] = None) -> str:
     """Format messages and tools into a readable prompt string."""
     lines = []
     

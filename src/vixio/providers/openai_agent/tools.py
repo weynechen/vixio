@@ -5,7 +5,7 @@ Converts framework-agnostic ToolDefinition to OpenAI Agent's FunctionTool.
 """
 
 import json
-from typing import Any, Callable, List
+from typing import Any, Callable, List, Optional
 from loguru import logger
 
 from vixio.core.tools.converter import ToolConverterBase
@@ -153,7 +153,7 @@ class OpenAIAgentToolConverter(ToolConverterBase):
 
 
 def get_openai_agent_tools(
-    device_tools: List[ToolDefinition] = None,
+    device_tools: Optional[List[ToolDefinition]] = None,
     include_builtin: bool = True,
 ) -> List[FunctionTool]:
     """

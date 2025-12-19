@@ -11,7 +11,8 @@ Responsibilities:
 """
 
 import asyncio
-from typing import Callable, Dict, Optional, AsyncIterator, List, TYPE_CHECKING
+from collections.abc import AsyncIterator
+from typing import Callable, Dict, Optional, List, TYPE_CHECKING
 from vixio.core.transport import TransportBase
 from vixio.core.dag import DAG, CompiledDAG
 from vixio.core.control_bus import ControlBus

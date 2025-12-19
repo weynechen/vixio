@@ -16,7 +16,8 @@ Note: This station expects PCM audio data. Transport layers are responsible
 for format conversion (e.g., Opus -> PCM) before chunks enter the pipeline.
 """
 
-from typing import AsyncIterator, List
+from collections.abc import AsyncIterator, AsyncGenerator
+from typing import List, cast, Optional
 from vixio.core.station import DetectorStation
 from vixio.core.chunk import Chunk, ChunkType, EventChunk, AudioChunk
 from vixio.core.middleware import with_middlewares
@@ -131,12 +132,12 @@ class VADStation(DetectorStation):
         except Exception as e:
             self.logger.error(f"Error cleaning up VAD provider: {e}")
     
-    def _merge_audio_buffer(self, session_id: str, turn_id: int) -> AudioChunk:
+    def _merge_audio_buffer(self, session_id: str, turn_id: int) -> Optional[AudioChunk]:
         """
         Merge all buffered audio into a single AudioChunk.
         
         Returns:
-            Merged AudioChunk with all buffered audio data
+            Merged AudioChunk with all buffered audio data, or None if buffer is empty
         """
         if not self._audio_buffer:
             return None
@@ -156,7 +157,7 @@ class VADStation(DetectorStation):
             channels=channels
         )
     
-    async def process_chunk(self, chunk: Chunk) -> AsyncIterator[Chunk]:
+    async def process_chunk(self, chunk: Chunk) -> AsyncGenerator[Chunk, None]:
         """
         Process audio chunk through VAD.
         
@@ -182,7 +183,8 @@ class VADStation(DetectorStation):
         
         # Buffer audio while speaking
         if self._is_speaking:
-            self._audio_buffer.append(chunk)
+            # Type assertion: chunk is AudioChunk (validated by ALLOWED_INPUT_TYPES)
+            self._audio_buffer.append(cast(AudioChunk, chunk))
         
         # State change: silence -> voice
         if has_voice and not self._is_speaking:
@@ -190,7 +192,8 @@ class VADStation(DetectorStation):
             self._is_speaking = True
             
             # Start buffering with this chunk
-            self._audio_buffer.append(chunk)
+            # Type assertion: chunk is AudioChunk (validated by ALLOWED_INPUT_TYPES)
+            self._audio_buffer.append(cast(AudioChunk, chunk))
             
             self.logger.info("Voice activity started")
             

@@ -13,7 +13,8 @@ Design:
 """
 
 import asyncio
-from typing import AsyncIterator, Dict, Optional, Set, Any
+from collections.abc import AsyncIterator, AsyncGenerator
+from typing import Dict, Optional, Set, Any
 from vixio.core.station import Station
 from vixio.core.chunk import Chunk, ChunkType, TextChunk
 
@@ -70,7 +71,7 @@ class JoinNode(Station):
         # Timeout tasks: {turn_id: task}
         self._timeout_tasks: Dict[int, asyncio.Task] = {}
     
-    async def process_chunk(self, chunk: Chunk) -> AsyncIterator[Chunk]:
+    async def process_chunk(self, chunk: Chunk) -> AsyncGenerator[Chunk, None]:
         """
         Collect chunk and merge when all upstream branches have contributed.
         

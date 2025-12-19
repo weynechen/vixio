@@ -20,7 +20,8 @@ Vision Support:
 """
 
 import asyncio
-from typing import AsyncIterator, Optional, List
+from collections.abc import AsyncIterator, AsyncGenerator
+from typing import Optional, List
 from vixio.core.station import StreamStation
 from vixio.core.chunk import Chunk, ChunkType, TextDeltaChunk, is_text_chunk
 from vixio.core.middleware import with_middlewares
@@ -186,7 +187,7 @@ class AgentStation(StreamStation):
             self.logger.warning(f"Unknown visual_context type: {type(visual_ctx)}")
             return None
     
-    async def process_chunk(self, chunk: Chunk) -> AsyncIterator[Chunk]:
+    async def process_chunk(self, chunk: Chunk) -> AsyncGenerator[Chunk, None]:
         """
         Process chunk through Agent - CORE LOGIC ONLY.
         

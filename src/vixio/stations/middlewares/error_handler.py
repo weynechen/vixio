@@ -4,7 +4,8 @@ Error Handler Middleware
 Handles exceptions during processing and emits error events.
 """
 
-from typing import AsyncIterator, Optional, Callable, Awaitable
+from collections.abc import AsyncIterator, AsyncGenerator
+from typing import Optional, Callable, Awaitable
 from vixio.core.middleware import UniversalMiddleware, NextHandler
 from vixio.core.chunk import Chunk, ChunkType, EventChunk
 
@@ -41,7 +42,7 @@ class ErrorHandlerMiddleware(UniversalMiddleware):
         self.suppress_errors = suppress_errors
         self.on_error = on_error
     
-    async def _handle_error(self, chunk: Chunk, next_handler: NextHandler) -> AsyncIterator[Chunk]:
+    async def _handle_error(self, chunk: Chunk, next_handler: NextHandler) -> AsyncGenerator[Chunk, None]:
         """
         Common error handling logic for both data and signal chunks.
         
@@ -84,7 +85,7 @@ class ErrorHandlerMiddleware(UniversalMiddleware):
             if not self.suppress_errors:
                 raise
     
-    async def process_data(self, chunk: Chunk, next_handler: NextHandler) -> AsyncIterator[Chunk]:
+    async def process_data(self, chunk: Chunk, next_handler: NextHandler) -> AsyncGenerator[Chunk, None]:
         """
         Process data chunk with error handling.
         
@@ -98,7 +99,7 @@ class ErrorHandlerMiddleware(UniversalMiddleware):
         async for result in self._handle_error(chunk, next_handler):
             yield result
     
-    async def process_signal(self, chunk: Chunk, next_handler: NextHandler) -> AsyncIterator[Chunk]:
+    async def process_signal(self, chunk: Chunk, next_handler: NextHandler) -> AsyncGenerator[Chunk, None]:
         """
         Process signal chunk with error handling.
         

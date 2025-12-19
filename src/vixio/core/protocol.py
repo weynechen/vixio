@@ -92,7 +92,7 @@ class ProtocolBase(ABC):
         pcm_data: bytes, 
         sample_rate: int, 
         channels: int = 1,
-        session_id: str = None
+        session_id: Optional[str] = None
     ) -> list[bytes]:
         """
         Prepare audio data for transport-specific sending.
@@ -339,7 +339,7 @@ class ProtocolBase(ABC):
         """
         return None
     
-    def abort(self, session_id: str, reason: str = None, **params) -> Optional[Dict[str, Any]]:
+    def abort(self, session_id: str, reason: Optional[str] = None, **params) -> Optional[Dict[str, Any]]:
         """
         Create abort message (interrupt current operation).
         

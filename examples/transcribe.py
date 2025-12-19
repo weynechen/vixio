@@ -38,8 +38,9 @@ import asyncio
 import os
 import signal
 import argparse
+from typing import cast
 from loguru import logger
-from vixio.core.pipeline import Pipeline
+from vixio.core.dag import DAG
 from vixio.core.session import SessionManager
 from vixio.transports.xiaozhi import XiaozhiTransport
 from vixio.stations import (
@@ -49,6 +50,8 @@ from vixio.stations import (
     TextAggregatorStation,
 )
 from vixio.providers.factory import ProviderFactory
+from vixio.providers.vad import VADProvider
+from vixio.providers.asr import ASRProvider
 from vixio.utils import get_local_ip
 from vixio.config import get_default_config_path
 
@@ -170,18 +173,18 @@ async def main():
         websocket_path="/xiaozhi/v1/"
     )
     
-    # Step 3: Create async pipeline factory
-    async def create_pipeline():
+    # Step 3: Create async DAG factory
+    async def create_dag():
         """
-        Async factory function to create a fresh pipeline for each connection.
+        Async factory function to create a fresh DAG for each connection.
         
         Each session gets NEW provider instances created from the config,
         ensuring complete isolation between concurrent sessions.
         
         Returns:
-            Pipeline: New pipeline with independent provider instances
+            DAG: New DAG with independent provider instances
         """
-        logger.debug("Creating new transcription pipeline with isolated providers...")
+        logger.debug("Creating new transcription DAG with isolated providers...")
         
         # Create fresh provider instances for this session
         session_providers = ProviderFactory.create_from_config_file(
@@ -189,31 +192,27 @@ async def main():
             env=args.env
         )
         
-        vad_provider = session_providers["vad"]
+        vad_provider = cast(VADProvider, session_providers["vad"])
         await vad_provider.initialize()
         
-        asr_provider = session_providers["asr"]
+        asr_provider = cast(ASRProvider, session_providers["asr"])
         await asr_provider.initialize()
         
-        # Build station list (transcription only - no agent or TTS)
-        stations = [
-            # Stage 1: Voice detection
-            VADStation(vad_provider),
-            TurnDetectorStation(silence_threshold_ms=100),
-            
-            # Stage 2: Speech recognition
-            ASRStation(asr_provider),
-            
-            # Stage 3: Text aggregation (outputs complete transcription)
-            TextAggregatorStation(),
-        ]
+        # Build DAG (transcription only - no agent or TTS)
+        dag = DAG("Transcription")
         
-        logger.debug("✓ Transcription pipeline created")
+        # Add nodes
+        dag.add_node("vad", VADStation(vad_provider))
+        dag.add_node("turn_detector", TurnDetectorStation(silence_threshold_ms=100))
+        dag.add_node("asr", ASRStation(asr_provider))
+        dag.add_node("text_agg", TextAggregatorStation())
         
-        return Pipeline(
-            stations=stations,
-            name="Transcription"
-        )
+        # Define edges (data flow)
+        dag.add_edge("transport_in", "vad", "turn_detector", "asr", "text_agg", "transport_out")
+        
+        logger.debug("✓ Transcription DAG created")
+        
+        return dag
     
     # Step 4: Create session manager
     turn_timeout = args.turn_timeout if args.turn_timeout > 0 else None
@@ -224,7 +223,7 @@ async def main():
     
     manager = SessionManager(
         transport=transport,
-        pipeline_factory=create_pipeline,
+        dag_factory=create_dag,
         turn_timeout_seconds=turn_timeout
     )
     
@@ -255,9 +254,9 @@ async def main():
     logger.info(f"  - OTA interface:   http://{local_ip}:{transport.port}/xiaozhi/ota/")
     logger.info("")
     
-    # Pipeline description
-    pipeline_stages = ["VAD", "TurnDetector", "ASR", "TextAggregator"]
-    logger.info(f"Pipeline: {' -> '.join(pipeline_stages)}")
+    # Processing flow description
+    flow_stages = ["VAD", "TurnDetector", "ASR", "TextAggregator"]
+    logger.info(f"Processing Flow: {' -> '.join(flow_stages)}")
     logger.info("=" * 70)
     
     # Show deployment-specific notes

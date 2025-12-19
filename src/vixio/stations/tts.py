@@ -14,7 +14,8 @@ Use SentenceAggregatorStation before this to convert TEXT_DELTA to TEXT.
 Refactored with middleware pattern for clean separation of concerns.
 """
 
-from typing import AsyncIterator, Optional
+from collections.abc import AsyncIterator, AsyncGenerator
+from typing import Optional
 from vixio.core.station import StreamStation
 from vixio.core.chunk import Chunk, ChunkType, AudioChunk, EventChunk
 from vixio.core.middleware import with_middlewares
@@ -166,7 +167,7 @@ class TTSStation(StreamStation):
             turn_id=event.turn_id
         )
     
-    async def process_chunk(self, chunk: Chunk) -> AsyncIterator[Chunk]:
+    async def process_chunk(self, chunk: Chunk) -> AsyncGenerator[Chunk, None]:
         """
         Process chunk through TTS - CORE LOGIC ONLY.
         

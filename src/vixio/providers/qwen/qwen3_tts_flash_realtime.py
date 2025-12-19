@@ -19,7 +19,8 @@ import base64
 import os
 import queue
 import threading
-from typing import Any, AsyncIterator, Dict, Optional
+from collections.abc import AsyncIterator
+from typing import Any, Dict, Optional
 
 import numpy as np
 

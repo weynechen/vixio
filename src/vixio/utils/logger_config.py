@@ -11,6 +11,7 @@ Provides centralized logger configuration with:
 import os
 import sys
 from pathlib import Path
+from typing import Optional, List
 from loguru import logger
 
 
@@ -26,9 +27,9 @@ def configure_logger(
     level: str = "INFO",
     rotation: str = "100 MB",
     retention: str = "30 days",
-    console_level: str = None,
-    file_level: str = None,
-    debug_components: list = None,
+    console_level: Optional[str] = None,
+    file_level: Optional[str] = None,
+    debug_components: Optional[List[str]] = None,
 ) -> None:
     """
     Configure loguru logger with file and console outputs.

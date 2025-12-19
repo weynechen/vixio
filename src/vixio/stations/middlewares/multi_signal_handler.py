@@ -4,7 +4,8 @@ Multi-Signal Handler Middleware
 Handles multiple types of signals with different callbacks and optional chunk emission.
 """
 
-from typing import AsyncIterator, Dict, Callable, Awaitable, Optional, Union
+from collections.abc import AsyncIterator, AsyncGenerator
+from typing import Dict, Callable, Awaitable, Optional, Union
 from vixio.core.middleware import SignalMiddleware, NextHandler
 from vixio.core.chunk import Chunk, ChunkType
 
@@ -54,7 +55,7 @@ class MultiSignalHandlerMiddleware(SignalMiddleware):
         self.signal_handlers = signal_handlers or {}
         self.passthrough_signals = passthrough_signals
     
-    async def process_signal(self, chunk: Chunk, next_handler: NextHandler) -> AsyncIterator[Chunk]:
+    async def process_signal(self, chunk: Chunk, next_handler: NextHandler) -> AsyncGenerator[Chunk, None]:
         """
         Process signal chunk with type-specific handlers.
         

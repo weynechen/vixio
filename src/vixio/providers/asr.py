@@ -6,7 +6,8 @@ even if the underlying engine is batch-based (pseudo-streaming).
 """
 
 from abc import abstractmethod
-from typing import List, Dict, Any, AsyncIterator
+from collections.abc import AsyncIterator
+from typing import List, Dict, Any
 from vixio.providers.base import BaseProvider
 
 

@@ -11,7 +11,7 @@ Completion Contract:
 Refactored with middleware pattern and provider pattern for clean separation of concerns.
 """
 
-from typing import AsyncIterator
+from collections.abc import AsyncIterator, AsyncGenerator
 from vixio.core.station import BufferStation
 from vixio.core.chunk import Chunk, ChunkType, TextChunk, EventChunk
 from vixio.core.middleware import with_middlewares
@@ -100,7 +100,7 @@ class SentenceAggregatorStation(BufferStation):
         self.provider.reset()
         self.logger.debug(f"[SENTENCE_AGG] State reset, buffer cleared")
     
-    async def process_chunk(self, chunk: Chunk) -> AsyncIterator[Chunk]:
+    async def process_chunk(self, chunk: Chunk) -> AsyncGenerator[Chunk, None]:
         """
         Process chunk through sentence aggregator - CORE LOGIC ONLY.
         

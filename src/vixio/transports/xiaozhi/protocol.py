@@ -248,7 +248,7 @@ class XiaozhiProtocol(ProtocolBase):
         pcm_data: bytes, 
         sample_rate: int, 
         channels: int = 1,
-        session_id: str = None
+        session_id: Optional[str] = None
     ) -> List[bytes]:
         """
         Prepare audio data for Xiaozhi transport with frame buffering.
@@ -374,7 +374,7 @@ class XiaozhiProtocol(ProtocolBase):
         
         return [padded_frame]
     
-    def create_hello_message(self, session_id: str = None, **kwargs) -> Dict[str, Any]:
+    def create_hello_message(self, session_id: Optional[str] = None, **kwargs) -> Dict[str, Any]:
         """
         Create HELLO handshake message.
         
@@ -407,7 +407,7 @@ class XiaozhiProtocol(ProtocolBase):
         self,
         session_id: str,
         state: str,
-        text: str = None,
+        text: Optional[str] = None,
         **kwargs
     ) -> Dict[str, Any]:
         """
@@ -437,7 +437,7 @@ class XiaozhiProtocol(ProtocolBase):
     def create_state_message(
         self,
         state: str,
-        session_id: str = None,
+        session_id: Optional[str] = None,
         **kwargs
     ) -> Dict[str, Any]:
         """
@@ -465,7 +465,7 @@ class XiaozhiProtocol(ProtocolBase):
     def create_error_message(
         self,
         error: str,
-        session_id: str = None,
+        session_id: Optional[str] = None,
         **kwargs
     ) -> Dict[str, Any]:
         """
@@ -493,7 +493,7 @@ class XiaozhiProtocol(ProtocolBase):
     def create_stt_message(
         self,
         text: str,
-        session_id: str = None,
+        session_id: Optional[str] = None,
         **kwargs
     ) -> Dict[str, Any]:
         """
@@ -521,7 +521,7 @@ class XiaozhiProtocol(ProtocolBase):
     def create_llm_message(
         self,
         text: str,
-        session_id: str = None,
+        session_id: Optional[str] = None,
         **kwargs
     ) -> Dict[str, Any]:
         """
@@ -709,7 +709,7 @@ class XiaozhiProtocol(ProtocolBase):
         """Create error message (business interface)."""
         return self.create_error_message(error=error, session_id=session_id, **params)
     
-    def abort(self, session_id: str, reason: str = None, **params) -> Dict[str, Any]:
+    def abort(self, session_id: str, reason: Optional[str] = None, **params) -> Dict[str, Any]:
         """Create abort message (business interface)."""
         return {
             "type": "abort",

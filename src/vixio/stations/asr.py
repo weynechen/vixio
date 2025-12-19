@@ -18,7 +18,8 @@ Note: Outputs TEXT_DELTA for streaming scenarios.
 ASR Provider interface is streaming (AsyncIterator), even for batch engines.
 """
 
-from typing import AsyncIterator, Optional
+from collections.abc import AsyncIterator, AsyncGenerator
+from typing import Optional
 from vixio.core.station import StreamStation
 from vixio.core.chunk import Chunk, ChunkType, TextDeltaChunk, EventChunk
 from vixio.core.middleware import with_middlewares
@@ -121,7 +122,7 @@ class ASRStation(StreamStation):
         except Exception as e:
             self.logger.error(f"Error cleaning up ASR provider: {e}")
     
-    async def process_chunk(self, chunk: Chunk) -> AsyncIterator[Chunk]:
+    async def process_chunk(self, chunk: Chunk) -> AsyncGenerator[Chunk, None]:
         """
         Process AUDIO_RAW chunk - directly transcribe and yield results.
         

@@ -8,7 +8,8 @@ Chain of Responsibility pattern
 """
 
 from abc import ABC, abstractmethod
-from typing import AsyncIterator, Callable, Optional, TYPE_CHECKING
+from collections.abc import AsyncIterator, AsyncGenerator
+from typing import Callable, Optional, TYPE_CHECKING
 from functools import wraps
 from vixio.core.chunk import Chunk
 from loguru import logger
@@ -61,7 +62,7 @@ class Middleware(ABC):
         self,
         chunk: Chunk,
         next_handler: NextHandler
-    ) -> AsyncIterator[Chunk]:
+    ) -> AsyncGenerator[Chunk, None]:
         """
         Process chunk with access to next handler in chain.
         
@@ -86,7 +87,8 @@ class Middleware(ABC):
                 yield EventChunk(type=ChunkType.EVENT_STOP)
             ```
         """
-        pass
+        yield  # type: ignore[misc]
+        raise NotImplementedError
 
 
 class DataMiddleware(Middleware):
@@ -103,7 +105,7 @@ class DataMiddleware(Middleware):
     - Interrupt detection (detect turn changes on data)
     """
     
-    async def process(self, chunk: Chunk, next_handler: NextHandler) -> AsyncIterator[Chunk]:
+    async def process(self, chunk: Chunk, next_handler: NextHandler) -> AsyncGenerator[Chunk, None]:
         """
         Route chunk based on type.
         
@@ -121,7 +123,7 @@ class DataMiddleware(Middleware):
             yield result
     
     @abstractmethod
-    async def process_data(self, chunk: Chunk, next_handler: NextHandler) -> AsyncIterator[Chunk]:
+    async def process_data(self, chunk: Chunk, next_handler: NextHandler) -> AsyncGenerator[Chunk, None]:
         """
         Process data chunk.
         
@@ -134,7 +136,8 @@ class DataMiddleware(Middleware):
         Yields:
             Processed chunks
         """
-        pass
+        yield  # type: ignore[misc]
+        raise NotImplementedError
 
 
 class SignalMiddleware(Middleware):
@@ -168,7 +171,7 @@ class SignalMiddleware(Middleware):
             yield result
     
     @abstractmethod
-    async def process_signal(self, chunk: Chunk, next_handler: NextHandler) -> AsyncIterator[Chunk]:
+    async def process_signal(self, chunk: Chunk, next_handler: NextHandler) -> AsyncGenerator[Chunk, None]:
         """
         Process signal chunk.
         
@@ -181,7 +184,8 @@ class SignalMiddleware(Middleware):
         Yields:
             Processed chunks (typically yield chunk to pass signal through)
         """
-        pass
+        yield  # type: ignore[misc]
+        raise NotImplementedError
 
 
 class UniversalMiddleware(Middleware):
@@ -196,7 +200,7 @@ class UniversalMiddleware(Middleware):
     - Metrics collection (track all chunk types)
     """
     
-    async def process(self, chunk: Chunk, next_handler: NextHandler) -> AsyncIterator[Chunk]:
+    async def process(self, chunk: Chunk, next_handler: NextHandler) -> AsyncGenerator[Chunk, None]:
         """
         Route chunk to appropriate handler.
         
@@ -211,7 +215,7 @@ class UniversalMiddleware(Middleware):
                 yield result
     
     @abstractmethod
-    async def process_data(self, chunk: Chunk, next_handler: NextHandler) -> AsyncIterator[Chunk]:
+    async def process_data(self, chunk: Chunk, next_handler: NextHandler) -> AsyncGenerator[Chunk, None]:
         """
         Process data chunk.
         
@@ -222,10 +226,11 @@ class UniversalMiddleware(Middleware):
         Yields:
             Processed chunks
         """
-        pass
+        yield  # type: ignore[misc]
+        raise NotImplementedError
     
     @abstractmethod
-    async def process_signal(self, chunk: Chunk, next_handler: NextHandler) -> AsyncIterator[Chunk]:
+    async def process_signal(self, chunk: Chunk, next_handler: NextHandler) -> AsyncGenerator[Chunk, None]:
         """
         Process signal chunk.
         
@@ -236,7 +241,8 @@ class UniversalMiddleware(Middleware):
         Yields:
             Processed chunks
         """
-        pass
+        yield  # type: ignore[misc]
+        raise NotImplementedError
 
 
 class MiddlewareChain:

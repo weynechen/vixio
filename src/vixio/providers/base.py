@@ -3,7 +3,7 @@ Base provider class
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from loguru import logger
 
 
@@ -19,7 +19,7 @@ class BaseProvider(ABC):
     - category: Provider category (vad/asr/agent/tts)
     """
     
-    def __init__(self, name: str = None):
+    def __init__(self, name: Optional[str] = None):
         """
         Initialize provider.
         

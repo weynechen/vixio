@@ -22,7 +22,8 @@ import queue
 import threading
 import json
 from dataclasses import dataclass
-from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Tuple
+from collections.abc import AsyncIterator
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from loguru import logger as base_logger
 

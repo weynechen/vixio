@@ -33,7 +33,8 @@ All processing happens server-side, minimizing latency.
 """
 
 import asyncio
-from typing import AsyncIterator, Optional, List
+from collections.abc import AsyncIterator, AsyncGenerator
+from typing import Optional, List
 from enum import Enum
 
 from vixio.core.station import StreamStation, StationRole
@@ -261,7 +262,7 @@ class RealtimeStation(StreamStation):
         
         self.logger.info("Realtime station state reset")
     
-    async def process_chunk(self, chunk: Chunk) -> AsyncIterator[Chunk]:
+    async def process_chunk(self, chunk: Chunk) -> AsyncGenerator[Chunk, None]:
         """
         Process incoming chunks with two-phase state machine.
         

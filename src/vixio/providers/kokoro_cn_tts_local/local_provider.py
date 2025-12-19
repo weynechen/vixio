@@ -84,6 +84,9 @@ def _synthesize_worker(text: str, voice: str, speed: float, lang: str, sample_ra
     # Initialize model if not already done (first call in this process)
     if _worker_model is None:
         _init_worker(repo_id)
+        # Verify initialization succeeded
+        if _worker_model is None:
+            raise RuntimeError(f"Failed to initialize Kokoro model from {repo_id}")
     
     # Create pipeline
     lang_code = 'z' if lang == 'zh' else 'a'

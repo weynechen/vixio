@@ -3,7 +3,8 @@ Agent provider interface
 """
 
 from abc import abstractmethod
-from typing import Any, AsyncIterator, Dict, List, Optional, Union
+from collections.abc import AsyncIterator
+from typing import Any, Dict, List, Optional, Union
 from vixio.providers.base import BaseProvider
 from vixio.providers.vision import MultimodalMessage
 
@@ -50,7 +51,7 @@ class AgentProvider(BaseProvider):
     Key principle: Pure text input/output, completely independent of audio.
     """
     
-    def __init__(self, name: str = None, config: Dict[str, Any] = None):
+    def __init__(self, name: Optional[str] = None, config: Optional[Dict[str, Any]] = None):
         """
         Initialize Agent provider.
         

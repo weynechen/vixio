@@ -17,7 +17,8 @@ Vision Support:
 
 import asyncio
 from collections import deque
-from typing import AsyncIterator, Optional, Dict, Any, Union
+from collections.abc import AsyncIterator, AsyncGenerator
+from typing import Optional, Dict, Any, Union
 from vixio.core.station import Station
 from vixio.core.protocol import ProtocolBase
 from vixio.core.chunk import Chunk, ChunkType
@@ -80,7 +81,7 @@ class InputStation(Station):
         self._latest_frame: Optional[ImageContent] = None  # Heartbeat frame
         self._video_task: Optional[asyncio.Task] = None
     
-    async def process_chunk(self, chunk: Chunk) -> AsyncIterator[Chunk]:
+    async def process_chunk(self, chunk: Chunk) -> AsyncGenerator[Chunk, None]:
         """
         InputStation is starting point, doesn't process upstream Chunks.
         
@@ -331,7 +332,7 @@ class OutputStation(Station):
         self.protocol = protocol
         self.audio_codec = audio_codec
     
-    async def process_chunk(self, chunk: Chunk) -> AsyncIterator[Chunk]:
+    async def process_chunk(self, chunk: Chunk) -> AsyncGenerator[Chunk, None]:
         """
         Process Chunk: convert to protocol message and put into appropriate queue.
         

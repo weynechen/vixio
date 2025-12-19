@@ -4,7 +4,8 @@ Latency Monitor Middleware
 Monitors and records latency metrics (TTFT, etc.).
 """
 
-from typing import AsyncIterator, Optional, List
+from collections.abc import AsyncIterator, AsyncGenerator
+from typing import Optional, List
 from vixio.core.middleware import Middleware, NextHandler
 from vixio.core.chunk import Chunk, ChunkType
 from vixio.utils import get_latency_monitor
@@ -52,7 +53,7 @@ class LatencyMonitorMiddleware(Middleware):
         # turn_id is monotonically increasing, so we only need to store the last one
         self._last_recorded_turn_id = -1
     
-    async def process(self, chunk: Chunk, next_handler: NextHandler) -> AsyncIterator[Chunk]:
+    async def process(self, chunk: Chunk, next_handler: NextHandler) -> AsyncGenerator[Chunk, None]:
         """
         Monitor latency for station outputs.
         

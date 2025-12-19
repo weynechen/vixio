@@ -10,7 +10,8 @@ DAG Signal Handling:
 """
 
 import asyncio
-from typing import AsyncIterator, Callable, Optional, Awaitable, TYPE_CHECKING
+from collections.abc import AsyncIterator, AsyncGenerator
+from typing import Callable, Optional, Awaitable, TYPE_CHECKING
 from vixio.core.middleware import SignalMiddleware, NextHandler
 from vixio.core.chunk import Chunk, ChunkType
 
@@ -98,7 +99,7 @@ class SignalHandlerMiddleware(SignalMiddleware):
             except Exception as e:
                 self.logger.error(f"Error in interrupt callback: {e}")
     
-    async def process_signal(self, chunk: Chunk, next_handler: NextHandler) -> AsyncIterator[Chunk]:
+    async def process_signal(self, chunk: Chunk, next_handler: NextHandler) -> AsyncGenerator[Chunk, None]:
         """
         Process signal chunk.
         

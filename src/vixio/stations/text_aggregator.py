@@ -13,7 +13,7 @@ Use case: Aggregate ASR streaming output before sending to Agent.
 Refactored with middleware pattern for clean separation of concerns.
 """
 
-from typing import AsyncIterator
+from collections.abc import AsyncIterator, AsyncGenerator
 from vixio.core.station import BufferStation
 from vixio.core.chunk import Chunk, ChunkType, TextChunk, EventChunk
 from vixio.core.middleware import with_middlewares
@@ -72,7 +72,7 @@ class TextAggregatorStation(BufferStation):
             self._text_buffer = ""
             self._source = ""
     
-    async def process_chunk(self, chunk: Chunk) -> AsyncIterator[Chunk]:
+    async def process_chunk(self, chunk: Chunk) -> AsyncGenerator[Chunk, None]:
         """
         Process chunk through text aggregator - CORE LOGIC ONLY.
         
