@@ -4,11 +4,6 @@ Example 3: Complete voice conversation with AI Agent (DAG Architecture)
 A full voice chat DAG with VAD, ASR, Agent, sentence splitting, and TTS.
 Demonstrates the complete integration of all components using DAG architecture.
 
-⚠️  NOTE: This is the FULL pipeline version with maximum control and flexibility.
-    For a simplified version with fewer dependencies and lower latency, see:
-    - agent_chat_simple.py (3 stations: ASR→Agent→TTS, ~800ms TTFT)
-    - agent_chat_full.py (identical to this file, explicit naming)
-
 DAG Architecture Benefits:
 - Automatic routing based on ALLOWED_INPUT_TYPES
 - No explicit passthrough logic needed

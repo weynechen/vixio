@@ -25,12 +25,13 @@ dev-qwen:
     
     # ASR Provider (Qwen Cloud - Realtime WebSocket)
     asr:
-      provider: qwen-asr-realtime
+      provider: qwen3-asr-flash-realtime
       config:
         api_key: ${DASHSCOPE_API_KEY}
         model: "qwen3-asr-flash-realtime"
         language: "zh"
         sample_rate: 16000
+        enable_vad: false  # Use external VAD (Silero above)
     
     # Agent Provider (Remote API)
     agent:
@@ -44,13 +45,128 @@ dev-qwen:
     
     # TTS Provider (Qwen Cloud - Realtime WebSocket)
     tts:
-      provider: qwen-tts-realtime
+      provider: qwen3-tts-flash-realtime
       config:
         api_key: ${DASHSCOPE_API_KEY}
         model: "qwen3-tts-flash-realtime"
         voice: "Cherry"
+        mode: "server_commit"  # Auto-segmentation mode
         language_type: "Chinese"
+
+    vlm:
+      provider: openai-vlm-remote
+      config:
+        model: "glm-4v-flash"
+        api_key: "${GLM_API_KEY}"
+        base_url: "https://open.bigmodel.cn/api/paas/v4"
+
+# ==============================================================================
+# Development Mode - Qwen Cloud API Simplified (No External VAD)
+# ==============================================================================
+# Simplified pipeline using Qwen's built-in VAD and auto-segmentation features.
+# No external VAD or SentenceAggregator needed.
+# 
+# Pipeline: ASR(VAD) → Agent → TTS(streaming)
+# Benefits: Fewer dependencies, lower latency (~800-1500ms TTFT)
+# 
+# Usage:
+#   pip install vixio[dev-qwen]  # or: uv pip install -e ".[dev-qwen]"
+#   export DASHSCOPE_API_KEY="your-api-key"
+#   uv run python examples/agent_chat_simple.py
+# ==============================================================================
+dev-qwen-simplified:
+  providers:
+    # No VAD provider needed! ASR has built-in VAD
+    
+    # ASR Provider (Qwen Cloud - Realtime WebSocket with built-in VAD)
+    asr:
+      provider: qwen3-asr-flash-realtime
+      config:
+        api_key: ${DASHSCOPE_API_KEY}
+        model: "qwen3-asr-flash-realtime"
+        language: "zh"
         sample_rate: 16000
+        enable_vad: true  # Use built-in VAD!
+        vad_threshold: 0.5
+        silence_duration_ms: 800
+    
+    # Agent Provider (Remote API)
+    agent:
+      provider: openai-agent
+      config:
+        api_key: ${API_KEY}
+        model: ${LITELLM_MODEL:deepseek/deepseek-chat}
+        base_url: ${BASE_URL:}
+        temperature: 0.7
+        max_tokens: 2000
+    
+    # TTS Provider (Qwen Cloud - Realtime WebSocket with streaming input)
+    tts:
+      provider: qwen3-tts-flash-realtime
+      config:
+        api_key: ${DASHSCOPE_API_KEY}
+        model: "qwen3-tts-flash-realtime"
+        voice: "Cherry"
+        mode: "server_commit"  # Auto-segmentation + streaming input support
+        language_type: "Chinese"
+
+    vlm:
+      provider: openai-vlm-remote
+      config:
+        model: "glm-4v-flash"
+        api_key: "${GLM_API_KEY}"
+        base_url: "https://open.bigmodel.cn/api/paas/v4"
+
+# ==============================================================================
+# Development Mode - Qwen Full Streaming (Continuous Audio/Text)
+# ==============================================================================
+# Full streaming pipeline with continuous audio/text streaming.
+# Uses Qwen's ASR built-in VAD and TTS server_commit mode.
+# 
+# Pipeline: StreamingASR(VAD) → Agent → StreamingTTS
+# Benefits: Minimal latency (~500-1000ms TTFT), simplest pipeline (4 stations)
+# Trade-offs: Requires stable network, ASR VAD may be less accurate
+# 
+# Usage:
+#   pip install vixio[dev-qwen]  # or: uv pip install -e ".[dev-qwen]"
+#   export DASHSCOPE_API_KEY="your-api-key"
+#   uv run python examples/agent_chat_streaming.py
+# ==============================================================================
+dev-qwen-streaming:
+  providers:
+    # No VAD provider needed! ASR has built-in VAD
+    
+    # ASR Provider (Qwen Cloud - Continuous streaming with built-in VAD)
+    asr:
+      provider: qwen3-asr-flash-realtime
+      config:
+        api_key: ${DASHSCOPE_API_KEY}
+        model: "qwen3-asr-flash-realtime"
+        language: "zh"
+        sample_rate: 16000
+        enable_vad: true  # Built-in VAD for streaming mode
+        vad_threshold: 0.5
+        silence_duration_ms: 800
+    
+    # Agent Provider (Remote API)
+    agent:
+      provider: openai-agent
+      config:
+        api_key: ${API_KEY}
+        model: ${LITELLM_MODEL:deepseek/deepseek-chat}
+        base_url: ${BASE_URL:}
+        temperature: 0.7
+        max_tokens: 2000
+    
+    # TTS Provider (Qwen Cloud - Streaming input with auto-segmentation)
+    tts:
+      provider: qwen3-tts-flash-realtime
+      config:
+        api_key: ${DASHSCOPE_API_KEY}
+        model: "qwen3-tts-flash-realtime"
+        voice: "Cherry"
+        mode: "server_commit"  # Streaming input + auto-segmentation
+        language_type: "Chinese"
 
     vlm:
       provider: openai-vlm-remote

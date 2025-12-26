@@ -32,10 +32,12 @@ class ChunkType(str, Enum):
     """
     
     # ============ Data Chunks (Core content - to be processed/transformed) ============
-    # Audio data
-    AUDIO_RAW = "audio.raw"           # PCM audio (16-bit signed, little-endian)
+    # Audio data (layered: streaming → complete)
+    AUDIO_DELTA = "audio.delta"       # Streaming audio fragment (from Transport, ~0.06-0.12s)
+    AUDIO_COMPLETE = "audio.complete" # Complete audio segment (from VAD/TurnDetector)
+    AUDIO_RAW = "audio.raw"           # Deprecated: alias for AUDIO_COMPLETE (backward compatibility)
     
-    # Text data
+    # Text data (layered: streaming → complete)
     TEXT = "text"                      # Complete text (e.g. ASR result, Agent input)
     TEXT_DELTA = "text.delta"         # Streaming text fragment (e.g. Agent output)
     
@@ -180,17 +182,23 @@ class Chunk:
 @dataclass
 class AudioChunk(Chunk):
     """
-    Audio data chunk - raw material for ASR processing
+    Audio data chunk - PCM audio for processing
     
-    Important: AudioChunk ALWAYS contains PCM audio data.
+    Types:
+    - AUDIO_DELTA: Streaming audio fragment from Transport (~0.06-0.12s, ~1920 bytes)
+    - AUDIO_COMPLETE: Complete audio segment from VAD/TurnDetector (merged)
+    - AUDIO_RAW: Deprecated alias for AUDIO_COMPLETE (backward compatibility)
+    
+    Important: AudioChunk ALWAYS contains PCM audio data (16-bit signed, little-endian).
     Transport layers are responsible for format conversion (e.g., Opus -> PCM).
     
     Attributes:
-        data: bytes - PCM audio bytes (16-bit signed integer, little-endian)
+        type: ChunkType - Audio type (DELTA or COMPLETE)
+        data: bytes - PCM audio bytes
         sample_rate: int - Sample rate in Hz (default: 16000)
         channels: int - Number of audio channels (default: 1)
     """
-    type: ChunkType = ChunkType.AUDIO_RAW
+    type: ChunkType = ChunkType.AUDIO_COMPLETE  # Default to COMPLETE for backward compatibility
     sample_rate: int = 16000
     channels: int = 1
     

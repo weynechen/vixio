@@ -191,40 +191,42 @@ def get_vision_describer():
 
 def get_qwen_asr_realtime_provider():
     """
-    Load QwenASRRealtimeProvider class (qwen-asr-realtime).
+    Load Qwen3AsrFlashRealtimeProvider class (qwen3-asr-flash-realtime).
     
     Real-time ASR using Alibaba Cloud's Qwen3-ASR-Flash model.
+    Features: Built-in VAD, context enhancement support
     Requires: pip install vixio[dev-qwen]
     
     Returns:
-        QwenASRRealtimeProvider class
+        Qwen3AsrFlashRealtimeProvider class
     """
     try:
-        from vixio.providers.qwen.qwen3_asr_flash_realtime import QwenASRRealtimeProvider
-        return QwenASRRealtimeProvider
+        from vixio.providers.qwen.qwen3_asr_flash_realtime import Qwen3AsrFlashRealtimeProvider
+        return Qwen3AsrFlashRealtimeProvider
     except ImportError as e:
         raise ImportError(
-            "QwenASRRealtimeProvider requires dashscope package. "
+            "Qwen3AsrFlashRealtimeProvider requires dashscope package. "
             "Install with: pip install vixio[dev-qwen]"
         ) from e
 
 
 def get_qwen_tts_realtime_provider():
     """
-    Load QwenTTSRealtimeProvider class (qwen-tts-realtime).
+    Load Qwen3TtsFlashRealtimeProvider class (qwen3-tts-flash-realtime).
     
     Real-time TTS using Alibaba Cloud's Qwen3-TTS-Flash model.
+    Features: Streaming input, auto-segmentation, multiple audio formats
     Requires: pip install vixio[dev-qwen]
     
     Returns:
-        QwenTTSRealtimeProvider class
+        Qwen3TtsFlashRealtimeProvider class
     """
     try:
-        from vixio.providers.qwen.qwen3_tts_flash_realtime import QwenTTSRealtimeProvider
-        return QwenTTSRealtimeProvider
+        from vixio.providers.qwen.qwen3_tts_flash_realtime import Qwen3TtsFlashRealtimeProvider
+        return Qwen3TtsFlashRealtimeProvider
     except ImportError as e:
         raise ImportError(
-            "QwenTTSRealtimeProvider requires dashscope package. "
+            "Qwen3TtsFlashRealtimeProvider requires dashscope package. "
             "Install with: pip install vixio[dev-qwen]"
         ) from e
 
@@ -362,14 +364,14 @@ except ImportError:
 
 # Qwen Realtime providers (requires dashscope)
 try:
-    from vixio.providers.qwen.qwen3_asr_flash_realtime import QwenASRRealtimeProvider
-    __all__.append("QwenASRRealtimeProvider")
+    from vixio.providers.qwen.qwen3_asr_flash_realtime import Qwen3AsrFlashRealtimeProvider
+    __all__.append("Qwen3AsrFlashRealtimeProvider")
 except ImportError:
     pass
 
 try:
-    from vixio.providers.qwen.qwen3_tts_flash_realtime import QwenTTSRealtimeProvider
-    __all__.append("QwenTTSRealtimeProvider")
+    from vixio.providers.qwen.qwen3_tts_flash_realtime import Qwen3TtsFlashRealtimeProvider
+    __all__.append("Qwen3TtsFlashRealtimeProvider")
 except ImportError:
     pass
 

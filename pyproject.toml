@@ -108,9 +108,9 @@ edge-tts = [
 ]
 
 # qwen platform provider(asr, tts)
-# Requires dashscope>=1.25.2 for QwenTtsRealtime AudioFormat support
+# Requires dashscope>=1.25.3 for QwenTtsRealtime AudioFormat support
 qwen = [
-    "dashscope>=1.25.2"
+    "dashscope>=1.25.3"
 ]
 
 # ----------convenience settings --------------
@@ -128,6 +128,11 @@ dev-grpc = [
 # dev qwen (cloud ASR/TTS + local VAD)
 dev-qwen = [
     "vixio[xiaozhi,openai-agent,silero-vad-local,qwen]",
+]
+
+# dev-qwen streming ,no silero
+dev-qwen-streaming = [
+    "vixio[xiaozhi,openai-agent,qwen]",
 ]
 
 # quick start (same as dev-qwen, for beginners)

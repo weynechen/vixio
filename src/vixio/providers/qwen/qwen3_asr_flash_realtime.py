@@ -1,124 +1,76 @@
 """
 Qwen3 ASR Flash Realtime Provider
 
-Realtime speech recognition using Alibaba Cloud's Qwen3-ASR-Flash model
-via DashScope WebSocket API.
+Features:
+- Built-in VAD (server-side voice activity detection)
+- Text context support via corpus_text (domain-specific terms)
+- Streaming transcription output
+- Multi-language support
 
 Reference: https://help.aliyun.com/zh/model-studio/qwen-real-time-speech-recognition
 
-Features:
-- Session-level connection reuse (connection established in initialize(), closed in cleanup())
-- Low latency streaming recognition
-- Automatic reconnection on connection loss
-
-Requires: pip install dashscope>=1.24.8
+Requires: dashscope>=1.25.3
 """
 
 import asyncio
 import base64
 import os
-import queue
-import threading
+from typing import Optional, List
 from collections.abc import AsyncIterator
-from typing import Any, Dict, List, Optional
+
+from loguru import logger as base_logger
 
 from vixio.providers.asr import ASRProvider
 from vixio.providers.registry import register_provider
 
 
-@register_provider("qwen-asr-realtime")
-class QwenASRRealtimeProvider(ASRProvider):
+@register_provider("qwen3-asr-flash-realtime")
+class Qwen3AsrFlashRealtimeProvider(ASRProvider):
     """
-    Qwen3 ASR Flash Realtime Provider with session-level connection reuse.
-    
-    The WebSocket connection is established during initialize() and reused
-    for all transcription requests within the session. Connection is closed
-    in cleanup().
+    Qwen3 ASR Flash Realtime Provider.
     
     Features:
-    - Session-level connection reuse for low latency
-    - Automatic reconnection on connection loss
-    - Multiple language support (zh, en, ja, ko, yue, etc.)
+    - Built-in VAD (server-side)
+    - Text context support via corpus_text
+    - Streaming transcription output
+    - Multi-language support
     
-    Requirements:
-        pip install dashscope>=1.24.8
+    Reference: https://help.aliyun.com/zh/model-studio/qwen-real-time-speech-recognition
     """
     
     @property
     def is_local(self) -> bool:
-        """This is a remote (cloud API) service"""
+        """This is a remote (cloud API) service."""
         return False
     
     @property
     def is_stateful(self) -> bool:
-        """ASR is stateful - maintains recognition state"""
+        """This provider maintains WebSocket connection state."""
         return True
     
     @property
     def category(self) -> str:
-        """Provider category"""
+        """Provider category."""
         return "asr"
     
-    def __init__(
-        self,
-        api_key: Optional[str] = None,
-        model: str = "qwen3-asr-flash-realtime",
-        language: str = "zh",
-        sample_rate: int = 16000,
-        input_audio_format: str = "pcm",
-        base_url: str = "wss://dashscope.aliyuncs.com/api-ws/v1/realtime",
-    ):
-        """
-        Initialize Qwen ASR Realtime provider.
-        
-        Args:
-            api_key: DashScope API key. If None, uses DASHSCOPE_API_KEY env var.
-            model: Model name (default: qwen3-asr-flash-realtime)
-            language: Recognition language (zh/en/ja/ko/yue/auto)
-            sample_rate: Audio sample rate (default: 16000)
-            input_audio_format: Audio format (pcm/wav/mp3)
-            base_url: WebSocket API URL
-        """
-        name = getattr(self.__class__, '_registered_name', self.__class__.__name__)
-        super().__init__(name=name)
-        
-        self.api_key = api_key or os.getenv("DASHSCOPE_API_KEY")
-        if not self.api_key:
-            raise ValueError(
-                "DashScope API key is required. "
-                "Set DASHSCOPE_API_KEY environment variable or pass api_key parameter."
-            )
-        
-        self.model = model
-        self.language = language
-        self.sample_rate = sample_rate
-        self.input_audio_format = input_audio_format
-        self.base_url = base_url
-        
-        # Connection state
-        self._conversation = None
-        self._callback = None
-        self._is_connected = False
-        self._connection_lock = threading.Lock()
-        
-        # Current transcription state
-        self._result_queue: queue.Queue = queue.Queue()
-        self._transcription_complete = threading.Event()
-        self._current_error: Optional[Exception] = None
-        
-        # Latency tracking
-        self._last_send_latency_ms: float = 0
-        self._last_first_result_latency_ms: float = 0
-        self._last_total_latency_ms: float = 0
-        
-        self.logger.info(
-            f"Initialized Qwen ASR Realtime provider "
-            f"(model={model}, language={language})"
-        )
+    @property
+    def supports_vad(self) -> bool:
+        """This provider has built-in VAD support."""
+        return True
+    
+    @property
+    def supports_context(self) -> bool:
+        """This provider supports text context enhancement."""
+        return True
+    
+    @property
+    def supports_streaming_input(self) -> bool:
+        """This provider supports continuous audio streaming."""
+        return True
     
     @classmethod
-    def get_config_schema(cls) -> Dict[str, Any]:
-        """Return configuration schema"""
+    def get_config_schema(cls):
+        """Return configuration schema."""
         return {
             "api_key": {
                 "type": "string",
@@ -128,48 +80,103 @@ class QwenASRRealtimeProvider(ASRProvider):
             "model": {
                 "type": "string",
                 "default": "qwen3-asr-flash-realtime",
-                "description": "Model name for ASR"
+                "description": "Model name"
             },
             "language": {
                 "type": "string",
                 "default": "zh",
-                "description": "Recognition language (zh/en/ja/ko/yue/auto)"
-            },
-            "sample_rate": {
-                "type": "int",
-                "default": 16000,
-                "description": "Audio sample rate in Hz"
-            },
-            "input_audio_format": {
-                "type": "string",
-                "default": "pcm",
-                "description": "Input audio format (pcm/wav/mp3)"
+                "description": "Language code (zh, en, auto, etc.)"
             },
             "base_url": {
                 "type": "string",
                 "default": "wss://dashscope.aliyuncs.com/api-ws/v1/realtime",
                 "description": "WebSocket API URL"
+            },
+            "sample_rate": {
+                "type": "int",
+                "default": 16000,
+                "description": "Audio sample rate (8000 or 16000)"
+            },
+            "enable_vad": {
+                "type": "bool",
+                "default": False,
+                "description": "Enable built-in VAD"
+            },
+            "vad_threshold": {
+                "type": "float",
+                "default": 0.2,
+                "description": "VAD threshold (0.0-1.0)"
+            },
+            "silence_duration_ms": {
+                "type": "int",
+                "default": 800,
+                "description": "Silence duration to trigger end (ms)"
             }
         }
     
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        model: str = "qwen3-asr-flash-realtime",
+        language: str = "zh",
+        base_url: str = "wss://dashscope.aliyuncs.com/api-ws/v1/realtime",
+        sample_rate: int = 16000,
+        enable_vad: bool = True,  
+        vad_threshold: float = 0.2,
+        silence_duration_ms: int = 800,
+    ):
+        """
+        Initialize Qwen3 ASR provider.
+        
+        Args:
+            api_key: DashScope API key (or use DASHSCOPE_API_KEY env var)
+            model: Model name (default: qwen3-asr-flash-realtime)
+            language: Language code (zh, en, auto, etc.)
+            base_url: WebSocket URL
+            sample_rate: Audio sample rate (8000 or 16000)
+            enable_vad: Enable built-in VAD (useful when no external VAD)
+            vad_threshold: VAD threshold (0.0-1.0)
+            silence_duration_ms: Silence duration to trigger end
+        """
+        super().__init__(name="qwen3-asr-flash-realtime")
+        
+        self.api_key = api_key or os.getenv("DASHSCOPE_API_KEY")
+        if not self.api_key:
+            raise ValueError(
+                "DASHSCOPE_API_KEY required. "
+                "Set DASHSCOPE_API_KEY environment variable or pass api_key parameter."
+            )
+        
+        self.model = model
+        self.language = language
+        self.base_url = base_url
+        self.sample_rate = sample_rate
+        self.enable_vad = enable_vad
+        self.vad_threshold = vad_threshold
+        self.silence_duration_ms = silence_duration_ms
+        
+        # Connection state
+        self._conversation = None
+        self._callback = None
+        self._is_connected = False
+        
+        # Result queue
+        self._result_queue: asyncio.Queue = asyncio.Queue()
+        self._loop = None
+        
+        # Streaming state
+        self._speech_ended = False  # For StreamingASRStation
+        
+        self.logger = base_logger.bind(component=self.name)
+        self.logger.info(
+            f"Initialized Qwen3 ASR provider (model={model}, language={language}, "
+            f"vad={'enabled' if enable_vad else 'disabled'})"
+        )
+    
     async def initialize(self) -> None:
-        """
-        Initialize provider and establish WebSocket connection.
-        
-        Connection is kept alive for the entire session lifetime.
-        """
-        try:
-            import dashscope
-            dashscope.api_key = self.api_key
-        except ImportError as e:
-            raise ImportError(
-                "dashscope not installed. "
-                "Install with: pip install dashscope>=1.24.8"
-            ) from e
-        
-        # Establish connection in background thread
+        """Initialize provider."""
+        self._loop = asyncio.get_running_loop()
         await self._connect()
-        self.logger.info("Qwen ASR Realtime provider initialized with persistent connection")
     
     async def _connect(self) -> None:
         """Establish WebSocket connection."""
@@ -177,271 +184,289 @@ class QwenASRRealtimeProvider(ASRProvider):
             return
         
         try:
-            from dashscope.audio.qwen_omni import OmniRealtimeConversation, OmniRealtimeCallback
-        except ImportError:
-            from dashscope.audio.qwen_omni import OmniRealtimeConversation, OmniRealtimeCallback
+            import dashscope
+            dashscope.api_key = self.api_key
+            from dashscope.audio.qwen_omni import (
+                OmniRealtimeConversation,
+                MultiModality,
+                AudioFormat,
+            )
+            from dashscope.audio.qwen_omni.omni_realtime import TranscriptionParams
+        except ImportError as e:
+            raise ImportError(
+                "dashscope required. "
+                "or error module path"
+            ) from e
         
-        # Create callback instance
         self._callback = self._create_callback()
         
-        # Create and connect
         self._conversation = OmniRealtimeConversation(
             model=self.model,
             url=self.base_url,
             callback=self._callback
         )
         
-        # Connect in a thread to avoid blocking
+        # Connect in thread
         def connect_sync():
-            try:
-                self._conversation.connect()
-                
-                # Configure session for ASR
-                try:
-                    from dashscope.audio.qwen_omni import MultiModality
-                    from dashscope.audio.qwen_omni.omni_realtime import TranscriptionParams
-                    
-                    self._conversation.update_session(
-                        output_modalities=[MultiModality.TEXT],
-                        enable_input_audio_transcription=True,
-                        transcription_params=TranscriptionParams(
-                            language=self.language,
-                            sample_rate=self.sample_rate,
-                            input_audio_format=self.input_audio_format
-                        )
-                    )
-                except ImportError:
-                    # Fallback without TranscriptionParams
-                    self._conversation.update_session(
-                        output_modalities=["TEXT"],
-                        enable_input_audio_transcription=True,
-                    )
-                
-                with self._connection_lock:
-                    self._is_connected = True
-                self.logger.info("ASR WebSocket connection established")
-            except Exception as e:
-                self.logger.error(f"Failed to establish ASR connection: {e}")
-                raise
+            self._conversation.connect()
+            
+            transcription_params = TranscriptionParams(
+                language=self.language,
+                sample_rate=self.sample_rate,
+                input_audio_format="pcm"
+            )
+            
+            self._conversation.update_session(
+                output_modalities=[MultiModality.TEXT],
+                input_audio_format=AudioFormat.PCM_16000HZ_MONO_16BIT,
+                enable_input_audio_transcription=True,
+                transcription_params=transcription_params,
+                enable_turn_detection=self.enable_vad,
+                turn_detection_type='server_vad' if self.enable_vad else None,
+                turn_detection_threshold=self.vad_threshold if self.enable_vad else None,
+                turn_detection_silence_duration_ms=self.silence_duration_ms if self.enable_vad else None,
+            )
+            
+            self._is_connected = True
+            self.logger.info("ASR WebSocket connected")
         
-        # Run connection in thread
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, connect_sync)
     
+    async def transcribe_stream(
+        self, 
+        audio_chunks: List[bytes],
+        context: Optional[str] = None
+    ) -> AsyncIterator[str]:
+        """
+        Transcribe audio with optional context.
+        
+        Args:
+            audio_chunks: PCM audio bytes (16kHz mono 16-bit)
+            context: Optional text context for better recognition
+        
+        Yields:
+            Transcription text (streaming or final)
+        """
+        if not self._is_connected:
+            await self._connect()
+        
+        # Update context if provided
+        if context and self._conversation:
+            from dashscope.audio.qwen_omni.omni_realtime import TranscriptionParams
+            
+            def update_context():
+                transcription_params = TranscriptionParams(
+                    language=self.language,
+                    sample_rate=self.sample_rate,
+                    input_audio_format="pcm",
+                    corpus_text=context  # Context enhancement!
+                )
+                self._conversation.update_session(
+                    transcription_params=transcription_params
+                )
+            
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, update_context)
+            self.logger.info(f"Updated ASR context: {context[:100]}...")
+        
+        # Send audio
+        for audio_chunk in audio_chunks:
+            def send_audio():
+                audio_b64 = base64.b64encode(audio_chunk).decode('ascii')
+                self._conversation.append_audio(audio_b64)
+            
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, send_audio)
+        
+        # Commit if VAD disabled (manual mode)
+        if not self.enable_vad:
+            def commit():
+                self._conversation.commit()
+            
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, commit)
+        
+        # Wait for result
+        timeout = 10.0
+        try:
+            result = await asyncio.wait_for(
+                self._result_queue.get(),
+                timeout=timeout
+            )
+            if result:
+                yield result
+        except asyncio.TimeoutError:
+            self.logger.warning("ASR transcription timeout")
+    
     def _create_callback(self):
-        """Create callback instance for handling WebSocket events."""
+        """Create callback for WebSocket events."""
         from dashscope.audio.qwen_omni import OmniRealtimeCallback
         
-        provider = self  # Capture reference
+        provider = self
         
-        class ASRCallback(OmniRealtimeCallback):
+        class AsrCallback(OmniRealtimeCallback):
             def on_open(self):
-                provider.logger.debug("ASR WebSocket connection opened")
+                provider.logger.debug("ASR WebSocket opened")
             
-            def on_close(self, close_status_code, close_msg):
-                provider.logger.info(f"ASR WebSocket closed: {close_status_code}, {close_msg}")
-                with provider._connection_lock:
-                    provider._is_connected = False
-                # Signal any pending transcription
-                provider._transcription_complete.set()
+            def on_close(self, code, msg):
+                provider.logger.info(f"ASR WebSocket closed: {code} {msg}")
+                provider._is_connected = False
             
             def on_event(self, event):
                 try:
                     event_type = event.get("type", "")
                     
-                    if event_type == "conversation.item.input_audio_transcription.completed":
-                        # Final transcription result
+                    # Streaming transcription (optional)
+                    if event_type == "conversation.item.input_audio_transcription.text":
+                        text = event.get("text", "")
+                        if text and provider._loop:
+                            provider._loop.call_soon_threadsafe(
+                                provider._result_queue.put_nowait,
+                                text
+                            )
+                    
+                    # Final transcription
+                    elif event_type == "conversation.item.input_audio_transcription.completed":
                         transcript = event.get("transcript", "")
-                        if transcript:
-                            provider._result_queue.put(transcript)
-                            provider.logger.info(f"ASR transcription completed: {transcript}")
-                        # Signal completion
-                        provider._transcription_complete.set()
+                        if transcript and provider._loop:
+                            provider._loop.call_soon_threadsafe(
+                                provider._result_queue.put_nowait,
+                                transcript
+                            )
+                        
+                        # Mark speech as ended (for StreamingASRStation)
+                        provider._speech_ended = True
                     
-                    elif event_type == "conversation.item.input_audio_transcription.text":
-                        # Intermediate result (streaming)
-                        pass
-                    
+                    # VAD events
                     elif event_type == "input_audio_buffer.speech_started":
-                        provider.logger.debug("Speech started detected")
-                    
+                        provider.logger.debug("VAD: Speech started")
+                        provider._speech_ended = False  # Reset flag
                     elif event_type == "input_audio_buffer.speech_stopped":
-                        provider.logger.debug("Speech stopped detected")
-                    
-                    elif event_type == "input_audio_buffer.committed":
-                        provider.logger.debug("Audio buffer committed")
-                    
-                    elif event_type == "error":
-                        error_msg = event.get("error", {}).get("message", "Unknown error")
-                        provider._current_error = Exception(f"ASR error: {error_msg}")
-                        provider.logger.error(f"ASR error: {error_msg}")
-                        provider._transcription_complete.set()
-                    
-                    elif event_type == "session.created":
-                        provider.logger.debug(f"Session created: {event.get('session', {}).get('id', '')}")
-                    
-                    elif event_type == "session.updated":
-                        provider.logger.debug("Session updated")
-                    
-                    elif event_type == "response.done":
-                        provider.logger.debug("Response done")
-                        provider._transcription_complete.set()
+                        provider.logger.debug("VAD: Speech stopped")
+                        # Don't set _speech_ended here, wait for transcription.completed
                 
                 except Exception as e:
                     provider.logger.error(f"Error processing ASR event: {e}")
-                    provider._current_error = e
-                    provider._transcription_complete.set()
-            
-            def on_error(self, error):
-                provider.logger.error(f"ASR WebSocket error: {error}")
-                provider._current_error = Exception(str(error))
-                with provider._connection_lock:
-                    provider._is_connected = False
-                provider._transcription_complete.set()
         
-        return ASRCallback()
+        return AsrCallback()
+    
+    async def reset(self) -> None:
+        """Reset provider state."""
+        # Clear result queue
+        while not self._result_queue.empty():
+            try:
+                self._result_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+    
+    async def append_audio_continuous(self, audio_data: bytes) -> AsyncIterator[str]:
+        """
+        Append audio to continuous streaming ASR session (for StreamingASRStation).
+        
+        This method is called repeatedly by StreamingASRStation for each AUDIO_DELTA.
+        ASR provider processes continuously with built-in VAD.
+        
+        Args:
+            audio_data: Audio bytes (PCM, 16kHz, mono, 16-bit)
+            
+        Yields:
+            Transcription text as it becomes available
+        """
+        if not self._is_connected:
+            # Initialize with VAD enabled for streaming mode
+            await self._connect()
+            
+            # Enable VAD for streaming
+            def update_vad():
+                from dashscope.audio.qwen_omni.omni_realtime import TurnDetectionType
+                
+                self._conversation.update_session(
+                    enable_turn_detection=True,
+                    turn_detection_type=TurnDetectionType.SERVER_VAD,
+                    vad_threshold=self.vad_threshold,
+                    silence_duration_ms=self.silence_duration_ms
+                )
+            
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, update_vad)
+            
+            self.logger.info("StreamingASR session started with built-in VAD")
+        
+        # Append audio (convert bytes to base64 string as required by API)
+        audio_b64 = base64.b64encode(audio_data).decode('utf-8')
+        
+        def append():
+            self._conversation.append_audio(audio_b64)
+        
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, append)
+        
+        self.logger.debug(f"Appended {len(audio_data)} bytes to ASR stream")
+        
+        # Yield any results that have arrived
+        while not self._result_queue.empty():
+            try:
+                text = self._result_queue.get_nowait()
+                if text:
+                    yield text
+            except asyncio.QueueEmpty:
+                break
+    
+    def is_speech_ended(self) -> bool:
+        """
+        Check if ASR has detected end of speech.
+        
+        In streaming mode with built-in VAD, ASR signals when user stops speaking.
+        This is used by StreamingASRStation to emit completion.
+        
+        Note: This method returns True only ONCE per speech end event.
+        After returning True, it automatically resets to False.
+        
+        Returns:
+            True if speech has ended (only once per event)
+        """
+        # Check if there's a special marker in metadata
+        # Note: Implementation depends on how Qwen signals speech end
+        ended = getattr(self, '_speech_ended', False)
+        if ended:
+            # Reset after reading to ensure we only signal once
+            self._speech_ended = False
+        return ended
+    
+    async def stop_streaming(self) -> None:
+        """
+        Stop streaming ASR session.
+        
+        Called by StreamingASRStation on interrupt.
+        """
+        if self._conversation and self._is_connected:
+            try:
+                # Signal end of audio stream
+                def commit():
+                    self._conversation.commit()
+                
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(None, commit)
+                
+                self.logger.info("Stopped ASR streaming session")
+            except Exception as e:
+                self.logger.error(f"Error stopping ASR stream: {e}")
+        
+        self._speech_ended = False
     
     async def cleanup(self) -> None:
-        """Cleanup provider resources and close connection."""
+        """Cleanup resources."""
         if self._conversation:
             try:
-                # Close in thread to avoid blocking
+                def close():
+                    self._conversation.close()
+                
                 loop = asyncio.get_event_loop()
-                await loop.run_in_executor(None, self._conversation.close)
+                await loop.run_in_executor(None, close)
             except Exception as e:
                 self.logger.warning(f"Error closing ASR connection: {e}")
         
         self._conversation = None
-        self._callback = None
         self._is_connected = False
-        self.logger.info("Qwen ASR Realtime provider cleaned up")
-    
-    async def transcribe_stream(self, audio_chunks: List[bytes]) -> AsyncIterator[str]:
-        """
-        Transcribe audio chunks to text using the persistent connection.
-        
-        Args:
-            audio_chunks: List of PCM audio bytes (16kHz, mono, 16-bit)
-            
-        Yields:
-            Text segments as recognition progresses
-        """
-        # Ensure connection is established
-        if not self._is_connected:
-            self.logger.warning("ASR connection lost, reconnecting...")
-            await self._connect()
-        
-        if not self._conversation:
-            raise RuntimeError("ASR provider not initialized. Call initialize() first.")
-        
-        # Concatenate all audio chunks
-        audio_data = b''.join(audio_chunks)
-        
-        if not audio_data:
-            return
-        
-        # Reset state for new transcription
-        self._result_queue = queue.Queue()
-        self._transcription_complete.clear()
-        self._current_error = None
-        
-        # Record start time for latency measurement
-        import time
-        send_start_time = time.time()
-        
-        # Send audio in a thread
-        def send_audio():
-            try:
-                chunk_size = 3200  # 100ms of 16kHz 16-bit mono audio
-                
-                # Send leading silence to prevent head loss
-                # Qwen ASR needs some "warm-up" time before processing real audio
-                leading_silence = bytes(chunk_size * 3)  # 300ms of silence
-                audio_b64 = base64.b64encode(leading_silence).decode('ascii')
-                self._conversation.append_audio(audio_b64)
-                self.logger.debug("Sent 300ms leading silence")
-                
-                # Send audio data in chunks
-                for i in range(0, len(audio_data), chunk_size):
-                    chunk = audio_data[i:i + chunk_size]
-                    audio_b64 = base64.b64encode(chunk).decode('ascii')
-                    self._conversation.append_audio(audio_b64)
-                
-                # Send trailing silence to trigger final transcription
-                trailing_silence = bytes(chunk_size * 5)  # 500ms of silence
-                audio_b64 = base64.b64encode(trailing_silence).decode('ascii')
-                self._conversation.append_audio(audio_b64)
-                
-                self.logger.debug(f"Sent {len(audio_data)} bytes of audio + padding")
-            except Exception as e:
-                self.logger.error(f"Error sending audio: {e}")
-                self._current_error = e
-                self._transcription_complete.set()
-        
-        # Start sending audio
-        loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, send_audio)
-        
-        # Record send complete time
-        send_complete_time = time.time()
-        self._last_send_latency_ms = (send_complete_time - send_start_time) * 1000
-        
-        # Wait for results with timeout
-        wait_start_time = time.time()
-        max_wait_time = 30  # Maximum wait time in seconds
-        first_result_time = None
-        
-        while True:
-            # Check timeout
-            elapsed = time.time() - wait_start_time
-            if elapsed > max_wait_time:
-                self.logger.warning(f"ASR timeout after {elapsed:.1f}s")
-                break
-            
-            # Check if transcription complete and queue is empty
-            if self._transcription_complete.is_set() and self._result_queue.empty():
-                break
-            
-            # Try to get result
-            try:
-                result = self._result_queue.get(timeout=0.1)
-                
-                # Record first result time for latency measurement
-                if first_result_time is None:
-                    first_result_time = time.time()
-                    self._last_first_result_latency_ms = (first_result_time - send_start_time) * 1000
-                    self.logger.info(f"ASR first result latency: {self._last_first_result_latency_ms:.0f}ms")
-                
-                self.logger.debug(f"Yielding ASR result: {result[:50]}...")
-                yield result
-            except queue.Empty:
-                await asyncio.sleep(0.05)
-        
-        # Record total latency
-        total_time = time.time()
-        self._last_total_latency_ms = (total_time - send_start_time) * 1000
-        self.logger.info(f"ASR total latency: {self._last_total_latency_ms:.0f}ms (send: {self._last_send_latency_ms:.0f}ms)")
-        
-        # Check for errors
-        if self._current_error:
-            self.logger.error(f"ASR transcription failed: {self._current_error}")
-    
-    async def reset(self) -> None:
-        """Reset ASR state for new turn."""
-        self._result_queue = queue.Queue()
-        self._transcription_complete.clear()
-        self._current_error = None
-        self.logger.debug("ASR state reset")
-    
-    def get_config(self) -> Dict[str, Any]:
-        """Get provider configuration"""
-        config = super().get_config()
-        config.update({
-            "model": self.model,
-            "language": self.language,
-            "sample_rate": self.sample_rate,
-            "input_audio_format": self.input_audio_format,
-            "base_url": self.base_url,
-            "is_connected": self._is_connected,
-        })
-        return config
+        self.logger.info("ASR provider cleaned up")

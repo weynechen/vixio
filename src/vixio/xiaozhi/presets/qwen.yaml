@@ -4,6 +4,13 @@
 # Architecture:
 #   Audio → VAD → TurnDetector → ASR → TextAggregator → Agent → SentenceAggregator → TTS → Audio
 #
+# NOTE: This pipeline uses external VAD (Silero) for maximum control.
+#       For simplified setup, see design/qwen-asr-tts-redesign.md:
+#       - ASR has built-in VAD (can skip Silero dependency)
+#       - ASR supports context enhancement via corpus_text
+#       - TTS supports streaming input (can skip SentenceAggregator)
+#       - Simplified pipeline: ASR(VAD+context) → Agent → TTS(streaming)
+#
 # Requirements:
 #   - DashScope API Key (for ASR, TTS, LLM)
 #   - Install: pip install vixio[quickstart]
@@ -31,6 +38,7 @@ providers:
       model: "qwen3-asr-flash-realtime"
       language: "zh"
       sample_rate: 16000
+      enable_turn_detection: false  # Disable server-side VAD (we use local VAD above)
   
   # Agent Provider (Qwen LLM via OpenAI-compatible API)
   # Language model for conversation
@@ -45,6 +53,7 @@ providers:
   
   # TTS Provider (Qwen Cloud - Realtime WebSocket)
   # Text-to-speech synthesis via Alibaba DashScope
+  # Output: Native 24kHz PCM audio (resampling handled by transport layer)
   tts:
     provider: qwen-tts-realtime
     config:
@@ -52,7 +61,6 @@ providers:
       model: "qwen3-tts-flash-realtime"
       voice: "Cherry"              # Available: Cherry, Zhichu, Zhixiaobai, etc.
       language_type: "Chinese"
-      sample_rate: 16000
 
   # Vision Provider (Optional - for image analysis)
   vlm:

@@ -1,131 +1,66 @@
 """
 Qwen3 TTS Flash Realtime Provider
 
-Realtime text-to-speech synthesis using Alibaba Cloud's Qwen3-TTS-Flash model
-via DashScope WebSocket API.
+Features:
+- Two modes: server_commit (auto-segmentation) and commit (manual)
+- Streaming text input support (server_commit mode)
+- Multi-format output (PCM, MP3, Opus, WAV)
+- Adjustable voice parameters (speed, pitch, volume)
 
 Reference: https://help.aliyun.com/zh/model-studio/qwen-tts-realtime
 
-Features:
-- Session-level connection reuse (connection established in initialize(), closed in cleanup())
-- Low latency streaming synthesis
-- Automatic reconnection on connection loss
-
-Requires: pip install dashscope>=1.25.2
+Requires: dashscope>=1.25.3
 """
 
 import asyncio
 import base64
 import os
-import queue
-import threading
+from typing import Optional
 from collections.abc import AsyncIterator
-from typing import Any, Dict, Optional
 
-import numpy as np
+from loguru import logger as base_logger
 
 from vixio.providers.tts import TTSProvider
 from vixio.providers.registry import register_provider
 
 
-@register_provider("qwen-tts-realtime")
-class QwenTTSRealtimeProvider(TTSProvider):
+@register_provider("qwen3-tts-flash-realtime")
+class Qwen3TtsFlashRealtimeProvider(TTSProvider):
     """
-    Qwen3 TTS Flash Realtime Provider with session-level connection reuse.
-    
-    The WebSocket connection is established during initialize() and reused
-    for all synthesis requests within the session. Connection is closed
-    in cleanup().
+    Qwen3 TTS Flash Realtime Provider.
     
     Features:
-    - Session-level connection reuse for low latency
-    - Automatic reconnection on connection loss
-    - Multiple voice options
-    - PCM audio output (24kHz native, resampled to target rate if needed)
+    - Two modes: server_commit (auto-segmentation) and commit (manual)
+    - Streaming text input support (server_commit mode)
+    - Multi-format output (PCM, MP3, Opus, WAV)
+    - Adjustable voice parameters (speed, pitch, volume)
     
-    Requirements:
-        pip install dashscope>=1.25.2
+    Reference: https://help.aliyun.com/zh/model-studio/qwen-tts-realtime
     """
-    
-    # Native sample rate of Qwen TTS
-    NATIVE_SAMPLE_RATE = 24000
     
     @property
     def is_local(self) -> bool:
-        """This is a remote (cloud API) service"""
+        """This is a remote (cloud API) service."""
         return False
     
     @property
     def is_stateful(self) -> bool:
-        """TTS is stateless - each request is independent"""
-        return False
+        """This provider maintains WebSocket connection state."""
+        return True
     
     @property
     def category(self) -> str:
-        """Provider category"""
+        """Provider category."""
         return "tts"
     
-    def __init__(
-        self,
-        api_key: Optional[str] = None,
-        model: str = "qwen3-tts-flash-realtime",
-        voice: str = "Cherry",
-        language_type: str = "Chinese",
-        sample_rate: int = 16000,
-        base_url: str = "wss://dashscope.aliyuncs.com/api-ws/v1/realtime",
-    ):
-        """
-        Initialize Qwen TTS Realtime provider.
-        
-        Args:
-            api_key: DashScope API key. If None, uses DASHSCOPE_API_KEY env var.
-            model: Model name (default: qwen3-tts-flash-realtime)
-            voice: Voice name. Available voices:
-                   - Chinese female: Cherry, Serena, Ethan, Chelsie
-                   - More voices available in DashScope documentation
-            language_type: Language type (Chinese/English)
-            sample_rate: Output sample rate (will resample from 24kHz if different)
-            base_url: WebSocket API URL
-        """
-        name = getattr(self.__class__, '_registered_name', self.__class__.__name__)
-        super().__init__(name=name)
-        
-        self.api_key = api_key or os.getenv("DASHSCOPE_API_KEY")
-        if not self.api_key:
-            raise ValueError(
-                "DashScope API key is required. "
-                "Set DASHSCOPE_API_KEY environment variable or pass api_key parameter."
-            )
-        
-        self.model = model
-        self.voice = voice
-        self.language_type = language_type
-        self.sample_rate = sample_rate
-        self.base_url = base_url
-        
-        # Connection state
-        self._tts_client = None
-        self._callback = None
-        self._is_connected = False
-        self._connection_lock = threading.Lock()
-        
-        # Current synthesis state
-        self._audio_queue: queue.Queue = queue.Queue()
-        self._response_done = threading.Event()  # response.done received
-        self._session_finished = threading.Event()  # session.finished received
-        self._current_error: Optional[Exception] = None
-        
-        # Cancellation
-        self._cancelled = False
-        
-        self.logger.info(
-            f"Initialized Qwen TTS Realtime provider "
-            f"(model={model}, voice={voice}, sample_rate={sample_rate})"
-        )
+    @property
+    def supports_streaming_input(self) -> bool:
+        """This provider supports streaming text input in server_commit mode."""
+        return self.mode == "server_commit"
     
     @classmethod
-    def get_config_schema(cls) -> Dict[str, Any]:
-        """Return configuration schema"""
+    def get_config_schema(cls):
+        """Return configuration schema."""
         return {
             "api_key": {
                 "type": "string",
@@ -135,48 +70,124 @@ class QwenTTSRealtimeProvider(TTSProvider):
             "model": {
                 "type": "string",
                 "default": "qwen3-tts-flash-realtime",
-                "description": "Model name for TTS"
+                "description": "Model name"
             },
             "voice": {
                 "type": "string",
                 "default": "Cherry",
-                "description": "Voice name (Cherry/Serena/Ethan/Chelsie/etc.)"
-            },
-            "language_type": {
-                "type": "string",
-                "default": "Chinese",
-                "description": "Language type (Chinese/English)"
-            },
-            "sample_rate": {
-                "type": "int",
-                "default": 16000,
-                "description": "Output sample rate (will resample from 24kHz if different)"
+                "description": "Voice name (Cherry, Ethan, etc.)"
             },
             "base_url": {
                 "type": "string",
                 "default": "wss://dashscope.aliyuncs.com/api-ws/v1/realtime",
                 "description": "WebSocket API URL"
+            },
+            "mode": {
+                "type": "string",
+                "default": "server_commit",
+                "description": "Response mode (server_commit or commit)"
+            },
+            "sample_rate": {
+                "type": "int",
+                "default": 24000,
+                "description": "Output sample rate (8000-48000)"
+            },
+            "audio_format": {
+                "type": "string",
+                "default": "pcm",
+                "description": "Audio format (pcm, mp3, opus, wav)"
+            },
+            "language_type": {
+                "type": "string",
+                "default": "Chinese",
+                "description": "Language type (Chinese, English, Auto, etc.)"
+            },
+            "speech_rate": {
+                "type": "float",
+                "default": 1.0,
+                "description": "Speech rate (0.5-2.0)"
+            },
+            "pitch_rate": {
+                "type": "float",
+                "default": 1.0,
+                "description": "Pitch rate (0.5-2.0)"
+            },
+            "volume": {
+                "type": "int",
+                "default": 50,
+                "description": "Volume (0-100)"
             }
         }
     
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        model: str = "qwen3-tts-flash-realtime",
+        voice: str = "Cherry",
+        base_url: str = "wss://dashscope.aliyuncs.com/api-ws/v1/realtime",
+        mode: str = "server_commit",  # or "commit"
+        sample_rate: int = 24000,
+        audio_format: str = "pcm",
+        language_type: str = "Chinese",
+        speech_rate: float = 1.0,
+        pitch_rate: float = 1.0,
+        volume: int = 50,
+    ):
+        """
+        Initialize Qwen3 TTS provider.
+        
+        Args:
+            api_key: DashScope API key (or use DASHSCOPE_API_KEY env var)
+            model: Model name (default: qwen3-tts-flash-realtime)
+            voice: Voice name (Cherry, Ethan, etc.)
+            base_url: WebSocket URL
+            mode: "server_commit" (auto-segment) or "commit" (manual)
+            sample_rate: Output sample rate (8000-48000)
+            audio_format: "pcm", "mp3", "opus", "wav"
+            language_type: "Chinese", "English", "Auto", etc.
+            speech_rate: Speech rate (0.5-2.0)
+            pitch_rate: Pitch rate (0.5-2.0)
+            volume: Volume (0-100)
+        """
+        super().__init__(name="qwen3-tts-flash-realtime")
+        
+        self.api_key = api_key or os.getenv("DASHSCOPE_API_KEY")
+        if not self.api_key:
+            raise ValueError(
+                "DASHSCOPE_API_KEY required. "
+                "Set DASHSCOPE_API_KEY environment variable or pass api_key parameter."
+            )
+        
+        self.model = model
+        self.voice = voice
+        self.base_url = base_url
+        self.mode = mode
+        self.sample_rate = sample_rate
+        self.audio_format = audio_format
+        self.language_type = language_type
+        self.speech_rate = speech_rate
+        self.pitch_rate = pitch_rate
+        self.volume = volume
+        
+        # Connection state
+        self._tts = None
+        self._callback = None
+        self._is_connected = False
+        
+        # Audio queue
+        self._audio_queue: asyncio.Queue = asyncio.Queue()
+        self._synthesis_complete = asyncio.Event()
+        self._loop = None
+        
+        self.logger = base_logger.bind(component=self.name)
+        self.logger.info(
+            f"Initialized Qwen3 TTS provider (model={model}, voice={voice}, mode={mode})"
+        )
+    
     async def initialize(self) -> None:
-        """
-        Initialize provider and establish WebSocket connection.
-        
-        Connection is kept alive for the entire session lifetime.
-        """
-        try:
-            import dashscope
-            dashscope.api_key = self.api_key
-        except ImportError as e:
-            raise ImportError(
-                "dashscope not installed. "
-                "Install with: pip install dashscope>=1.25.2"
-            ) from e
-        
-        # Establish connection
+        """Initialize provider."""
+        self._loop = asyncio.get_running_loop()
         await self._connect()
-        self.logger.info("Qwen TTS Realtime provider initialized with persistent connection")
     
     async def _connect(self) -> None:
         """Establish WebSocket connection."""
@@ -184,305 +195,343 @@ class QwenTTSRealtimeProvider(TTSProvider):
             return
         
         try:
-            from dashscope.audio.qwen_tts_realtime import QwenTtsRealtime, QwenTtsRealtimeCallback, AudioFormat
+            import dashscope
+            dashscope.api_key = self.api_key
+            from dashscope.audio.qwen_tts_realtime import (
+                QwenTtsRealtime,
+                QwenTtsRealtimeCallback,
+                AudioFormat
+            )
         except ImportError as e:
             raise ImportError(
-                "QwenTtsRealtime not available. "
-                "Install dashscope>=1.25.2 with: pip install dashscope>=1.25.2"
+                "dashscope required. "
+                "or error module path"
             ) from e
         
-        # Create callback instance
         self._callback = self._create_callback()
         
-        # Create TTS client
-        self._tts_client = QwenTtsRealtime(
+        self._tts = QwenTtsRealtime(
             model=self.model,
-            callback=self._callback,
-            url=self.base_url
+            url=self.base_url,
+            callback=self._callback
         )
         
-        # Connect in a thread to avoid blocking
+        # Connect in thread
         def connect_sync():
-            try:
-                self._tts_client.connect()
-                
-                # Configure session - Qwen TTS only supports 24kHz output
-                self._tts_client.update_session(
-                    voice=self.voice,
-                    language_type=self.language_type,
-                    response_format=AudioFormat.PCM_24000HZ_MONO_16BIT,
-                    mode='server_commit'
-                )
-                
-                with self._connection_lock:
-                    self._is_connected = True
-                self.logger.info("TTS WebSocket connection established")
-            except Exception as e:
-                self.logger.error(f"Failed to establish TTS connection: {e}")
-                raise
+            self._tts.connect()
+            
+            self._tts.update_session(
+                voice=self.voice,
+                mode=self.mode,
+                response_format=AudioFormat.PCM_24000HZ_MONO_16BIT,
+                sample_rate=self.sample_rate,
+                audio_format=self.audio_format,
+                language_type=self.language_type,
+                speech_rate=self.speech_rate,
+                pitch_rate=self.pitch_rate,
+                volume=self.volume
+            )
+            
+            self._is_connected = True
+            self.logger.info(f"TTS WebSocket connected (mode={self.mode})")
         
-        # Run connection in thread
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, connect_sync)
     
-    def _create_callback(self):
-        """Create callback instance for handling WebSocket events."""
-        from dashscope.audio.qwen_tts_realtime import QwenTtsRealtimeCallback
-        
-        provider = self  # Capture reference
-        
-        class TTSCallback(QwenTtsRealtimeCallback):
-            def on_open(self) -> None:
-                provider.logger.debug("TTS WebSocket connection opened")
-            
-            def on_close(self, close_status_code, close_msg) -> None:
-                provider.logger.info(f"TTS WebSocket closed: {close_status_code}, {close_msg}")
-                with provider._connection_lock:
-                    provider._is_connected = False
-                # Signal synthesis complete on close
-                provider._session_finished.set()
-            
-            def on_event(self, response) -> None:
-                try:
-                    if provider._cancelled:
-                        return
-                    
-                    event_type = response.get("type", "")
-                    
-                    if event_type == "response.audio.delta":
-                        # Audio data chunk
-                        delta = response.get("delta", "")
-                        if delta:
-                            audio_data = base64.b64decode(delta)
-                            provider._audio_queue.put(audio_data)
-                    
-                    elif event_type == "response.done":
-                        # Response done, but audio may still be arriving
-                        provider.logger.debug("Response done (waiting for session.finished)")
-                        provider._response_done.set()
-                    
-                    elif event_type == "session.created":
-                        provider.logger.debug(f"Session created: {response.get('session', {}).get('id', '')}")
-                    
-                    elif event_type == "session.updated":
-                        provider.logger.debug("Session updated")
-                    
-                    elif event_type == "session.finished":
-                        # Session finished - all audio has been sent
-                        provider.logger.debug("Session finished (all audio received)")
-                        provider._session_finished.set()
-                    
-                    elif event_type == "error":
-                        error_msg = response.get("error", {}).get("message", "Unknown error")
-                        provider._current_error = Exception(f"TTS error: {error_msg}")
-                        provider.logger.error(f"TTS error: {error_msg}")
-                        provider._session_finished.set()
-                
-                except Exception as e:
-                    provider.logger.error(f"Error processing TTS event: {e}")
-                    provider._current_error = e
-                    provider._session_finished.set()
-            
-            def on_error(self, error) -> None:
-                provider.logger.error(f"TTS WebSocket error: {error}")
-                provider._current_error = Exception(str(error))
-                with provider._connection_lock:
-                    provider._is_connected = False
-                provider._synthesis_complete.set()
-        
-        return TTSCallback()
-    
-    async def cleanup(self) -> None:
-        """Cleanup provider resources and close connection."""
-        self.cancel()
-        
-        if self._tts_client:
-            try:
-                # Close in thread to avoid blocking
-                loop = asyncio.get_event_loop()
-                await loop.run_in_executor(None, self._tts_client.close)
-            except Exception as e:
-                self.logger.warning(f"Error closing TTS connection: {e}")
-        
-        self._tts_client = None
-        self._callback = None
-        self._is_connected = False
-        self.logger.info("Qwen TTS Realtime provider cleaned up")
-    
     async def synthesize(self, text: str) -> AsyncIterator[bytes]:
         """
-        Synthesize text to audio using the persistent connection.
+        Synthesize complete text (batch mode).
+        
+        Works in both server_commit and commit modes.
         
         Args:
-            text: Text to synthesize
+            text: Complete text to synthesize
             
         Yields:
-            PCM audio bytes (16-bit signed, little-endian, mono)
+            Audio bytes (PCM format, 24kHz, mono, 16-bit)
         """
-        if not text or not text.strip():
-            self.logger.warning("Empty text provided for TTS")
-            return
-        
-        # Ensure connection is established
         if not self._is_connected:
-            self.logger.warning("TTS connection lost, reconnecting...")
             await self._connect()
         
-        if not self._tts_client:
-            raise RuntimeError("TTS provider not initialized. Call initialize() first.")
-        
-        self._cancelled = False
-        
-        # Reset state for new synthesis
-        self._audio_queue = queue.Queue()
-        self._response_done.clear()
-        self._session_finished.clear()
-        self._current_error = None
-        
-        # Send text in a thread
-        def send_text():
+        # Clear previous audio
+        while not self._audio_queue.empty():
             try:
-                self.logger.debug(f"TTS synthesizing: '{text[:50]}...' (len={len(text)})")
-                self._tts_client.append_text(text)
-                self._tts_client.finish()
-            except Exception as e:
-                self.logger.error(f"Error sending text: {e}")
-                self._current_error = e
-                self._session_finished.set()
+                self._audio_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
         
-        # Start sending text
+        self._synthesis_complete.clear()
+        
+        # Send text
+        def send_text():
+            self._tts.append_text(text)
+            if self.mode == "commit":
+                self._tts.commit()
+            else:
+                self._tts.finish()
+        
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, send_text)
         
-        # Collect audio chunks
-        # Wait for session.finished (not just response.done) to ensure all audio is received
-        accumulated_audio = []
-        start_time = asyncio.get_event_loop().time()
-        max_wait_time = 60  # Maximum wait time in seconds
-        
+        # Yield audio chunks
         while True:
-            # Check cancellation
-            if self._cancelled:
-                self.logger.info("TTS synthesis cancelled")
-                break
-            
-            # Check timeout
-            elapsed = asyncio.get_event_loop().time() - start_time
-            if elapsed > max_wait_time:
-                self.logger.warning(f"TTS timeout after {elapsed:.1f}s")
-                break
-            
-            # Wait for session.finished to ensure all audio is received
-            # Note: We check session_finished OR (response_done + empty queue + small delay)
-            if self._session_finished.is_set() and self._audio_queue.empty():
-                break
-            
-            # Fallback: if response.done and queue is empty for a while, assume complete
-            if self._response_done.is_set() and self._audio_queue.empty():
-                # Wait a bit more to catch any late audio
-                await asyncio.sleep(0.2)
-                if self._audio_queue.empty():
-                    self.logger.debug("Response done and no more audio, finishing")
-                    break
-            
-            # Try to get audio chunk
             try:
-                audio_chunk = self._audio_queue.get(timeout=0.1)
-                accumulated_audio.append(audio_chunk)
-            except queue.Empty:
-                await asyncio.sleep(0.05)
-        
-        # Check for errors
-        if self._current_error and not self._cancelled:
-            self.logger.error(f"TTS synthesis failed: {self._current_error}")
-        
-        # Yield complete audio
-        if accumulated_audio and not self._cancelled:
-            complete_audio = b''.join(accumulated_audio)
-            
-            # Resample if needed (Qwen TTS outputs 24kHz)
-            if self.sample_rate != self.NATIVE_SAMPLE_RATE:
-                complete_audio = self._resample_audio(
-                    complete_audio, 
-                    from_rate=self.NATIVE_SAMPLE_RATE, 
-                    to_rate=self.sample_rate
+                audio = await asyncio.wait_for(
+                    self._audio_queue.get(),
+                    timeout=0.1
                 )
-            
-            self.logger.info(f"TTS yielding {len(complete_audio)} bytes of PCM audio ({self.sample_rate}Hz)")
-            yield complete_audio
-        else:
-            self.logger.warning("TTS no audio to yield")
-        
-        # Reconnect for next synthesis (TTS session ends after finish())
-        # This is a workaround for Qwen TTS API behavior
-        await self._reconnect_for_next()
+                yield audio
+            except asyncio.TimeoutError:
+                if self._synthesis_complete.is_set():
+                    break
+                continue
     
-    async def _reconnect_for_next(self) -> None:
-        """Reconnect for the next synthesis request."""
-        try:
-            # Close current connection
-            if self._tts_client:
-                loop = asyncio.get_event_loop()
-                await loop.run_in_executor(None, self._tts_client.close)
-            
-            self._tts_client = None
-            self._is_connected = False
-            
-            # Establish new connection
-            await self._connect()
-        except Exception as e:
-            self.logger.warning(f"Error reconnecting TTS: {e}")
-            self._is_connected = False
-    
-    def _resample_audio(self, audio_data: bytes, from_rate: int, to_rate: int) -> bytes:
+    async def synthesize_stream(
+        self, 
+        text_stream: AsyncIterator[str]
+    ) -> AsyncIterator[bytes]:
         """
-        Resample PCM audio data from one sample rate to another.
+        Synthesize streaming text (server_commit mode only).
+        
+        In server_commit mode, server intelligently segments text and
+        starts synthesis without waiting for complete sentences.
         
         Args:
-            audio_data: PCM audio bytes (16-bit signed, little-endian, mono)
-            from_rate: Source sample rate
-            to_rate: Target sample rate
+            text_stream: Streaming text chunks (e.g., from LLM)
             
-        Returns:
-            Resampled PCM audio bytes
+        Yields:
+            Audio bytes as synthesis progresses
         """
-        # Convert bytes to numpy array
-        audio_array = np.frombuffer(audio_data, dtype=np.int16)
+        if self.mode != "server_commit":
+            # Fallback to batch mode
+            self.logger.warning(
+                f"synthesize_stream called but mode is '{self.mode}'. "
+                "Falling back to batch mode."
+            )
+            async for audio in super().synthesize_stream(text_stream):
+                yield audio
+            return
         
-        # Calculate resampling ratio
-        ratio = to_rate / from_rate
+        if not self._is_connected:
+            await self._connect()
         
-        # Simple linear interpolation resampling
-        new_length = int(len(audio_array) * ratio)
-        indices = np.linspace(0, len(audio_array) - 1, new_length)
-        resampled = np.interp(indices, np.arange(len(audio_array)), audio_array.astype(np.float32))
+        self._synthesis_complete.clear()
         
-        # Convert back to int16
-        resampled = np.clip(resampled, -32768, 32767).astype(np.int16)
+        # Send text stream
+        async def send_stream():
+            async for text_chunk in text_stream:
+                def send():
+                    self._tts.append_text(text_chunk)
+                
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(None, send)
+            
+            # Signal end
+            def finish():
+                self._tts.finish()
+            
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, finish)
         
-        self.logger.debug(f"Resampled audio from {from_rate}Hz to {to_rate}Hz: {len(audio_data)} -> {len(resampled) * 2} bytes")
+        # Start sending in background
+        send_task = asyncio.create_task(send_stream())
         
-        return resampled.tobytes()
+        # Yield audio as it arrives
+        try:
+            while True:
+                try:
+                    audio = await asyncio.wait_for(
+                        self._audio_queue.get(),
+                        timeout=0.1
+                    )
+                    yield audio
+                except asyncio.TimeoutError:
+                    if self._synthesis_complete.is_set():
+                        break
+                    continue
+        finally:
+            await send_task
+    
+    def _create_callback(self):
+        """Create callback for WebSocket events."""
+        from dashscope.audio.qwen_tts_realtime import QwenTtsRealtimeCallback
+        
+        provider = self
+        
+        class TtsCallback(QwenTtsRealtimeCallback):
+            def on_open(self):
+                provider.logger.debug("TTS WebSocket opened")
+            
+            def on_close(self, code, msg):
+                provider.logger.info(f"TTS WebSocket closed: {code} {msg}")
+                provider._is_connected = False
+            
+            def on_event(self, event):
+                try:
+                    event_type = event.get("type", "")
+                    
+                    # Audio chunk available
+                    if event_type == "response.audio.delta":
+                        audio_b64 = event.get("delta", "")
+                        if audio_b64 and provider._loop:
+                            audio_data = base64.b64decode(audio_b64)
+                            provider._loop.call_soon_threadsafe(
+                                provider._audio_queue.put_nowait,
+                                audio_data
+                            )
+                    
+                    # Synthesis complete
+                    elif event_type == "response.done":
+                        provider.logger.debug("TTS synthesis complete")
+                        if provider._loop:
+                            provider._loop.call_soon_threadsafe(
+                                provider._synthesis_complete.set
+                            )
+                    
+                    # Session finished
+                    elif event_type == "session.finished":
+                        provider.logger.debug("TTS session finished")
+                        if provider._loop:
+                            provider._loop.call_soon_threadsafe(
+                                provider._synthesis_complete.set
+                            )
+                
+                except Exception as e:
+                    provider.logger.error(f"Error processing TTS event: {e}")
+        
+        return TtsCallback()
     
     def cancel(self) -> None:
-        """
-        Cancel ongoing synthesis.
+        """Cancel ongoing synthesis."""
+        # Clear audio queue
+        while not self._audio_queue.empty():
+            try:
+                self._audio_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
         
-        Sets cancellation flag to stop the synthesis loop.
-        """
-        self._cancelled = True
-        self._session_finished.set()
-        self.logger.debug("TTS synthesis cancellation requested")
+        self._synthesis_complete.set()
+        self.logger.debug("TTS synthesis cancelled")
     
-    def get_config(self) -> Dict[str, Any]:
-        """Get provider configuration"""
-        config = super().get_config()
-        config.update({
-            "model": self.model,
-            "voice": self.voice,
-            "language_type": self.language_type,
-            "sample_rate": self.sample_rate,
-            "base_url": self.base_url,
-            "is_connected": self._is_connected,
-        })
-        return config
+    async def reset_state(self) -> None:
+        """
+        Reset provider state for new turn.
+        
+        CRITICAL: Must be called when turn changes to prevent:
+        - Stale audio from previous turn being mixed in
+        - _synthesis_complete event causing premature finish
+        """
+        # Clear audio queue (discard any stale audio from previous turn)
+        cleared_count = 0
+        while not self._audio_queue.empty():
+            try:
+                self._audio_queue.get_nowait()
+                cleared_count += 1
+            except asyncio.QueueEmpty:
+                break
+        
+        # Check if completion event was set (from previous turn)
+        was_complete = self._synthesis_complete.is_set()
+        
+        # Reset completion event for new turn
+        self._synthesis_complete.clear()
+        
+        # Log at INFO level so we can verify in production logs
+        self.logger.info(
+            f"TTS provider state reset: cleared {cleared_count} stale audio chunks, "
+            f"completion_was_set={was_complete}"
+        )
+    
+    async def append_text_stream(self, text_chunk: str) -> AsyncIterator[bytes]:
+        """
+        Append text chunk to streaming TTS session (for StreamingTTSStation).
+        
+        This method is called repeatedly by StreamingTTSStation for each TEXT_DELTA.
+        In server_commit mode, TTS intelligently segments and synthesizes.
+        
+        Args:
+            text_chunk: Text delta to append
+            
+        Yields:
+            Audio bytes as they become available
+        """
+        if not self._is_connected:
+            await self._connect()
+        
+        # Safety check: if completion event is set from previous turn, clear it
+        # This handles edge cases where reset_state() might not be called
+        if self._synthesis_complete.is_set():
+            self.logger.warning(
+                "TTS completion event was set when starting new text stream! "
+                "Clearing to prevent premature finish. This may indicate reset_state() was not called."
+            )
+            self._synthesis_complete.clear()
+        
+        # Append text to TTS
+        def send():
+            self._tts.append_text(text_chunk)
+        
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, send)
+        
+        self.logger.debug(f"Appended text chunk: {text_chunk[:50]}...")
+        
+        # Yield any audio that has arrived
+        # Note: In server_commit mode, audio may arrive asynchronously
+        while not self._audio_queue.empty():
+            try:
+                audio = self._audio_queue.get_nowait()
+                yield audio
+            except asyncio.QueueEmpty:
+                break
+    
+    async def finish_stream(self) -> AsyncIterator[bytes]:
+        """
+        Finish streaming TTS session and flush remaining audio.
+        
+        Called by StreamingTTSStation on completion event.
+        
+        Yields:
+            Remaining audio bytes
+        """
+        if not self._is_connected:
+            return
+            yield  # Make it a generator
+        
+        self.logger.info("Finishing TTS stream")
+        
+        # Signal end of text
+        def finish():
+            self._tts.finish()
+        
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, finish)
+        
+        # Yield remaining audio
+        while True:
+            try:
+                audio = await asyncio.wait_for(
+                    self._audio_queue.get(),
+                    timeout=0.1
+                )
+                yield audio
+            except asyncio.TimeoutError:
+                if self._synthesis_complete.is_set():
+                    break
+                continue
+    
+    async def cleanup(self) -> None:
+        """Cleanup resources."""
+        if self._tts:
+            try:
+                def close():
+                    self._tts.close()
+                
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(None, close)
+            except Exception as e:
+                self.logger.warning(f"Error closing TTS connection: {e}")
+        
+        self._tts = None
+        self._is_connected = False
+        self.logger.info("TTS provider cleaned up")

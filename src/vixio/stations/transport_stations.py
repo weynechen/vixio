@@ -4,6 +4,11 @@ Transport Stations - Bridge between DAG and Transport
 InputStation: Read from read_queue -> Chunk stream (supports audio + optional video)
 OutputStation: Chunk stream -> Write to send_queue
 
+Audio Data Flow:
+- InputStation outputs AUDIO_DELTA (streaming fragments from Transport)
+- VADStation/TurnDetector outputs AUDIO_COMPLETE (merged segments)
+- OutputStation accepts both AUDIO_DELTA and AUDIO_COMPLETE
+
 Design principles:
 - InputStation/OutputStation are pure format conversion layers
 - NOT responsible for: connection management, flow control, turn management, latency tracking
@@ -35,8 +40,14 @@ class InputStation(Station):
     2. Call Protocol to decode message
     3. Call Protocol to convert to Chunk
     4. Call AudioCodec to decode audio (if needed)
-    5. Inject visual context into audio chunks (if video_queue provided)
-    6. Output Chunk to DAG
+    5. Convert to AUDIO_DELTA (streaming fragments)
+    6. Inject visual context into audio chunks (if video_queue provided)
+    7. Output Chunk to DAG
+    
+    Audio Output:
+    - Outputs AUDIO_DELTA (streaming audio fragments, ~0.06-0.12s)
+    - These are small continuous chunks from Transport
+    - VAD/TurnDetector will merge them into AUDIO_COMPLETE
     
     Vision Support:
     - Optionally receives video frames via video_queue
@@ -234,7 +245,7 @@ class InputStation(Station):
                     continue
                 
                 # 4. Audio decode (Opus -> PCM)
-                if chunk.type == ChunkType.AUDIO_RAW and self.audio_codec and chunk.data:
+                if chunk.type in (ChunkType.AUDIO_RAW, ChunkType.AUDIO_DELTA, ChunkType.AUDIO_COMPLETE) and self.audio_codec and chunk.data:
                     try:
                         pcm_data = self.audio_codec.decode(chunk.data)
                         chunk.data = pcm_data
@@ -242,8 +253,13 @@ class InputStation(Station):
                         self.logger.error(f"Failed to decode audio: {e}")
                         continue
                 
+                # 4.5. Convert AUDIO_RAW to AUDIO_DELTA (streaming fragments from Transport)
+                # All audio from Transport should be AUDIO_DELTA (small continuous fragments)
+                if chunk.type == ChunkType.AUDIO_RAW:
+                    chunk.type = ChunkType.AUDIO_DELTA
+                
                 # 5. Inject visual context into audio chunks
-                if chunk.type == ChunkType.AUDIO_RAW and self._video_queue:
+                if chunk.type in (ChunkType.AUDIO_DELTA, ChunkType.AUDIO_COMPLETE) and self._video_queue:
                     visual_ctx = self.get_visual_context()
                     if visual_ctx:
                         chunk.metadata["visual_context"] = visual_ctx
@@ -353,8 +369,8 @@ class OutputStation(Station):
         # Log chunk reception for debugging
         self.logger.debug(f"OutputStation.process_chunk: type={chunk.type.value}, turn={chunk.turn_id}")
         
-        # Special handling for AUDIO_RAW: delegate to protocol for processing
-        if chunk.type == ChunkType.AUDIO_RAW and chunk.data:
+        # Special handling for AUDIO chunks: delegate to protocol for processing
+        if chunk.type in (ChunkType.AUDIO_RAW, ChunkType.AUDIO_DELTA, ChunkType.AUDIO_COMPLETE) and chunk.data:
             # Extract audio metadata from chunk
             sample_rate = getattr(chunk, 'sample_rate', 16000)
             channels = getattr(chunk, 'channels', 1)
@@ -512,7 +528,7 @@ class OutputStation(Station):
             return self.protocol.send_text_delta(self._session_id, text, source, role)
         
         # AUDIO chunks - skip here, handled separately in process_chunk
-        elif chunk.type == ChunkType.AUDIO_RAW:
+        elif chunk.type in (ChunkType.AUDIO_RAW, ChunkType.AUDIO_DELTA, ChunkType.AUDIO_COMPLETE):
             return None
         
         # Bot thinking event - device can switch to speaker early

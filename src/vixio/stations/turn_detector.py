@@ -2,19 +2,22 @@
 TurnDetectorStation - Detect when user finishes speaking and handle interrupts
 
 Input: 
-  - AUDIO_RAW (merged audio from VAD)
+  - AUDIO_DELTA (passthrough from VAD, for streaming ASR)
+  - AUDIO_COMPLETE (merged segments from VAD)
   - EVENT_VAD_START/END (from VAD)
   - EVENT_BOT_STARTED/STOPPED_SPEAKING (from TTS)
 
 Output: 
-  - Merged AUDIO_RAW (when turn ends)
+  - AUDIO_DELTA (passthrough for streaming ASR)
+  - AUDIO_COMPLETE (merged turn when turn ends, for batch ASR)
   - (No EVENT_STREAM_COMPLETE - ASR handles that)
 
 Data Flow:
-- VAD outputs merged audio + VAD_END for each speech segment
-- TurnDetector collects audio segments
+- VAD outputs AUDIO_DELTA (passthrough) and AUDIO_COMPLETE (merged segments)
+- TurnDetector passthrough AUDIO_DELTA (for StreamingASR)
+- TurnDetector collects AUDIO_COMPLETE segments
 - On VAD_END, waits for silence threshold
-- If silence continues, outputs all collected audio to ASR
+- If silence continues, outputs all collected segments as one AUDIO_COMPLETE to ASR
 - If voice resumes (VAD_START), continues collecting
 
 Future: Can be replaced with SmartTurn for semantic turn detection.
@@ -40,20 +43,27 @@ class TurnDetectorStation(DetectorStation):
     """
     Turn detector: Detects when user finishes speaking and handles interrupts.
     
-    Input: AUDIO_RAW (merged from VAD) + EVENT_VAD_* + EVENT_BOT_*
-    Output: Merged AUDIO_RAW (when turn ends)
+    Input: 
+      - AUDIO_DELTA (passthrough from VAD)
+      - AUDIO_COMPLETE (merged segments from VAD)
+      - EVENT_VAD_* + EVENT_BOT_*
+    Output: 
+      - AUDIO_DELTA (passthrough for StreamingASR)
+      - AUDIO_COMPLETE (merged turn for batch ASR)
     
     Data Flow:
-    - Receives merged audio + VAD_END from VAD for each speech segment
-    - Collects audio segments (may span multiple VAD segments)
+    - Receives AUDIO_DELTA (passthrough) and AUDIO_COMPLETE (segments) from VAD
+    - Passthrough AUDIO_DELTA for StreamingASR downstream
+    - Collects AUDIO_COMPLETE segments (may span multiple VAD segments)
     - On VAD_END, waits for silence threshold
-    - If silence continues, outputs all collected audio → ASR
+    - If silence continues, outputs all collected segments as one AUDIO_COMPLETE → ASR
     - If voice resumes (VAD_START), continues collecting
     
     Strategy:
-    - Collect audio segments from VAD
+    - Passthrough AUDIO_DELTA immediately
+    - Collect AUDIO_COMPLETE segments from VAD
     - Wait inline after VAD_END for silence threshold
-    - If silence continues, emit collected audio
+    - If silence continues, emit merged AUDIO_COMPLETE
     - If voice resumes, cancel and continue collecting
     - Track bot speaking state for interrupt detection
     
@@ -64,7 +74,9 @@ class TurnDetectorStation(DetectorStation):
     
     # DetectorStation configuration
     ALLOWED_INPUT_TYPES = [
-        ChunkType.AUDIO_RAW,
+        ChunkType.AUDIO_DELTA,      # Passthrough for streaming ASR
+        ChunkType.AUDIO_COMPLETE,   # Segments from VAD
+        ChunkType.AUDIO_RAW,        # Backward compatibility
         ChunkType.EVENT_VAD_START,
         ChunkType.EVENT_VAD_END,
         ChunkType.EVENT_BOT_STARTED_SPEAKING,
@@ -124,7 +136,7 @@ class TurnDetectorStation(DetectorStation):
         Merge all collected audio segments into a single AudioChunk.
         
         Returns:
-            Merged AudioChunk or None if no segments
+            Merged AudioChunk (AUDIO_COMPLETE) or None if no segments
         """
         if not self._audio_segments:
             return None
@@ -135,7 +147,7 @@ class TurnDetectorStation(DetectorStation):
         channels = self._audio_segments[0].channels if self._audio_segments else 1
         
         return AudioChunk(
-            type=ChunkType.AUDIO_RAW,
+            type=ChunkType.AUDIO_COMPLETE,  # Output complete turn
             data=merged_audio,
             source=self.name,
             session_id=session_id,
@@ -149,14 +161,25 @@ class TurnDetectorStation(DetectorStation):
         Process chunk for turn detection and interrupt handling.
         
         Logic:
-        - On AUDIO_RAW: Collect audio segment from VAD
+        - On AUDIO_DELTA: Passthrough (for StreamingASR)
+        - On AUDIO_COMPLETE: Collect segment from VAD
         - On EVENT_VAD_START: Check for interrupt, cancel pending turn end
         - On EVENT_VAD_END: Wait for silence, then output collected audio
         - On EVENT_BOT_*: Track bot speaking state
         """
-        # Collect audio segments from VAD
-        if chunk.type == ChunkType.AUDIO_RAW:
-            # Type assertion: chunk is AudioChunk when type is AUDIO_RAW
+        # Passthrough AUDIO_DELTA for StreamingASR
+        if chunk.type == ChunkType.AUDIO_DELTA:
+            # Passthrough immediately for streaming ASR downstream
+            yield chunk
+            return
+        
+        # Collect AUDIO_COMPLETE segments from VAD
+        if chunk.type in (ChunkType.AUDIO_COMPLETE, ChunkType.AUDIO_RAW):
+            # Convert AUDIO_RAW to AUDIO_COMPLETE for consistency
+            if chunk.type == ChunkType.AUDIO_RAW:
+                chunk.type = ChunkType.AUDIO_COMPLETE
+            
+            # Type assertion: chunk is AudioChunk when type is AUDIO_COMPLETE
             self._audio_segments.append(cast(AudioChunk, chunk))
             self.logger.debug(f"Collected audio segment ({len(chunk.data)} bytes), total segments: {len(self._audio_segments)}")
             return

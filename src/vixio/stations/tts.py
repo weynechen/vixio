@@ -2,7 +2,7 @@
 TTSStation - Text to Speech
 
 Input: TEXT (complete sentences), EVENT_STREAM_COMPLETE (trigger TTS_STOP from SentenceAggregator)
-Output: AUDIO_RAW (streaming) + EVENT_TTS_START/SENTENCE_START/STOP
+Output: AUDIO_COMPLETE (streaming) + EVENT_TTS_START/SENTENCE_START/STOP
 
 Completion Contract:
 - AWAITS_COMPLETION: True (completion signal triggers TTS_STOP event)
@@ -51,7 +51,7 @@ class TTSStation(StreamStation):
     TTS workstation: Synthesizes text to audio.
     
     Input: TEXT (complete sentences), EVENT_STREAM_COMPLETE (triggers TTS_STOP)
-    Output: AUDIO_RAW (streaming) + EVENT_TTS_START/SENTENCE_START/STOP
+    Output: AUDIO_COMPLETE (streaming) + EVENT_TTS_START/SENTENCE_START/STOP
     
     Completion Contract:
     - Awaits completion from SentenceAggregator (triggers TTS_STOP)
@@ -64,7 +64,7 @@ class TTSStation(StreamStation):
     # StreamStation configuration
     ALLOWED_INPUT_TYPES = [ChunkType.TEXT]
     LATENCY_METRIC_NAME = "tts_first_audio_ready"
-    LATENCY_OUTPUT_TYPES = [ChunkType.AUDIO_RAW]  # Only monitor audio output, not events
+    LATENCY_OUTPUT_TYPES = [ChunkType.AUDIO_COMPLETE]  # Only monitor audio output, not events
     
     # Completion contract: await sentence completion for TTS_STOP, emit completion
     EMITS_COMPLETION = True
@@ -228,9 +228,9 @@ class TTSStation(StreamStation):
                 audio_count += 1
                 
                 yield AudioChunk(
-                    type=ChunkType.AUDIO_RAW,
+                    type=ChunkType.AUDIO_COMPLETE,  # TTS outputs complete audio frames
                     data=audio_data,
-                    sample_rate=16000,
+                    sample_rate=self.tts.sample_rate,
                     channels=1,
                     source=self.name,
                     session_id=chunk.session_id,
@@ -238,3 +238,252 @@ class TTSStation(StreamStation):
                 )
         
         self.logger.info(f"TTS generated {audio_count} audio chunks")
+
+
+@with_middlewares(
+    # Timeout handler for TTS processing
+    TimeoutHandlerMiddleware(
+        timeout_seconds=30.0,  # Longer timeout for streaming mode
+        emit_timeout_event=True,
+        send_interrupt_signal=True
+    ),
+    # Validate input (TEXT_DELTA for streaming)
+    InputValidatorMiddleware(
+        allowed_types=[ChunkType.TEXT_DELTA],
+        check_empty=True,
+        passthrough_on_invalid=False
+    )
+    # Note: StreamStation base class automatically provides:
+    # - SignalHandlerMiddleware (handles CONTROL_STATE_RESET)
+    # - InterruptDetectorMiddleware (detects turn_id changes)
+    # - LatencyMonitorMiddleware (uses LATENCY_METRIC_NAME)
+    # - ErrorHandlerMiddleware (error handling)
+)
+class StreamingTTSStation(StreamStation):
+    """
+    Streaming TTS workstation: Synthesizes streaming text to audio (server_commit mode).
+    
+    Input: TEXT_DELTA (streaming text from Agent)
+    Output: AUDIO_COMPLETE (streaming) + EVENT_TTS_START/STOP
+    
+    Mode:
+    - Receives TEXT_DELTA continuously from Agent
+    - Appends to TTS provider's WebSocket
+    - TTS provider intelligently segments and synthesizes (server_commit mode)
+    - Streams audio chunks as they become ready
+    - No need for SentenceAggregator
+    
+    Completion Contract:
+    - Awaits completion from Agent (triggers finish())
+    - Emits completion after all synthesis done
+    """
+    
+    # StreamStation configuration
+    ALLOWED_INPUT_TYPES = [ChunkType.TEXT_DELTA]
+    LATENCY_METRIC_NAME = "tts_first_audio_ready"
+    LATENCY_OUTPUT_TYPES = [ChunkType.AUDIO_COMPLETE]
+    
+    # Completion contract: await text stream completion, emit completion
+    EMITS_COMPLETION = True
+    AWAITS_COMPLETION = True
+    
+    def __init__(
+        self, 
+        tts_provider: TTSProvider, 
+        timeout_seconds: Optional[float] = 30.0,
+        name: str = "streaming_tts"
+    ): 
+        """
+        Initialize Streaming TTS station.
+        
+        Args:
+            tts_provider: TTS provider instance (must support streaming input)
+            timeout_seconds: Timeout for TTS processing (default: 30s, None = no timeout)
+            name: Station name
+        """
+        super().__init__(
+            name=name, 
+            output_role="bot", 
+            enable_interrupt_detection=False  # Agent handles interrupts
+        )
+        self.tts = tts_provider
+        self.timeout_seconds = timeout_seconds
+        self._is_speaking = False
+        self._text_buffer = []  # Buffer for text deltas
+        
+        # Check if provider supports streaming input
+        if hasattr(tts_provider, 'supports_streaming_input'):
+            if not tts_provider.supports_streaming_input:
+                self.logger.warning(
+                    "TTS provider does not support streaming input. "
+                    "StreamingTTSStation may not work as expected."
+                )
+        
+        self.logger.info("StreamingTTS initialized (server_commit mode)")
+    
+    def _configure_middlewares_hook(self, middlewares: list) -> None:
+        """
+        Hook called when middlewares are attached.
+        
+        Allows customizing middleware settings after attachment.
+        """
+        # Set timeout from init parameter
+        for middleware in middlewares:
+            if middleware.__class__.__name__ == 'TimeoutHandlerMiddleware':
+                middleware.timeout_seconds = self.timeout_seconds
+                
+        # Set interrupt callback to stop TTS
+        for middleware in middlewares:
+            if middleware.__class__.__name__ == 'SignalHandlerMiddleware':
+                middleware.on_interrupt = self._handle_interrupt
+    
+    async def _handle_interrupt(self) -> None:
+        """
+        Handle interrupt signal.
+        
+        Called by SignalHandlerMiddleware when CONTROL_STATE_RESET received.
+        """
+        self._is_speaking = False
+        self._text_buffer.clear()
+        
+        # Stop TTS provider if it has a stop method
+        if hasattr(self.tts, 'stop'):
+            try:
+                await self.tts.stop()
+            except Exception as e:
+                self.logger.error(f"Error stopping TTS provider: {e}")
+        
+        self.logger.debug("StreamingTTS state reset by interrupt")
+    
+    async def reset_state(self) -> None:
+        """Reset TTS state for new turn."""
+        await super().reset_state()
+        self._is_speaking = False
+        self._text_buffer.clear()
+        
+        # CRITICAL: Reset provider state to clear stale audio queue and completion event
+        # This prevents Turn N+1 from receiving stale audio from Turn N
+        # and ensures finish_stream() waits for new audio instead of returning immediately
+        if hasattr(self.tts, 'reset_state'):
+            try:
+                await self.tts.reset_state()
+                self.logger.info("StreamingTTS state reset (including provider)")
+            except Exception as e:
+                self.logger.error(f"Error resetting TTS provider state: {e}")
+        else:
+            self.logger.info("StreamingTTS state reset (provider has no reset_state)")
+    
+    async def on_completion(self, event: EventChunk) -> AsyncIterator[Chunk]:
+        """
+        Handle completion event from upstream (Agent).
+        
+        Finishes text stream and emits TTS_STOP event.
+        
+        Args:
+            event: EventChunk with EVENT_STREAM_COMPLETE from Agent
+            
+        Yields:
+            Remaining AUDIO_COMPLETE + EVENT_TTS_STOP + completion event
+        """
+        if not self._is_speaking:
+            # No TTS session active
+            self.logger.debug("StreamingTTS on_completion: no active session")
+            yield event  # Pass through completion
+            return
+        
+        self.logger.info("StreamingTTS received completion, finishing text stream")
+        
+        # Finish text stream (tells TTS provider to flush and complete)
+        if hasattr(self.tts, 'finish_stream'):
+            try:
+                async for audio_data in self.tts.finish_stream():
+                    if audio_data:
+                        yield AudioChunk(
+                            type=ChunkType.AUDIO_COMPLETE,
+                            data=audio_data,
+                            sample_rate=self.tts.sample_rate,
+                            channels=1,
+                            source=self.name,
+                            session_id=event.session_id,
+                            turn_id=event.turn_id
+                        )
+            except Exception as e:
+                self.logger.error(f"Error finishing TTS stream: {e}")
+        
+        # Emit TTS_STOP
+        yield EventChunk(
+            type=ChunkType.EVENT_TTS_STOP,
+            event_data={},
+            source=self.name,
+            session_id=event.session_id,
+            turn_id=event.turn_id
+        )
+        
+        self._is_speaking = False
+        self.logger.info("StreamingTTS session complete")
+        
+        # Emit completion event
+        yield event
+    
+    async def process_chunk(self, chunk: Chunk) -> AsyncGenerator[Chunk, None]:
+        """
+        Process TEXT_DELTA chunks through streaming TTS.
+        
+        Logic:
+        - Receive TEXT_DELTA from Agent
+        - Append to TTS provider's WebSocket
+        - TTS provider segments and synthesizes intelligently
+        - Stream audio chunks as they become ready
+        
+        Note: Middlewares handle signal processing, validation, interrupt detection,
+        latency monitoring, and error handling.
+        """
+        # Only process TEXT_DELTA chunks
+        if chunk.type != ChunkType.TEXT_DELTA:
+            return
+            yield
+        
+        text_delta = chunk.data if isinstance(chunk.data, str) else str(chunk.data)
+        if not text_delta:
+            return
+            yield
+        
+        # Buffer text delta
+        self._text_buffer.append(text_delta)
+        
+        self.logger.debug(f"StreamingTTS received TEXT_DELTA: {text_delta[:50]}...")
+        
+        # Emit TTS START event (first time only)
+        if not self._is_speaking:
+            self.logger.info("StreamingTTS emitting EVENT_TTS_START")
+            yield EventChunk(
+                type=ChunkType.EVENT_TTS_START,
+                event_data={"mode": "streaming"},
+                source=self.name,
+                session_id=chunk.session_id,
+                turn_id=chunk.turn_id
+            )
+            self._is_speaking = True
+        
+        # Append text to TTS provider's stream
+        if hasattr(self.tts, 'append_text_stream'):
+            try:
+                async for audio_data in self.tts.append_text_stream(text_delta):
+                    if audio_data:
+                        yield AudioChunk(
+                            type=ChunkType.AUDIO_COMPLETE,
+                            data=audio_data,
+                            sample_rate=self.tts.sample_rate,
+                            channels=1,
+                            source=self.name,
+                            session_id=chunk.session_id,
+                            turn_id=chunk.turn_id
+                        )
+            except Exception as e:
+                self.logger.error(f"Error appending text to TTS stream: {e}")
+        else:
+            # Fallback: buffer until completion (not ideal)
+            self.logger.warning(
+                "TTS provider does not support append_text_stream. "
+                "Buffering text until completion."
+            )

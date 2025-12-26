@@ -33,6 +33,11 @@ class EdgeTTSProvider(TTSProvider):
         """Provider category"""
         return "tts"
     
+    @property
+    def sample_rate(self) -> int:
+        """Output audio sample rate (fixed at 16kHz for Edge TTS)."""
+        return 16000
+    
     def __init__(
         self,
         voice: str = "zh-CN-XiaoxiaoNeural",

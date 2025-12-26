@@ -1,16 +1,20 @@
 """
 VADStation - Voice Activity Detection
 
-Input: AUDIO_RAW (PCM audio)
+Input: AUDIO_DELTA (streaming PCM audio fragments)
 Output: 
+  - AUDIO_DELTA (passthrough with VAD state)
+  - AUDIO_COMPLETE (merged audio when voice ends)
   - EVENT_VAD_START when voice starts
-  - Merged AUDIO_RAW + EVENT_VAD_END when voice ends
+  - EVENT_VAD_END when voice ends
 
 Data Flow:
-- VAD detects voice activity in audio stream
+- Receives continuous AUDIO_DELTA from Transport
+- Detects voice activity using VAD provider
+- Passthrough AUDIO_DELTA (with VAD state in metadata)
 - Buffers audio during speech
-- On VAD_END, outputs merged audio chunk + VAD_END event
-- TurnDetector receives merged audio and decides if turn is complete
+- On VAD_END, outputs merged AUDIO_COMPLETE + VAD_END event
+- TurnDetector receives AUDIO_COMPLETE and decides if turn is complete
 
 Note: This station expects PCM audio data. Transport layers are responsible
 for format conversion (e.g., Opus -> PCM) before chunks enter the pipeline.
@@ -32,17 +36,21 @@ from vixio.providers.vad import VADProvider, VADEvent
 )
 class VADStation(DetectorStation):
     """
-    VAD workstation: Detects voice activity and outputs buffered audio segments.
+    VAD workstation: Detects voice activity in streaming audio.
     
-    Input: AUDIO_RAW (PCM format, streaming)
-    Output: EVENT_VAD_START + (Merged AUDIO_RAW + EVENT_VAD_END) per speech segment
+    Input: AUDIO_DELTA (streaming PCM fragments)
+    Output: 
+      - AUDIO_DELTA (passthrough with VAD state)
+      - AUDIO_COMPLETE (merged segments when voice ends)
+      - EVENT_VAD_START/END
     
     Data Flow:
-    - Receives streaming audio chunks
+    - Receives continuous AUDIO_DELTA from Transport
     - Detects voice activity using VAD provider
+    - Passthrough AUDIO_DELTA (with VAD state metadata)
     - Buffers audio during speech
-    - On VAD_END, outputs merged audio + VAD_END event
-    - TurnDetector/SmartTurn downstream decides if turn is complete
+    - On VAD_END, outputs merged AUDIO_COMPLETE + VAD_END event
+    - TurnDetector/SmartTurn downstream receives AUDIO_COMPLETE
     
     Completion Contract:
     - EMITS_COMPLETION = False (TurnDetector decides when turn ends)
@@ -50,7 +58,7 @@ class VADStation(DetectorStation):
     """
     
     # DetectorStation configuration
-    ALLOWED_INPUT_TYPES = [ChunkType.AUDIO_RAW]
+    ALLOWED_INPUT_TYPES = [ChunkType.AUDIO_DELTA, ChunkType.AUDIO_RAW]  # Support both for compatibility
     
     # VAD does not emit completion - TurnDetector handles that
     EMITS_COMPLETION = False
@@ -137,7 +145,7 @@ class VADStation(DetectorStation):
         Merge all buffered audio into a single AudioChunk.
         
         Returns:
-            Merged AudioChunk with all buffered audio data, or None if buffer is empty
+            Merged AudioChunk (AUDIO_COMPLETE) with all buffered audio data, or None if buffer is empty
         """
         if not self._audio_buffer:
             return None
@@ -148,7 +156,7 @@ class VADStation(DetectorStation):
         channels = self._audio_buffer[0].channels if self._audio_buffer else 1
         
         return AudioChunk(
-            type=ChunkType.AUDIO_RAW,
+            type=ChunkType.AUDIO_COMPLETE,  # Output complete audio segment
             data=merged_audio,
             source=self.name,
             session_id=session_id,
@@ -162,26 +170,51 @@ class VADStation(DetectorStation):
         Process audio chunk through VAD.
         
         Logic:
-        - Detect voice activity in AUDIO_RAW chunks
+        - Receive AUDIO_DELTA (streaming fragments)
+        - Detect voice activity
+        - Passthrough AUDIO_DELTA (with VAD state metadata)
         - Buffer audio during speech
         - On VAD_START: emit EVENT_VAD_START
-        - On VAD_END: emit merged AUDIO_RAW + EVENT_VAD_END
+        - On VAD_END: emit merged AUDIO_COMPLETE + EVENT_VAD_END
         
         TurnDetector downstream will receive:
+        - AUDIO_DELTA (passthrough, can be used for streaming ASR)
         - EVENT_VAD_START (can update state)
-        - AUDIO_RAW (merged buffer from this speech segment)
+        - AUDIO_COMPLETE (merged buffer from this speech segment)
         - EVENT_VAD_END (can decide if turn is complete)
         """
         # Only process audio data (PCM)
-        if chunk.type != ChunkType.AUDIO_RAW:
+        if chunk.type not in (ChunkType.AUDIO_DELTA, ChunkType.AUDIO_RAW):
             return
             yield  # Makes this an async generator
+        
+        # Convert AUDIO_RAW to AUDIO_DELTA for consistency
+        if chunk.type == ChunkType.AUDIO_RAW:
+            chunk.type = ChunkType.AUDIO_DELTA
         
         # Detect voice activity
         audio_data = chunk.data if isinstance(chunk.data, bytes) else b''
         has_voice = await self.vad.detect(audio_data, VADEvent.CHUNK)
         
-        # Buffer audio while speaking
+        # Passthrough AUDIO_DELTA with VAD state metadata
+        # This allows downstream StreamingASR to receive continuous audio
+        passthrough_chunk = AudioChunk(
+            type=ChunkType.AUDIO_DELTA,
+            data=chunk.data,
+            source=self.name,
+            session_id=chunk.session_id,
+            turn_id=chunk.turn_id,
+            sample_rate=getattr(chunk, 'sample_rate', 16000),
+            channels=getattr(chunk, 'channels', 1),
+            metadata={
+                **chunk.metadata,
+                "vad_state": "speaking" if has_voice else "silence",
+                "is_speaking": self._is_speaking
+            }
+        )
+        yield passthrough_chunk
+        
+        # Buffer audio while speaking (for AUDIO_COMPLETE output)
         if self._is_speaking:
             # Type assertion: chunk is AudioChunk (validated by ALLOWED_INPUT_TYPES)
             self._audio_buffer.append(cast(AudioChunk, chunk))

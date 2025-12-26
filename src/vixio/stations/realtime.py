@@ -1,8 +1,8 @@
 """
 RealtimeStation - End-to-End Voice Conversation Station
 
-Input: AUDIO_RAW (from transport)
-Output: AUDIO_RAW (streaming) + TEXT_DELTA/TEXT + Events + ToolCallChunk
+Input: AUDIO_DELTA (streaming audio from transport)
+Output: AUDIO_COMPLETE (streaming) + TEXT_DELTA/TEXT + Events + ToolCallChunk
 
 This station uses a realtime model that integrates VAD + ASR + LLM + TTS,
 providing end-to-end voice conversation capability without separate
@@ -62,7 +62,7 @@ class ProcessingPhase(Enum):
 @with_middlewares(
     # Note: StreamStation base class automatically provides:
     # - InputValidatorMiddleware (validates ALLOWED_INPUT_TYPES)
-    # - LatencyMonitorMiddleware (monitors first AUDIO_RAW output)
+    # - LatencyMonitorMiddleware (monitors first AUDIO_COMPLETE output)
     # - InterruptDetectorMiddleware (if enable_interrupt_detection=True)
     # - ErrorHandlerMiddleware (graceful error handling)
 )
@@ -85,11 +85,11 @@ class RealtimeStation(StreamStation):
     """
     
     ROLE = StationRole.STREAM
-    ALLOWED_INPUT_TYPES = [ChunkType.AUDIO_RAW, ChunkType.TOOL_OUTPUT]
+    ALLOWED_INPUT_TYPES = [ChunkType.AUDIO_DELTA, ChunkType.AUDIO_RAW, ChunkType.TOOL_OUTPUT]  # Support both audio types
     # Use "tts_first_audio_ready" to integrate with LatencyMonitor's standard metrics
     # For realtime station, this represents the first audio output from the integrated model
     LATENCY_METRIC_NAME = "tts_first_audio_ready"
-    LATENCY_OUTPUT_TYPES = [ChunkType.AUDIO_RAW]
+    LATENCY_OUTPUT_TYPES = [ChunkType.AUDIO_COMPLETE]
     
     # Completion contract
     EMITS_COMPLETION = True   # Emit completion to flush downstream aggregators
@@ -148,10 +148,10 @@ class RealtimeStation(StreamStation):
         """
         chunk = None
         
-        # 1. Audio Delta -> AUDIO_RAW
+        # 1. Audio Delta -> AUDIO_COMPLETE
         if event.type == RealtimeEventType.AUDIO_DELTA:
             chunk = AudioChunk(
-                type=ChunkType.AUDIO_RAW,
+                type=ChunkType.AUDIO_COMPLETE,  # Realtime model outputs complete audio frames
                 data=event.data,
                 sample_rate=self.provider.output_sample_rate if hasattr(self.provider, 'output_sample_rate') else 24000,
                 channels=1,
@@ -272,7 +272,7 @@ class RealtimeStation(StreamStation):
         This mimics the traditional VAD → Agent flow within a single station.
         
         Args:
-            chunk: Input chunk (AUDIO_RAW or TOOL_OUTPUT)
+            chunk: Input chunk (AUDIO_DELTA or TOOL_OUTPUT)
             
         Yields:
             Output chunks (immediate events in INPUT, full response in OUTPUT)
@@ -292,7 +292,7 @@ class RealtimeStation(StreamStation):
         
         # ===== PHASE 1: INPUT (like VAD + ASR) =====
         if self._phase == ProcessingPhase.INPUT:
-            if chunk.type == ChunkType.AUDIO_RAW:
+            if chunk.type in (ChunkType.AUDIO_DELTA, ChunkType.AUDIO_RAW):
                 if isinstance(chunk.data, bytes) and len(chunk.data) > 0:
                     # Send audio to provider (non-blocking)
                     await self.provider.send_audio(chunk.data)
