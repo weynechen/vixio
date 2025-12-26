@@ -2,7 +2,7 @@
 TTSStation - Text to Speech
 
 Input: TEXT (complete sentences), EVENT_STREAM_COMPLETE (trigger TTS_STOP from SentenceAggregator)
-Output: AUDIO_COMPLETE (streaming) + EVENT_TTS_START/SENTENCE_START/STOP
+Output: AUDIO (streaming) + EVENT_TTS_START/SENTENCE_START/STOP
 
 Completion Contract:
 - AWAITS_COMPLETION: True (completion signal triggers TTS_STOP event)
@@ -51,7 +51,7 @@ class TTSStation(StreamStation):
     TTS workstation: Synthesizes text to audio.
     
     Input: TEXT (complete sentences), EVENT_STREAM_COMPLETE (triggers TTS_STOP)
-    Output: AUDIO_COMPLETE (streaming) + EVENT_TTS_START/SENTENCE_START/STOP
+    Output: AUDIO (streaming) + EVENT_TTS_START/SENTENCE_START/STOP
     
     Completion Contract:
     - Awaits completion from SentenceAggregator (triggers TTS_STOP)
@@ -64,7 +64,7 @@ class TTSStation(StreamStation):
     # StreamStation configuration
     ALLOWED_INPUT_TYPES = [ChunkType.TEXT]
     LATENCY_METRIC_NAME = "tts_first_audio_ready"
-    LATENCY_OUTPUT_TYPES = [ChunkType.AUDIO_COMPLETE]  # Only monitor audio output, not events
+    LATENCY_OUTPUT_TYPES = [ChunkType.AUDIO]  # Only monitor audio output, not events
     
     # Completion contract: await sentence completion for TTS_STOP, emit completion
     EMITS_COMPLETION = True
@@ -174,7 +174,7 @@ class TTSStation(StreamStation):
         DAG routing rules:
         - Only process chunks matching ALLOWED_INPUT_TYPES (TEXT)
         - Do NOT passthrough - DAG handles routing to downstream nodes
-        - Output: AUDIO_RAW + TTS events
+        - Output: AUDIO + TTS events
         
         Core logic:
         - Synthesize text to audio
@@ -228,7 +228,7 @@ class TTSStation(StreamStation):
                 audio_count += 1
                 
                 yield AudioChunk(
-                    type=ChunkType.AUDIO_COMPLETE,  # TTS outputs complete audio frames
+                    type=ChunkType.AUDIO,  # TTS outputs complete audio frames
                     data=audio_data,
                     sample_rate=self.tts.sample_rate,
                     channels=1,
@@ -264,7 +264,7 @@ class StreamingTTSStation(StreamStation):
     Streaming TTS workstation: Synthesizes streaming text to audio (server_commit mode).
     
     Input: TEXT_DELTA (streaming text from Agent)
-    Output: AUDIO_COMPLETE (streaming) + EVENT_TTS_START/STOP
+    Output: AUDIO (streaming) + EVENT_TTS_START/STOP
     
     Mode:
     - Receives TEXT_DELTA continuously from Agent
@@ -281,7 +281,7 @@ class StreamingTTSStation(StreamStation):
     # StreamStation configuration
     ALLOWED_INPUT_TYPES = [ChunkType.TEXT_DELTA]
     LATENCY_METRIC_NAME = "tts_first_audio_ready"
-    LATENCY_OUTPUT_TYPES = [ChunkType.AUDIO_COMPLETE]
+    LATENCY_OUTPUT_TYPES = [ChunkType.AUDIO]
     
     # Completion contract: await text stream completion, emit completion
     EMITS_COMPLETION = True
@@ -383,7 +383,7 @@ class StreamingTTSStation(StreamStation):
             event: EventChunk with EVENT_STREAM_COMPLETE from Agent
             
         Yields:
-            Remaining AUDIO_COMPLETE + EVENT_TTS_STOP + completion event
+            Remaining AUDIO + EVENT_TTS_STOP + completion event
         """
         if not self._is_speaking:
             # No TTS session active
@@ -399,7 +399,7 @@ class StreamingTTSStation(StreamStation):
                 async for audio_data in self.tts.finish_stream():
                     if audio_data:
                         yield AudioChunk(
-                            type=ChunkType.AUDIO_COMPLETE,
+                            type=ChunkType.AUDIO,
                             data=audio_data,
                             sample_rate=self.tts.sample_rate,
                             channels=1,
@@ -471,7 +471,7 @@ class StreamingTTSStation(StreamStation):
                 async for audio_data in self.tts.append_text_stream(text_delta):
                     if audio_data:
                         yield AudioChunk(
-                            type=ChunkType.AUDIO_COMPLETE,
+                            type=ChunkType.AUDIO,
                             data=audio_data,
                             sample_rate=self.tts.sample_rate,
                             channels=1,

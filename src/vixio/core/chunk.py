@@ -33,9 +33,8 @@ class ChunkType(str, Enum):
     
     # ============ Data Chunks (Core content - to be processed/transformed) ============
     # Audio data (layered: streaming → complete)
+    AUDIO = "audio"  # Complete audio segment (from VAD/TurnDetector)
     AUDIO_DELTA = "audio.delta"       # Streaming audio fragment (from Transport, ~0.06-0.12s)
-    AUDIO_COMPLETE = "audio.complete" # Complete audio segment (from VAD/TurnDetector)
-    AUDIO_RAW = "audio.raw"           # Deprecated: alias for AUDIO_COMPLETE (backward compatibility)
     
     # Text data (layered: streaming → complete)
     TEXT = "text"                      # Complete text (e.g. ASR result, Agent input)
@@ -186,8 +185,7 @@ class AudioChunk(Chunk):
     
     Types:
     - AUDIO_DELTA: Streaming audio fragment from Transport (~0.06-0.12s, ~1920 bytes)
-    - AUDIO_COMPLETE: Complete audio segment from VAD/TurnDetector (merged)
-    - AUDIO_RAW: Deprecated alias for AUDIO_COMPLETE (backward compatibility)
+    - AUDIO: Complete audio segment from VAD/TurnDetector (merged)
     
     Important: AudioChunk ALWAYS contains PCM audio data (16-bit signed, little-endian).
     Transport layers are responsible for format conversion (e.g., Opus -> PCM).
@@ -198,7 +196,7 @@ class AudioChunk(Chunk):
         sample_rate: int - Sample rate in Hz (default: 16000)
         channels: int - Number of audio channels (default: 1)
     """
-    type: ChunkType = ChunkType.AUDIO_COMPLETE  # Default to COMPLETE for backward compatibility
+    type: ChunkType = ChunkType.AUDIO  # Default to COMPLETE for backward compatibility
     sample_rate: int = 16000
     channels: int = 1
     

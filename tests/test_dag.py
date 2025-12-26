@@ -36,9 +36,9 @@ class TextOnlyStation(Station):
 
 
 class AudioOnlyStation(Station):
-    """Station that only accepts AUDIO_RAW chunks"""
+    """Station that only accepts AUDIO chunks"""
 
-    ALLOWED_INPUT_TYPES = [ChunkType.AUDIO_RAW]
+    ALLOWED_INPUT_TYPES = [ChunkType.AUDIO]
 
     def __init__(self, name: str = "AudioOnlyStation"):
         super().__init__(name=name)
@@ -52,7 +52,7 @@ class AudioOnlyStation(Station):
 class MultiTypeStation(Station):
     """Station that accepts both TEXT and AUDIO"""
 
-    ALLOWED_INPUT_TYPES = [ChunkType.TEXT, ChunkType.AUDIO_RAW]
+    ALLOWED_INPUT_TYPES = [ChunkType.TEXT, ChunkType.AUDIO]
 
     def __init__(self, name: str = "MultiTypeStation"):
         super().__init__(name=name)

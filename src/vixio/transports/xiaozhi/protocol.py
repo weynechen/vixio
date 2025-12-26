@@ -163,7 +163,7 @@ class XiaozhiProtocol(ProtocolBase):
         if msg_type == XiaozhiMessageType.AUDIO:
             # Note: Opus decoding is handled by InputStation (needs codec state)
             return AudioChunk(
-                type=ChunkType.AUDIO_RAW,
+                type=ChunkType.AUDIO_DELTA,
                 data=message.get("audio_data", b""),  # Opus encoded data
                 sample_rate=self.sample_rate,
                 channels=self.channels,

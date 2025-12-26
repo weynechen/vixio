@@ -298,7 +298,7 @@ class Station(ABC):
             
             class ASRStation(StreamStation):
                 def _setup_handlers(self):
-                    self.register_handler(ChunkType.AUDIO_RAW, self._handle_audio)
+                    self.register_handler(ChunkType.AUDIO, self._handle_audio)
                     self.register_handler(ChunkType.EVENT_STREAM_COMPLETE, self._handle_turn_end)
                 
                 async def process_chunk(self, chunk):
@@ -369,7 +369,7 @@ class StreamStation(Station):
     # Subclasses should override these
     ALLOWED_INPUT_TYPES: list = []  # e.g., [ChunkType.TEXT] (alias for INPUT_TYPES)
     LATENCY_METRIC_NAME: str = ""  # e.g., "agent_first_token"
-    LATENCY_OUTPUT_TYPES: list = None  # e.g., [ChunkType.AUDIO_RAW] (None = all types)
+    LATENCY_OUTPUT_TYPES: list = None  # e.g., [ChunkType.AUDIO] (None = all types)
     
     # Stream stations typically emit completion when done
     EMITS_COMPLETION: bool = True
@@ -485,7 +485,7 @@ class DetectorStation(Station):
     ROLE = StationRole.DETECTOR
     
     # Subclasses should override these
-    ALLOWED_INPUT_TYPES: list = []  # e.g., [ChunkType.AUDIO_RAW]
+    ALLOWED_INPUT_TYPES: list = []  # e.g., [ChunkType.AUDIO]
     
     # Detectors emit completion signals on state change
     EMITS_COMPLETION: bool = True

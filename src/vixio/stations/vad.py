@@ -4,7 +4,7 @@ VADStation - Voice Activity Detection
 Input: AUDIO_DELTA (streaming PCM audio fragments)
 Output: 
   - AUDIO_DELTA (passthrough with VAD state)
-  - AUDIO_COMPLETE (merged audio when voice ends)
+  - AUDIO (merged audio when voice ends)
   - EVENT_VAD_START when voice starts
   - EVENT_VAD_END when voice ends
 
@@ -13,8 +13,8 @@ Data Flow:
 - Detects voice activity using VAD provider
 - Passthrough AUDIO_DELTA (with VAD state in metadata)
 - Buffers audio during speech
-- On VAD_END, outputs merged AUDIO_COMPLETE + VAD_END event
-- TurnDetector receives AUDIO_COMPLETE and decides if turn is complete
+- On VAD_END, outputs merged AUDIO + VAD_END event
+- TurnDetector receives AUDIO and decides if turn is complete
 
 Note: This station expects PCM audio data. Transport layers are responsible
 for format conversion (e.g., Opus -> PCM) before chunks enter the pipeline.
@@ -41,7 +41,7 @@ class VADStation(DetectorStation):
     Input: AUDIO_DELTA (streaming PCM fragments)
     Output: 
       - AUDIO_DELTA (passthrough with VAD state)
-      - AUDIO_COMPLETE (merged segments when voice ends)
+      - AUDIO (merged segments when voice ends)
       - EVENT_VAD_START/END
     
     Data Flow:
@@ -49,8 +49,8 @@ class VADStation(DetectorStation):
     - Detects voice activity using VAD provider
     - Passthrough AUDIO_DELTA (with VAD state metadata)
     - Buffers audio during speech
-    - On VAD_END, outputs merged AUDIO_COMPLETE + VAD_END event
-    - TurnDetector/SmartTurn downstream receives AUDIO_COMPLETE
+    - On VAD_END, outputs merged AUDIO + VAD_END event
+    - TurnDetector/SmartTurn downstream receives AUDIO
     
     Completion Contract:
     - EMITS_COMPLETION = False (TurnDetector decides when turn ends)
@@ -58,7 +58,7 @@ class VADStation(DetectorStation):
     """
     
     # DetectorStation configuration
-    ALLOWED_INPUT_TYPES = [ChunkType.AUDIO_DELTA, ChunkType.AUDIO_RAW]  # Support both for compatibility
+    ALLOWED_INPUT_TYPES = [ChunkType.AUDIO_DELTA, ChunkType.AUDIO]  # Support both for compatibility
     
     # VAD does not emit completion - TurnDetector handles that
     EMITS_COMPLETION = False
@@ -145,7 +145,7 @@ class VADStation(DetectorStation):
         Merge all buffered audio into a single AudioChunk.
         
         Returns:
-            Merged AudioChunk (AUDIO_COMPLETE) with all buffered audio data, or None if buffer is empty
+            Merged AudioChunk (AUDIO) with all buffered audio data, or None if buffer is empty
         """
         if not self._audio_buffer:
             return None
@@ -156,7 +156,7 @@ class VADStation(DetectorStation):
         channels = self._audio_buffer[0].channels if self._audio_buffer else 1
         
         return AudioChunk(
-            type=ChunkType.AUDIO_COMPLETE,  # Output complete audio segment
+            type=ChunkType.AUDIO,  # Output complete audio segment
             data=merged_audio,
             source=self.name,
             session_id=session_id,
@@ -175,22 +175,19 @@ class VADStation(DetectorStation):
         - Passthrough AUDIO_DELTA (with VAD state metadata)
         - Buffer audio during speech
         - On VAD_START: emit EVENT_VAD_START
-        - On VAD_END: emit merged AUDIO_COMPLETE + EVENT_VAD_END
+        - On VAD_END: emit merged AUDIO + EVENT_VAD_END
         
         TurnDetector downstream will receive:
         - AUDIO_DELTA (passthrough, can be used for streaming ASR)
         - EVENT_VAD_START (can update state)
-        - AUDIO_COMPLETE (merged buffer from this speech segment)
+        - AUDIO (merged buffer from this speech segment)
         - EVENT_VAD_END (can decide if turn is complete)
         """
         # Only process audio data (PCM)
-        if chunk.type not in (ChunkType.AUDIO_DELTA, ChunkType.AUDIO_RAW):
+        if chunk.type not in (ChunkType.AUDIO_DELTA, ChunkType.AUDIO):
             return
             yield  # Makes this an async generator
         
-        # Convert AUDIO_RAW to AUDIO_DELTA for consistency
-        if chunk.type == ChunkType.AUDIO_RAW:
-            chunk.type = ChunkType.AUDIO_DELTA
         
         # Detect voice activity
         audio_data = chunk.data if isinstance(chunk.data, bytes) else b''
@@ -214,7 +211,7 @@ class VADStation(DetectorStation):
         )
         yield passthrough_chunk
         
-        # Buffer audio while speaking (for AUDIO_COMPLETE output)
+        # Buffer audio while speaking (for AUDIO output)
         if self._is_speaking:
             # Type assertion: chunk is AudioChunk (validated by ALLOWED_INPUT_TYPES)
             self._audio_buffer.append(cast(AudioChunk, chunk))

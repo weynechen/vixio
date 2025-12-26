@@ -219,7 +219,7 @@ async def main():
         dag.add_edge("transport_in", "realtime")
         
         # 2. realtime -> transport_out (for Audio and Events)
-        # AUDIO_RAW and Events go directly to transport_out
+        # AUDIO and Events go directly to transport_out
         dag.add_edge("realtime", "transport_out")
         
         # 3. realtime -> sentence_aggregator -> transport_out (for TEXT_DELTA -> TEXT)

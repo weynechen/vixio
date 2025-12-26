@@ -1,12 +1,12 @@
 """
 ASRStation - Speech to Text (Batch Mode)
 
-Input: AUDIO_COMPLETE (merged chunk from TurnDetector)
+Input: AUDIO (merged chunk from TurnDetector)
 Output: TEXT_DELTA (streaming transcription) + EVENT_STREAM_COMPLETE
 
 Data Flow:
 - TurnDetector buffers audio during user speaking
-- On turn end, TurnDetector outputs one merged AUDIO_RAW chunk
+- On turn end, TurnDetector outputs one merged AUDIO chunk
 - ASR directly processes the audio chunk in process_chunk (not on_completion)
 - This allows LatencyMonitorMiddleware to properly track first output
 
@@ -44,17 +44,17 @@ class ASRStation(StreamStation):
     """
     ASR workstation: Transcribes audio to text (batch mode, streaming output).
     
-    Input: AUDIO_COMPLETE (merged chunk from TurnDetector)
+    Input: AUDIO (merged chunk from TurnDetector)
     Output: TEXT_DELTA (streaming) + EVENT_STREAM_COMPLETE
     
     Data Flow:
-    - Receives single merged AUDIO_COMPLETE chunk from TurnDetector
+    - Receives single merged AUDIO chunk from TurnDetector
     - Directly processes audio in process_chunk (enables middleware monitoring)
     - Calls ASR provider with complete audio (batch mode)
     - Yields TEXT_DELTA as provider streams results (streaming output)
     - Emits completion to trigger downstream
     
-    Note: Input is batch (AUDIO_COMPLETE), output is streaming (TEXT_DELTA).
+    Note: Input is batch (AUDIO), output is streaming (TEXT_DELTA).
     This leverages ASR provider's ability to stream results while processing.
     
     Completion Contract:
@@ -63,7 +63,7 @@ class ASRStation(StreamStation):
     """
     
     # StreamStation configuration
-    ALLOWED_INPUT_TYPES = [ChunkType.AUDIO_COMPLETE, ChunkType.AUDIO_RAW]  # Support both for compatibility
+    ALLOWED_INPUT_TYPES = [ChunkType.AUDIO]  # Support both for compatibility
     LATENCY_METRIC_NAME = "asr_complete"
     LATENCY_OUTPUT_TYPES = [ChunkType.TEXT_DELTA]  # Only monitor TEXT_DELTA, not EVENT_BOT_THINKING
     
@@ -128,19 +128,19 @@ class ASRStation(StreamStation):
     
     async def process_chunk(self, chunk: Chunk) -> AsyncGenerator[Chunk, None]:
         """
-        Process AUDIO_COMPLETE chunk - directly transcribe and yield results (batch mode).
+        Process AUDIO chunk - directly transcribe and yield results (batch mode).
         
         TurnDetector sends a single merged audio chunk containing all buffered audio.
         We process it immediately (batch mode), allowing LatencyMonitorMiddleware to track output.
         ASR provider streams results (streaming output) as it processes the complete audio.
         
         Args:
-            chunk: AudioChunk with merged audio data (AUDIO_COMPLETE)
+            chunk: AudioChunk with merged audio data (AUDIO)
             
         Yields:
             EVENT_BOT_THINKING + TEXT_DELTA chunks + EVENT_STREAM_COMPLETE
         """
-        if chunk.type not in (ChunkType.AUDIO_COMPLETE, ChunkType.AUDIO_RAW) or not chunk.data:
+        if chunk.type not in (ChunkType.AUDIO) or not chunk.data:
             return
             yield  # Makes this an async generator
         

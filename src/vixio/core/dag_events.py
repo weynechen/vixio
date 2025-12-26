@@ -275,7 +275,7 @@ class DAGEventEmitter:
             data["preview"] = text[:100]
 
         # Add size for audio chunks
-        if chunk.type in (ChunkType.AUDIO_RAW, ChunkType.AUDIO_DELTA, ChunkType.AUDIO_COMPLETE) and chunk.data:
+        if chunk.type in (ChunkType.AUDIO_DELTA, ChunkType.AUDIO) and chunk.data:
             if isinstance(chunk.data, bytes):
                 data["size_bytes"] = len(chunk.data)
 
