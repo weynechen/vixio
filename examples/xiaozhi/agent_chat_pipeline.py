@@ -123,8 +123,8 @@ async def main():
     parser.add_argument(
         "--env",
         type=str,
-        default="dev-grpc",
-        choices=["dev-grpc", "dev-local-cn", "dev-qwen", "dev-realtime", "docker", "k8s"],
+        default="dev-qwen-pipeline",
+        choices=["dev-grpc", "dev-qwen-pipeline", "dev-in-process"],
         help="Deployment environment (default: dev)"
     )
     parser.add_argument(

@@ -81,8 +81,8 @@ async def main():
     parser.add_argument(
         "--env",
         type=str,
-        default="dev-realtime",
-        choices=["dev-realtime"],
+        default="dev-qwen-realtime",
+        choices=["dev-qwen-realtime"],
         help="Deployment environment (default: dev-realtime)"
     )
     parser.add_argument(

@@ -12,11 +12,13 @@
 - [x] 提供一个web版本，方便测试
 - [x] vixio整个架构是stream的，最小单位是text；但实际上最后transport是基于sentence的。这里是有冲突的。 -- 经论证，只要client支持delta方式的，那vixio也可以使用delta来发送。
 - [x] 使用qwen的sample重写asr和tts.这两个可以支持vad和自己聚合句子，因此完全可以加速。
+- [x] 快速开始的小工具
+- [ ] 扩展MCP
+- [ ] 配置系统：简单的管理后台，管理提示词这些。
+- [ ] 数据流可视化（当前已经预留 dag_events.py 和 dag_monitor.py）
 - [ ] Per-Session Transport 重构：消除 session_id 传递 → 设计文档: [per-session-transport.md](./design/per-session-transport.md)。使用session 对象来彻底隔离session 资源，防止泄露
 - [ ] 实现 https://github.com/huggingface/smolagents 的provider。
 - [ ] docker inference部署
-- [x] 快速开始的小工具
-- [ ] 简单的管理后台，管理提示词这些
 - [ ] 更新intranscribe
 - [ ] 制作实时翻译示例
 - [ ] 使用https://github.com/antvis/x6 或者 https://github.com/microsoft/react-dag-editor 制作DAG前端图展示数据流，延时，调试信息等等

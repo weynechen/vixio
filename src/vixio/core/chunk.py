@@ -197,17 +197,9 @@ class AudioChunk(Chunk):
         channels: int - Number of audio channels (default: 1)
     """
     type: ChunkType = ChunkType.AUDIO  # Default to COMPLETE for backward compatibility
+    data: bytes = b""
     sample_rate: int = 16000
     channels: int = 1
-    
-    def duration_ms(self) -> float:
-        """Calculate audio duration in milliseconds"""
-        if not self.data or not isinstance(self.data, bytes):
-            return 0.0
-        # Assuming 16-bit PCM
-        bytes_per_sample = 2
-        num_samples = len(self.data) / (bytes_per_sample * self.channels)
-        return (num_samples / self.sample_rate) * 1000
 
 
 @dataclass
@@ -219,15 +211,7 @@ class TextChunk(Chunk):
         data: str - Text content (unified with base Chunk.data)
     """
     type: ChunkType = ChunkType.TEXT
-    # Note: data is inherited from Chunk base class (Any type)
-    # For TextChunk, data should be str
-    
-    def __post_init__(self):
-        """Ensure data is a string"""
-        if self.data is None:
-            self.data = ""
-        elif not isinstance(self.data, str):
-            self.data = str(self.data)
+    data: str = ""
     
     def __str__(self) -> str:
         session_short = self.session_id[:8] if self.session_id else 'N/A'
@@ -245,15 +229,7 @@ class TextDeltaChunk(Chunk):
         data: str - Text fragment (unified with base Chunk.data)
     """
     type: ChunkType = ChunkType.TEXT_DELTA
-    # Note: data is inherited from Chunk base class (Any type)
-    # For TextDeltaChunk, data should be str
-    
-    def __post_init__(self):
-        """Ensure data is a string"""
-        if self.data is None:
-            self.data = ""
-        elif not isinstance(self.data, str):
-            self.data = str(self.data)
+    data: str = ""
     
     def __str__(self) -> str:
         session_short = self.session_id[:8] if self.session_id else 'N/A'
