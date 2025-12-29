@@ -13,7 +13,7 @@
 - [x] vixio整个架构是stream的，最小单位是text；但实际上最后transport是基于sentence的。这里是有冲突的。 -- 经论证，只要client支持delta方式的，那vixio也可以使用delta来发送。
 - [x] 使用qwen的sample重写asr和tts.这两个可以支持vad和自己聚合句子，因此完全可以加速。
 - [x] 快速开始的小工具
-- [ ] 扩展MCP
+- [x] 扩展MCP
 - [ ] 增加豆包系的provider.
 - [ ] 配置系统：简单的管理后台，管理提示词这些。
 - [ ] 数据流可视化（当前已经预留 dag_events.py 和 dag_monitor.py）

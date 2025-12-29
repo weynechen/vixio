@@ -42,6 +42,10 @@ dev-qwen-pipeline:
         base_url: ${BASE_URL:}
         temperature: 0.7
         max_tokens: 2000
+        mcp_server:
+           name: "gaode-map"
+           url: ${MCP_SERVER_URL}
+           transport: "sse"  # or "streamablehttp"
     
     # TTS Provider (Qwen Cloud - Realtime WebSocket)
     tts:
@@ -395,5 +399,38 @@ k8s:
 #    - Stateful providers (VAD): VAD-cycle locking (START→END)
 #    - Stateless providers (ASR): Chunk-level concurrency
 #    - K8s HPA: Auto-scale based on CPU utilization
+#
+# 5. MCP Server Configuration (Optional):
+#    Agent provider supports hosted MCP servers for tool expansion.
+#    
+#    Single server (simplified):
+#      agent:
+#        provider: openai-agent
+#        config:
+#          api_key: ${API_KEY}
+#          model: ${LITELLM_MODEL}
+#          mcp_server:
+#            name: "gaode-map"
+#            url: ${MCP_SERVER_URL}
+#            transport: "sse"  # or "streamablehttp"
+#    
+#    Multiple servers:
+#      agent:
+#        provider: openai-agent
+#        config:
+#          api_key: ${API_KEY}
+#          model: ${LITELLM_MODEL}
+#          mcp_servers:
+#            - name: "gaode-map"
+#              url: ${MCP_GAODE_URL}
+#              transport: "sse"
+#            - name: "weather"
+#              url: ${MCP_WEATHER_URL}
+#              transport: "streamablehttp"
+#    
+#    Environment variables example:
+#      MCP_SERVER_URL=https://mcp.api-inference.modelscope.net/xxxxx/sse
+#      MCP_GAODE_URL=https://mcp.api-inference.modelscope.net/gaode/sse
+#      MCP_WEATHER_URL=http://localhost:8000/mcp
 # ==============================================================================
 

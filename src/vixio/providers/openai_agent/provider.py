@@ -19,6 +19,13 @@ try:
 except ImportError:
     AGENTS_AVAILABLE = False
 
+# MCP Server imports (optional)
+try:
+    from agents.mcp import MCPServerSse, MCPServerSseParams, MCPServerStreamableHttp
+    MCP_AVAILABLE = True
+except ImportError:
+    MCP_AVAILABLE = False
+
 
 @register_provider("openai-agent")
 class OpenAIAgentProvider(AgentProvider):
@@ -56,6 +63,8 @@ class OpenAIAgentProvider(AgentProvider):
         frequency_penalty: Optional[float] = None,
         session_id: Optional[str] = None,
         session_db_path: Optional[str] = None,
+        mcp_server: Optional[Dict[str, Any]] = None,
+        mcp_servers: Optional[List[Dict[str, Any]]] = None,
     ):
         """
         Initialize OpenAI Agent provider.
@@ -71,6 +80,11 @@ class OpenAIAgentProvider(AgentProvider):
             frequency_penalty: Frequency penalty parameter (optional)
             session_id: Session ID for conversation memory (auto-generated if not provided)
             session_db_path: Path to SQLite database file for session storage (in-memory if not provided)
+            mcp_server: Single MCP server config (simplified form):
+                - name: Server name
+                - url: Server URL
+                - transport: "sse" or "streamablehttp" (default: "sse")
+            mcp_servers: List of MCP server configs (for multiple servers)
         """
         if not AGENTS_AVAILABLE:
             raise RuntimeError(
@@ -109,15 +123,21 @@ class OpenAIAgentProvider(AgentProvider):
         self.session_db_path = session_db_path  # None = in-memory database
         self.session: Optional[SQLiteSession] = None  # Created when session_id is set
         
+        # MCP Server configuration
+        self._mcp_configs = self._normalize_mcp_config(mcp_server, mcp_servers)
+        self._mcp_servers: List[Any] = []  # Active MCP server instances
+        self._mcp_contexts: List[Any] = []  # Async context managers for cleanup
+        
         # Agent framework objects (created in initialize)
         self.model = None
         self.agent = None
         self.system_prompt = None
         self._current_tools: List[Tool] = []  # Track current tools for add_tools
         
+        mcp_info = f", mcp_servers={len(self._mcp_configs)}" if self._mcp_configs else ""
         self.logger.info(
             f"OpenAI Agent provider created: model={model}, "
-            f"temperature={temperature}, max_tokens={max_tokens}"
+            f"temperature={temperature}, max_tokens={max_tokens}{mcp_info}"
         )
     
     @classmethod
@@ -173,6 +193,51 @@ class OpenAIAgentProvider(AgentProvider):
                 "type": "string",
                 "default": None,
                 "description": "Path to SQLite database file for session storage (in-memory if not provided)"
+            },
+            "mcp_server": {
+                "type": "object",
+                "default": None,
+                "description": "Single MCP server config (simplified form)",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Server name"
+                    },
+                    "url": {
+                        "type": "string",
+                        "description": "Server URL (required)"
+                    },
+                    "transport": {
+                        "type": "string",
+                        "enum": ["sse", "streamablehttp"],
+                        "default": "sse",
+                        "description": "Transport type: sse or streamablehttp"
+                    }
+                }
+            },
+            "mcp_servers": {
+                "type": "array",
+                "default": None,
+                "description": "List of MCP server configs (for multiple servers)",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "description": "Server name"
+                        },
+                        "url": {
+                            "type": "string",
+                            "description": "Server URL (required)"
+                        },
+                        "transport": {
+                            "type": "string",
+                            "enum": ["sse", "streamablehttp"],
+                            "default": "sse",
+                            "description": "Transport type: sse or streamablehttp"
+                        }
+                    }
+                }
             }
         }
     
@@ -215,6 +280,9 @@ class OpenAIAgentProvider(AgentProvider):
         self.logger.info(f"Model params: {model_params}")
         self.model = LitellmModel(**model_params)
         
+        # Create and connect MCP servers (if configured)
+        self._mcp_servers = await self._create_mcp_servers()
+        
         # Store and convert tools to FunctionTool format
         self._current_tools = list(tools) if tools else []
         function_tools = []
@@ -228,13 +296,20 @@ class OpenAIAgentProvider(AgentProvider):
         self.logger.info(f"Registered {len(function_tools)} tools")
         
         # Create Agent (framework manages conversation and memory)
-        self.agent = Agent(
-            name=self.name,
-            model=self.model,
-            instructions=self.system_prompt,
-            tools=function_tools,
+        # Include MCP servers if available
+        agent_kwargs = {
+            "name": self.name,
+            "model": self.model,
+            "instructions": self.system_prompt,
+            "tools": function_tools,
             **kwargs,
-        )
+        }
+        
+        if self._mcp_servers:
+            agent_kwargs["mcp_servers"] = self._mcp_servers
+            self.logger.info(f"Agent configured with {len(self._mcp_servers)} MCP server(s)")
+        
+        self.agent = Agent(**agent_kwargs)
         
         self._initialized = True
         self.logger.info(
@@ -440,7 +515,7 @@ class OpenAIAgentProvider(AgentProvider):
         await self._rebuild_agent_with_current_tools()
     
     async def _rebuild_agent_with_current_tools(self) -> None:
-        """Rebuild agent with current tool list."""
+        """Rebuild agent with current tool list and MCP servers."""
         # Convert tools to FunctionTool format
         function_tools = []
         for tool in self._current_tools:
@@ -450,13 +525,18 @@ class OpenAIAgentProvider(AgentProvider):
             except Exception as e:
                 self.logger.error(f"Failed to convert tool {tool.name}: {e}")
         
-        # Recreate agent with all tools
-        self.agent = Agent(
-            name=self.name,
-            model=self.model,
-            instructions=self.system_prompt,
-            tools=function_tools,
-        )
+        # Recreate agent with all tools and MCP servers
+        agent_kwargs = {
+            "name": self.name,
+            "model": self.model,
+            "instructions": self.system_prompt,
+            "tools": function_tools,
+        }
+        
+        if self._mcp_servers:
+            agent_kwargs["mcp_servers"] = self._mcp_servers
+        
+        self.agent = Agent(**agent_kwargs)
         
         self.logger.info(f"Agent rebuilt with {len(function_tools)} tools")
     
@@ -465,8 +545,11 @@ class OpenAIAgentProvider(AgentProvider):
         Cleanup Agent and resources.
         """
         self.logger.info("Cleaning up OpenAI Agent")
-        # Agent framework doesn't require explicit cleanup
-        # But we can clear references
+        
+        # Cleanup MCP server connections
+        await self._cleanup_mcp_servers()
+        
+        # Clear agent framework references
         self.agent = None
         self.model = None
         self.session = None
@@ -487,6 +570,127 @@ class OpenAIAgentProvider(AgentProvider):
         
         items = await self.session.get_items(limit=limit)
         return items
+    
+    def _normalize_mcp_config(
+        self,
+        mcp_server: Optional[Dict[str, Any]],
+        mcp_servers: Optional[List[Dict[str, Any]]],
+    ) -> List[Dict[str, Any]]:
+        """
+        Normalize MCP configuration to a unified list format.
+        
+        Supports both single server (mcp_server) and multiple servers (mcp_servers).
+        
+        Args:
+            mcp_server: Single MCP server config (simplified)
+            mcp_servers: List of MCP server configs
+            
+        Returns:
+            List of normalized MCP server configs
+        """
+        configs = []
+        
+        # Process single server config
+        if mcp_server:
+            if not mcp_server.get("url"):
+                self.logger.warning("mcp_server configured but url is empty, skipping")
+            else:
+                configs.append({
+                    "name": mcp_server.get("name", "mcp-server"),
+                    "url": mcp_server["url"],
+                    "transport": mcp_server.get("transport", "sse").lower(),
+                })
+        
+        # Process multiple server configs
+        if mcp_servers:
+            for i, server in enumerate(mcp_servers):
+                if not server.get("url"):
+                    self.logger.warning(f"mcp_servers[{i}] has empty url, skipping")
+                    continue
+                configs.append({
+                    "name": server.get("name", f"mcp-server-{i}"),
+                    "url": server["url"],
+                    "transport": server.get("transport", "sse").lower(),
+                })
+        
+        return configs
+    
+    async def _create_mcp_servers(self) -> List[Any]:
+        """
+        Create and connect MCP server instances.
+        
+        Creates MCPServerSse or MCPServerStreamableHttp based on transport config.
+        Manages async context managers for proper lifecycle.
+        
+        Returns:
+            List of connected MCP server instances
+        """
+        if not self._mcp_configs:
+            return []
+        
+        if not MCP_AVAILABLE:
+            self.logger.warning(
+                "MCP servers configured but agents.mcp not available. "
+                "Please install: pip install openai-agents[mcp]"
+            )
+            return []
+        
+        servers = []
+        
+        for config in self._mcp_configs:
+            transport = config["transport"]
+            name = config["name"]
+            url = config["url"]
+            
+            try:
+                if transport == "sse":
+                    # Create SSE MCP Server
+                    server = MCPServerSse(
+                        name=name,
+                        params=MCPServerSseParams(url=url),
+                    )
+                elif transport == "streamablehttp":
+                    # Create Streamable HTTP MCP Server
+                    server = MCPServerStreamableHttp(
+                        name=name,
+                        params={"url": url},
+                    )
+                else:
+                    self.logger.error(
+                        f"Unknown MCP transport '{transport}' for {name}, "
+                        f"supported: sse, streamablehttp"
+                    )
+                    continue
+                
+                # Enter async context manager to connect
+                connected_server = await server.__aenter__()
+                self._mcp_contexts.append(server)  # Store for cleanup
+                servers.append(connected_server)
+                
+                self.logger.info(
+                    f"MCP server connected: name={name}, transport={transport}, url={url}"
+                )
+                
+            except Exception as e:
+                self.logger.error(f"Failed to connect MCP server {name}: {e}")
+        
+        return servers
+    
+    async def _cleanup_mcp_servers(self) -> None:
+        """
+        Cleanup MCP server connections.
+        
+        Exits all async context managers for MCP servers.
+        """
+        for ctx in self._mcp_contexts:
+            try:
+                await ctx.__aexit__(None, None, None)
+            except Exception as e:
+                self.logger.warning(f"Error closing MCP server: {e}")
+        
+        self._mcp_contexts.clear()
+        self._mcp_servers.clear()
+        self.logger.debug("MCP servers cleaned up")
     
     def _create_session(self) -> None:
         """
@@ -591,6 +795,8 @@ class OpenAIAgentProvider(AgentProvider):
             "timeout": self.timeout,
             "session_id": self.session_id,
             "session_db_path": self.session_db_path,
+            "mcp_servers_count": len(self._mcp_servers),
+            "mcp_configs": self._mcp_configs,
         })
         return config
 
