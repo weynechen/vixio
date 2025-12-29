@@ -154,4 +154,4 @@ For detailed configuration and usage guide, see the [documentation](docs/).
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) for details.
+Apache License - see [LICENSE](LICENSE) for details.
