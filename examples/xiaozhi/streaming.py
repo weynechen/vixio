@@ -69,6 +69,7 @@ from vixio.stations import (
 from vixio.providers.sentence_aggregator import SimpleSentenceAggregatorProviderCN
 from vixio.providers.factory import ProviderFactory
 from vixio.config import get_default_config_path
+from vixio.utils import get_local_ip
 
 
 # Event to signal shutdown
@@ -267,12 +268,12 @@ async def main():
         turn_timeout_seconds=None  # No turn timeout for streaming mode
     )
     
+    local_ip = get_local_ip()
     # Step 4: Run server
     logger.info(f"\n{'='*60}")
     logger.info("🚀 Streaming Voice Chat Server Starting...")
     logger.info(f"{'='*60}")
-    logger.info(f"📡 Server listening on: 0.0.0.0:8000")
-    logger.info(f"🔌 WebSocket endpoint: ws://0.0.0.0:8000/xiaozhi/v1/")
+    logger.info(f"OTA interface: http://{local_ip}:{transport.port}/xiaozhi/ota/")
     logger.info(f"🔧 Pipeline: Streaming (4 stations)")
     logger.info(f"⚡ Mode: Full streaming with built-in VAD")
     logger.info(f"📊 Expected TTFT: ~500-1000ms")

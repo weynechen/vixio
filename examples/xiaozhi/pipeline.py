@@ -4,11 +4,6 @@ Example 3: Complete voice conversation with AI Agent (DAG Architecture)
 A full voice chat DAG with VAD, ASR, Agent, sentence splitting, and TTS.
 Demonstrates the complete integration of all components using DAG architecture.
 
-⚠️  NOTE: This is the FULL pipeline version with maximum control and flexibility.
-    For a simplified version with fewer dependencies and lower latency, see:
-    - agent_chat_simple.py (3 stations: ASR→Agent→TTS, ~800ms TTFT)
-    - agent_chat_full.py (identical to this file, explicit naming)
-
 DAG Architecture Benefits:
 - Automatic routing based on ALLOWED_INPUT_TYPES
 - No explicit passthrough logic needed
@@ -17,16 +12,10 @@ DAG Architecture Benefits:
 
 Usage:
     # Development mode - In-process inference (no external services needed)
-    uv run python examples/agent_chat.py --env dev-local-cn
+    uv run python examples/pipeline.py --env dev-local-cn
     
     # Development mode - with gRPC microservices
-    uv run python examples/agent_chat.py --env dev-grpc 
-    
-    # Docker mode
-    uv run python examples/agent_chat.py --env docker
-    
-    # Kubernetes mode
-    uv run python examples/agent_chat.py --env k8s
+    uv run python examples/pipeline.py --env dev-grpc 
 
 Logger Configuration:
     Logger is auto-configured on import with INFO level, logging to logs/ directory.
@@ -354,15 +343,7 @@ async def main():
             provider_type = "Remote (API)"
         logger.info(f"  - {category.upper():6s}: {provider.name:20s} [{provider_type}]")
     logger.info("")
-    logger.info(f"WebSocket endpoint:")
-    logger.info(f"  ws://{local_ip}:{transport.port}{transport.websocket_path}")
-    logger.info(f"")
-    logger.info(f"HTTP endpoints:")
-    logger.info(f"  - Server info:     http://{local_ip}:{transport.port}/")
-    logger.info(f"  - Health check:    http://{local_ip}:{transport.port}/health")
-    logger.info(f"  - Connections:     http://{local_ip}:{transport.port}/connections")
     logger.info(f"  - OTA interface:   http://{local_ip}:{transport.port}/xiaozhi/ota/")
-    logger.info(f"  - Vision analysis: http://{local_ip}:{transport.port}/mcp/vision/explain")
     logger.info("")
     
     # Build DAG description
