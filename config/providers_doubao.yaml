@@ -54,25 +54,27 @@ dev-doubao-streaming:
         base_url: "https://open.bigmodel.cn/api/paas/v4"
 
 # ==============================================================================
-# Development Mode - Doubao Omni Realtime (End-to-End Voice)
+# Development Mode - Doubao Realtime (End-to-End Voice)
 # ==============================================================================
 # Uses speech to speech model for end-to-end voice conversation.
 # No separate VAD, ASR, Agent, or TTS providers needed.
 # ==============================================================================
 dev-doubao-realtime:
   providers:
-    # Realtime Provider (Doubao End-to-End Voice)
     realtime:
-      provider: qwen-omni-realtime
+      provider: doubao-realtime
       config:
-        api_key: ${DASHSCOPE_API_KEY}
-        model: "qwen3-omni-flash-realtime"
-        voice: "Cherry"
-        instructions: "你是一个友好的AI语音助手，请用简洁自然的语言回答问题。回答要口语化，适合语音播放。"
+        app_id: ${DOUBAO_APP_ID}
+        access_token: ${DOUBAO_ACCESS_TOKEN}
+        app_key: "PlgvMymc7f3tQnJ6"
+        speaker: "zh_female_xiaohe_jupiter_bigtts"
+        bot_name: "小智"
+        system_role: "你是一个友好的AI语音助手，请用简洁自然的语言回答问题。回答要口语化，适合语音播放。"
+        speaking_style: "简洁明了，语速适中，语调自然。"
         input_sample_rate: 16000
         output_sample_rate: 24000
-        vad_threshold: 0.5
-        silence_duration_ms: 800
+        output_format: "pcm"
+        recv_timeout: 30  # ASR idle timeout in seconds (10-120), prevents AudioASRIdleTimeoutError
 
     vlm:
       provider: openai-vlm-remote

@@ -1,13 +1,13 @@
 """
-Example: End-to-End Real-time Voice Conversation (Qwen Omni Realtime)
+Example: End-to-End Real-time Voice Conversation (e.x. Qwen Omni Realtime)
 
-A simplified voice chat using Qwen-Omni-Realtime model which integrates
+A simplified voice chat using xxx-Realtime model which integrates
 VAD + ASR + LLM + TTS in a single model. No separate processing stages needed.
 
 DAG Architecture:
     transport_in -> RealtimeStation -> transport_out
 
-The Qwen-Omni-Realtime model handles:
+The xxx-Realtime model handles:
 - Voice Activity Detection (VAD): Auto-detects when user starts/stops speaking
 - Speech Recognition (ASR): Transcribes user speech
 - Language Model (LLM): Generates response
@@ -16,7 +16,7 @@ The Qwen-Omni-Realtime model handles:
 All processing happens server-side with automatic turn management.
 
 Usage:
-    # Requires DashScope API key
+    # Requires DashScope API key(if you use Qwen Omni Realtime)
     export DASHSCOPE_API_KEY="your-api-key"
     
     # Run with dev-realtime environment
@@ -68,7 +68,7 @@ signal.signal(signal.SIGINT, signal_handler)
 
 async def main():
     """
-    Real-time voice conversation server using Qwen-Omni-Realtime.
+    Real-time voice conversation server using xxx-Realtime.
     
     The realtime model integrates VAD + ASR + LLM + TTS in one model,
     providing end-to-end voice conversation with minimal latency.
@@ -82,7 +82,7 @@ async def main():
         "--env",
         type=str,
         default="dev-qwen-realtime",
-        choices=["dev-qwen-realtime"],
+        choices=["dev-qwen-realtime", "dev-doubao-realtime"],
         help="Deployment environment (default: dev-realtime)"
     )
     parser.add_argument(
@@ -116,7 +116,7 @@ async def main():
         )
         logger.info(f"Enabled DEBUG logging for: {', '.join(args.debug)}")
     
-    logger.info("=== Real-time Voice Chat with Qwen Omni ===")
+    logger.info("=== Real-time Voice Chat ===")
     logger.info(f"Environment: {args.env}")
     
     # Step 1: Load provider configurations from file
@@ -279,7 +279,7 @@ async def main():
     logger.info("=" * 70)
     
     logger.info("📌 Realtime Mode Notes:")
-    logger.info("   - Using Qwen-Omni-Realtime model (end-to-end voice)")
+    logger.info("   - Using xxx-Realtime model (end-to-end voice)")
     logger.info("   - Server-side VAD automatically detects speech")
     logger.info("   - No separate ASR/TTS providers needed")
     logger.info("   - Requires DASHSCOPE_API_KEY environment variable")

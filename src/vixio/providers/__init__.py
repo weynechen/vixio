@@ -273,6 +273,27 @@ def get_doubao_tts_bidirectional_provider():
         ) from e
 
 
+def get_doubao_realtime_provider():
+    """
+    Load DoubaoRealtimeProvider class (doubao-realtime).
+    
+    End-to-end realtime voice conversation using Volcengine's dialog API.
+    Features: Integrated VAD + ASR + LLM + TTS
+    Requires: pip install vixio[doubao]
+    
+    Returns:
+        DoubaoRealtimeProvider class
+    """
+    try:
+        from vixio.providers.doubao.doubao_realtime import DoubaoRealtimeProvider
+        return DoubaoRealtimeProvider
+    except ImportError as e:
+        raise ImportError(
+            "DoubaoRealtimeProvider requires websockets package. "
+            "Install with: pip install vixio[doubao]"
+        ) from e
+
+
 # ============================================================
 # Export list
 # ============================================================
@@ -310,6 +331,7 @@ __all__ = [
     "get_qwen_omni_realtime_provider",
     # Lazy loaders - Doubao providers
     "get_doubao_tts_bidirectional_provider",
+    "get_doubao_realtime_provider",
 ]
 
 
@@ -415,5 +437,11 @@ except ImportError:
 try:
     from vixio.providers.doubao.doubao_tts_bidirectional import DoubaoTTSBidirectionalProvider
     __all__.append("DoubaoTTSBidirectionalProvider")
+except ImportError:
+    pass
+
+try:
+    from vixio.providers.doubao.doubao_realtime import DoubaoRealtimeProvider
+    __all__.append("DoubaoRealtimeProvider")
 except ImportError:
     pass
