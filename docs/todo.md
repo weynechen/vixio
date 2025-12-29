@@ -14,6 +14,7 @@
 - [x] 使用qwen的sample重写asr和tts.这两个可以支持vad和自己聚合句子，因此完全可以加速。
 - [x] 快速开始的小工具
 - [ ] 扩展MCP
+- [ ] 增加豆包系的provider.
 - [ ] 配置系统：简单的管理后台，管理提示词这些。
 - [ ] 数据流可视化（当前已经预留 dag_events.py 和 dag_monitor.py）
 - [ ] Per-Session Transport 重构：消除 session_id 传递 → 设计文档: [per-session-transport.md](./design/per-session-transport.md)。使用session 对象来彻底隔离session 资源，防止泄露
