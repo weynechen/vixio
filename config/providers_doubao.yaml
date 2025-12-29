@@ -1,0 +1,82 @@
+# ==============================================================================
+# Development Mode - Doubao Full Streaming (Continuous Audio/Text)
+# ==============================================================================
+# Full streaming pipeline with continuous audio/text streaming.
+# Uses Doubao's ASR built-in VAD and TTS server_commit mode.
+# 
+# Pipeline: StreamingASR(VAD) → Agent → StreamingTTS
+# Benefits: Minimal latency (~500-1000ms TTFT), simplest pipeline (4 stations)
+# Trade-offs: Requires stable network, ASR VAD may be less accurate
+# 
+# ==============================================================================
+dev-doubao-streaming:
+  providers:
+    # No VAD provider needed! ASR has built-in VAD
+    
+    # ASR Provider (Doubao Cloud - Continuous streaming with built-in VAD)
+    asr:
+      provider: qwen3-asr-flash-realtime
+      config:
+        api_key: ${DASHSCOPE_API_KEY}
+        model: "qwen3-asr-flash-realtime"
+        language: "zh"
+        sample_rate: 16000
+        enable_vad: true  # Built-in VAD for streaming mode
+        vad_threshold: 0.5
+        silence_duration_ms: 800
+    
+    # Agent Provider (Remote API)
+    agent:
+      provider: openai-agent
+      config:
+        api_key: ${API_KEY}
+        model: ${LITELLM_MODEL:deepseek/deepseek-chat}
+        base_url: ${BASE_URL:}
+        temperature: 0.7
+        max_tokens: 2000
+    
+    # TTS Provider (Doubao Cloud - Bidirectional streaming)
+    tts:
+      provider: doubao-tts-bidirectional
+      config:
+        app_id: ${DOUBAO_APP_ID}
+        access_token: ${DOUBAO_ACCESS_TOKEN}
+        voice_type: "zh_female_wanwanxiaohe_moon_bigtts" 
+        encoding: "pcm"
+        sample_rate: 24000
+        enable_timestamp: false
+
+    vlm:
+      provider: openai-vlm-remote
+      config:
+        model: "glm-4v-flash"
+        api_key: "${GLM_API_KEY}"
+        base_url: "https://open.bigmodel.cn/api/paas/v4"
+
+# ==============================================================================
+# Development Mode - Doubao Omni Realtime (End-to-End Voice)
+# ==============================================================================
+# Uses speech to speech model for end-to-end voice conversation.
+# No separate VAD, ASR, Agent, or TTS providers needed.
+# ==============================================================================
+dev-doubao-realtime:
+  providers:
+    # Realtime Provider (Doubao End-to-End Voice)
+    realtime:
+      provider: qwen-omni-realtime
+      config:
+        api_key: ${DASHSCOPE_API_KEY}
+        model: "qwen3-omni-flash-realtime"
+        voice: "Cherry"
+        instructions: "你是一个友好的AI语音助手，请用简洁自然的语言回答问题。回答要口语化，适合语音播放。"
+        input_sample_rate: 16000
+        output_sample_rate: 24000
+        vad_threshold: 0.5
+        silence_duration_ms: 800
+
+    vlm:
+      provider: openai-vlm-remote
+      config:
+        model: "glm-4v-flash"
+        api_key: "${GLM_API_KEY}"
+        base_url: "https://open.bigmodel.cn/api/paas/v4"

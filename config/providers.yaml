@@ -10,7 +10,7 @@
 # Usage:
 #   pip install vixio[dev-qwen]  # or: uv pip install -e ".[dev-qwen]"
 #   export DASHSCOPE_API_KEY="your-api-key"
-#   uv run python examples/agent_chat.py --env dev-qwen
+#   uv run python examples/agent_chat.py --env dev-qwen-pipeline
 # ==============================================================================
 dev-qwen-pipeline:
   providers:

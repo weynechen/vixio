@@ -113,6 +113,12 @@ qwen = [
     "dashscope>=1.25.3"
 ]
 
+# doubao platform provider(asr, tts, realtime)
+# Uses Volcengine bidirectional WebSocket protocol
+doubao = [
+    "websockets>=14.0",
+]
+
 # ----------convenience settings --------------
 
 # dev (local inference, requires GPU)
@@ -133,6 +139,11 @@ dev-qwen = [
 # dev-qwen streming ,no silero
 dev-qwen-streaming = [
     "vixio[xiaozhi,openai-agent,qwen]",
+]
+
+# dev doubao (cloud ASR/TTS)
+dev-doubao = [
+    "vixio[xiaozhi,openai-agent,doubao]",
 ]
 
 # quick start (same as dev-qwen, for beginners)

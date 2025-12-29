@@ -252,6 +252,27 @@ def get_qwen_omni_realtime_provider():
         ) from e
 
 
+def get_doubao_tts_bidirectional_provider():
+    """
+    Load DoubaoTTSBidirectionalProvider class (doubao-tts-bidirectional).
+    
+    Bidirectional TTS using Volcengine's WebSocket protocol.
+    Features: Streaming text input, multiple audio formats
+    Requires: pip install vixio[doubao]
+    
+    Returns:
+        DoubaoTTSBidirectionalProvider class
+    """
+    try:
+        from vixio.providers.doubao.doubao_tts_bidirectional import DoubaoTTSBidirectionalProvider
+        return DoubaoTTSBidirectionalProvider
+    except ImportError as e:
+        raise ImportError(
+            "DoubaoTTSBidirectionalProvider requires websockets package. "
+            "Install with: pip install vixio[doubao]"
+        ) from e
+
+
 # ============================================================
 # Export list
 # ============================================================
@@ -287,6 +308,8 @@ __all__ = [
     "get_qwen_asr_realtime_provider",
     "get_qwen_tts_realtime_provider",
     "get_qwen_omni_realtime_provider",
+    # Lazy loaders - Doubao providers
+    "get_doubao_tts_bidirectional_provider",
 ]
 
 
@@ -385,5 +408,12 @@ except ImportError:
 try:
     from vixio.providers.sentence_aggregator import SimpleSentenceAggregatorProviderCN
     __all__.append("SimpleSentenceAggregatorProviderCN")
+except ImportError:
+    pass
+
+# Doubao providers (requires websockets)
+try:
+    from vixio.providers.doubao.doubao_tts_bidirectional import DoubaoTTSBidirectionalProvider
+    __all__.append("DoubaoTTSBidirectionalProvider")
 except ImportError:
     pass

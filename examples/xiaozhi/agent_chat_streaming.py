@@ -1,47 +1,26 @@
 """
-Example: Full Streaming voice conversation with AI Agent (Qwen Realtime)
+Example: Full Streaming voice conversation with AI Agent
 
-A fully streaming voice chat using Qwen's realtime models with continuous audio/text streaming.
+A fully streaming voice chat using streaming models with continuous audio/text streaming.
 This is the most efficient pipeline with minimal latency.
 
 Full Streaming Pipeline (4 stations):
     Audio → StreamingASR(VAD) → TextAggregator → Agent → StreamingTTS → Audio
 
 Comparison:
-    Full:       Audio → VAD → TurnDetector → ASR → TextAgg → Agent → SentenceAgg → TTS → Audio (7 stations)
-    Simplified: Audio → VAD → TurnDetector → ASR → TextAgg → Agent → StreamingTTS → Audio (6 stations)
-    Streaming:  Audio → StreamingASR(VAD) → TextAggregator → Agent → StreamingTTS → Audio (4 stations)
+    Pipeline:       Audio → VAD → TurnDetector → ASR → TextAgg → Agent → SentenceAgg → TTS → Audio (7 stations)
+    Streaming Pipeline:  Audio → StreamingASR(VAD) → TextAggregator → Agent → StreamingTTS → Audio (4 stations)
 
-Benefits:
-- Continuous audio streaming (no buffering for VAD/TurnDetector)
-- ASR built-in VAD (no external VAD dependency)
-- TTS intelligent segmentation (no SentenceAggregator)
-- Lowest latency: ~500-1000ms TTFT
-- Simplest pipeline: only 4 stations
-
-Trade-offs:
-- Requires stable network connection
-- ASR's built-in VAD may be less accurate than Silero
-- More complex error recovery
-- Requires provider support for streaming
 
 Requirements:
-- DashScope API Key (for Qwen ASR, Agent, TTS)
-- pip install vixio[dev-qwen]
-
-Usage:
-    # Using Qwen providers with streaming pipeline
-    uv run python examples/agent_chat_streaming.py
-    
-    # Or specify environment explicitly
-    uv run python examples/agent_chat_streaming.py --env dev-qwen-streaming
+- API Key (e.x. Qwen ASR, Agent, TTS)
+- pip install vixio[dev-xxx]
 
 Configuration:
-    Uses config/providers.yaml with 'dev-qwen-streaming' environment:
-    - ASR: qwen3-asr-flash-realtime (streaming mode, built-in VAD)
-    - Agent: qwen-plus (via OpenAI-compatible API)
-    - TTS: qwen3-tts-flash-realtime (server_commit mode, streaming)
-
+    Uses config/providers_xxx.yaml with 'dev-xxx' environment:
+    - ASR: xxx-asr-flash-realtime (streaming mode, built-in VAD)
+    - Agent: xxx-agent (via OpenAI-compatible API)
+    - TTS: xxx-tts-flash-realtime (server_commit mode, streaming)
 Logger Configuration:
     Logger is auto-configured on import with INFO level, logging to logs/ directory.
     To customize, call configure_logger() before other imports:
@@ -114,7 +93,7 @@ async def main():
     _shutdown_event = asyncio.Event()
     
     parser = argparse.ArgumentParser(
-        description="Streaming Voice Chat Example (Qwen Realtime)"
+        description="Streaming Voice Chat Example"
     )
     parser.add_argument(
         "--config",
