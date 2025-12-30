@@ -24,7 +24,8 @@ from vixio.core.station import StreamStation
 from vixio.core.chunk import Chunk, ChunkType, TextDeltaChunk, EventChunk
 from vixio.core.middleware import with_middlewares
 from vixio.stations.middlewares import TimeoutHandlerMiddleware, InputValidatorMiddleware
-from vixio.providers.asr import ASRProvider
+from vixio.providers.asr import ASRProvider, ASRStreamResult
+from vixio.utils import get_latency_monitor
 
 
 @with_middlewares(
@@ -255,6 +256,9 @@ class StreamingASRStation(StreamStation):
         self._is_processing = False
         self._audio_buffer = []
         
+        # Latency monitoring
+        self._latency_monitor = get_latency_monitor()
+        
         # Check if provider supports streaming and VAD
         if hasattr(asr_provider, 'supports_streaming_input'):
             if not asr_provider.supports_streaming_input:
@@ -354,14 +358,37 @@ class StreamingASRStation(StreamStation):
         # Append audio to ASR provider's stream
         if hasattr(self.asr, 'append_audio_continuous'):
             try:
-                async for text in self.asr.append_audio_continuous(audio_data):
-                    if text:
-                        self.logger.info(f"StreamingASR result: '{text}'")
+                async for result in self.asr.append_audio_continuous(audio_data):
+                    # Handle ASRStreamResult (structured result with text and/or events)
+                    if isinstance(result, ASRStreamResult):
+                        # Process VAD events for latency monitoring
+                        if result.event == "speech_stopped":
+                            # Record T0: user_speech_end with accurate VAD timestamp
+                            self._latency_monitor.record(
+                                chunk.session_id,
+                                chunk.turn_id,
+                                "user_speech_end",
+                                timestamp=result.timestamp
+                            )
+                            self.logger.debug(f"Recorded user_speech_end at {result.timestamp}")
                         
-                        # Yield TEXT_DELTA
+                        # Process text result
+                        if result.text:
+                            self.logger.info(f"StreamingASR result: '{result.text}'")
+                            yield TextDeltaChunk(
+                                type=ChunkType.TEXT_DELTA,
+                                data=result.text,
+                                source=self.name,
+                                role="user",
+                                session_id=chunk.session_id,
+                                turn_id=chunk.turn_id
+                            )
+                    # Backward compatibility: handle plain string results
+                    elif isinstance(result, str) and result:
+                        self.logger.info(f"StreamingASR result: '{result}'")
                         yield TextDeltaChunk(
                             type=ChunkType.TEXT_DELTA,
-                            data=text,
+                            data=result,
                             source=self.name,
                             role="user",
                             session_id=chunk.session_id,

@@ -11,8 +11,28 @@ Enhanced features:
 
 from abc import abstractmethod
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from typing import List, Dict, Any, Optional
 from vixio.providers.base import BaseProvider
+
+
+@dataclass
+class ASRStreamResult:
+    """
+    Structured result from streaming ASR with built-in VAD.
+    
+    This allows ASR providers to return both text and VAD events
+    through the same streaming interface, enabling proper latency
+    monitoring without provider-specific handling.
+    
+    Attributes:
+        text: Transcribed text (if available)
+        event: VAD event type ("speech_started", "speech_stopped", None)
+        timestamp: Event timestamp (seconds since epoch)
+    """
+    text: Optional[str] = None
+    event: Optional[str] = None  # "speech_started", "speech_stopped"
+    timestamp: Optional[float] = None
 
 
 class ASRProvider(BaseProvider):
@@ -85,6 +105,68 @@ class ASRProvider(BaseProvider):
             True if provider supports context, False otherwise
         """
         return False
+    
+    @property
+    def supports_streaming_input(self) -> bool:
+        """
+        Whether provider supports continuous audio streaming input.
+        
+        If True, the provider can be used with StreamingASRStation,
+        receiving audio via append_audio_continuous() instead of
+        batch transcribe_stream().
+        
+        Returns:
+            True if provider supports streaming input, False otherwise
+        """
+        return False
+    
+    async def append_audio_continuous(
+        self,
+        audio_data: bytes
+    ) -> AsyncIterator[ASRStreamResult]:
+        """
+        Append audio to continuous streaming ASR session.
+        
+        This method is used by StreamingASRStation for providers with
+        built-in VAD. It allows continuous audio input and returns
+        structured results including both text and VAD events.
+        
+        Args:
+            audio_data: Audio bytes (PCM, 16kHz, mono, 16-bit)
+            
+        Yields:
+            ASRStreamResult with text and/or VAD events
+            - text: Transcribed text as it becomes available
+            - event: "speech_started" or "speech_stopped" for VAD events
+            - timestamp: Event timestamp for latency monitoring
+            
+        Raises:
+            NotImplementedError: If provider doesn't support streaming input
+        """
+        raise NotImplementedError(
+            f"{self.__class__.__name__} does not support streaming input. "
+            "Override append_audio_continuous() to enable."
+        )
+        yield  # Make this an async generator
+    
+    def is_speech_ended(self) -> bool:
+        """
+        Check if ASR has detected end of speech.
+        
+        Used by StreamingASRStation to determine when to emit completion.
+        
+        Returns:
+            True if speech has ended, False otherwise
+        """
+        return False
+    
+    async def stop_streaming(self) -> None:
+        """
+        Stop streaming ASR session.
+        
+        Called by StreamingASRStation on interrupt or cleanup.
+        """
+        pass
     
     @abstractmethod
     async def reset(self) -> None:

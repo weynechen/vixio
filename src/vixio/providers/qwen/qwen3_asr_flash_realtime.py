@@ -15,12 +15,13 @@ Requires: dashscope>=1.25.3
 import asyncio
 import base64
 import os
+import time
 from typing import Optional, List
 from collections.abc import AsyncIterator
 
 from loguru import logger as base_logger
 
-from vixio.providers.asr import ASRProvider
+from vixio.providers.asr import ASRProvider, ASRStreamResult
 from vixio.providers.registry import register_provider
 
 
@@ -160,8 +161,9 @@ class Qwen3AsrFlashRealtimeProvider(ASRProvider):
         self._callback = None
         self._is_connected = False
         
-        # Result queue
+        # Result and event queues
         self._result_queue: asyncio.Queue = asyncio.Queue()
+        self._event_queue: asyncio.Queue = asyncio.Queue()  # VAD events queue
         self._loop = None
         
         # Streaming state
@@ -338,12 +340,23 @@ class Qwen3AsrFlashRealtimeProvider(ASRProvider):
                         # Mark speech as ended (for StreamingASRStation)
                         provider._speech_ended = True
                     
-                    # VAD events
+                    # VAD events - put into event queue with timestamp
                     elif event_type == "input_audio_buffer.speech_started":
                         provider.logger.debug("VAD: Speech started")
                         provider._speech_ended = False  # Reset flag
+                        if provider._loop:
+                            provider._loop.call_soon_threadsafe(
+                                provider._event_queue.put_nowait,
+                                ("speech_started", time.time())
+                            )
                     elif event_type == "input_audio_buffer.speech_stopped":
                         provider.logger.debug("VAD: Speech stopped")
+                        # Put event into queue for StreamingASRStation to handle
+                        if provider._loop:
+                            provider._loop.call_soon_threadsafe(
+                                provider._event_queue.put_nowait,
+                                ("speech_stopped", time.time())
+                            )
                         # Don't set _speech_ended here, wait for transcription.completed
                 
                 except Exception as e:
@@ -359,8 +372,15 @@ class Qwen3AsrFlashRealtimeProvider(ASRProvider):
                 self._result_queue.get_nowait()
             except asyncio.QueueEmpty:
                 break
+        
+        # Clear event queue
+        while not self._event_queue.empty():
+            try:
+                self._event_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
     
-    async def append_audio_continuous(self, audio_data: bytes) -> AsyncIterator[str]:
+    async def append_audio_continuous(self, audio_data: bytes) -> AsyncIterator[ASRStreamResult]:
         """
         Append audio to continuous streaming ASR session (for StreamingASRStation).
         
@@ -371,7 +391,7 @@ class Qwen3AsrFlashRealtimeProvider(ASRProvider):
             audio_data: Audio bytes (PCM, 16kHz, mono, 16-bit)
             
         Yields:
-            Transcription text as it becomes available
+            ASRStreamResult with text and/or VAD events
         """
         if not self._is_connected:
             # Initialize with VAD enabled for streaming mode
@@ -404,12 +424,20 @@ class Qwen3AsrFlashRealtimeProvider(ASRProvider):
         
         self.logger.debug(f"Appended {len(audio_data)} bytes to ASR stream")
         
-        # Yield any results that have arrived
+        # Yield VAD events first (important for latency monitoring)
+        while not self._event_queue.empty():
+            try:
+                event_type, timestamp = self._event_queue.get_nowait()
+                yield ASRStreamResult(event=event_type, timestamp=timestamp)
+            except asyncio.QueueEmpty:
+                break
+        
+        # Yield text results
         while not self._result_queue.empty():
             try:
                 text = self._result_queue.get_nowait()
                 if text:
-                    yield text
+                    yield ASRStreamResult(text=text)
             except asyncio.QueueEmpty:
                 break
     
