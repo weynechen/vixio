@@ -13,8 +13,9 @@ from loguru import logger
 from vixio.core.dag import DAG
 from vixio.core.session import SessionManager
 from vixio.transports.xiaozhi import XiaozhiTransport
-from vixio.stations import RealtimeStation
+from vixio.stations import RealtimeStation, SentenceAggregatorStation
 from vixio.providers.factory import ProviderFactory
+from vixio.providers.sentence_aggregator import SimpleSentenceAggregatorProviderCN
 from vixio.utils import get_local_ip
 
 
@@ -138,16 +139,43 @@ async def run_realtime_server(
         realtime_provider = session_providers["realtime"]
         await realtime_provider.initialize()
         
-        # Build simple DAG
+        # Build DAG
         dag = DAG("RealtimeVoiceChat")
         
-        # Add realtime station
-        dag.add_node("realtime", RealtimeStation(realtime_provider))
+        # Add realtime station with text and event emission enabled
+        dag.add_node("realtime", RealtimeStation(
+            provider=realtime_provider,
+            emit_text=True,      # Emit text deltas for display
+            emit_events=True,    # Emit VAD/TTS events
+        ))
         
-        # Simple edge: transport_in -> realtime -> transport_out
-        dag.add_edge("transport_in", "realtime", "transport_out")
+        # Add sentence aggregator for Xiaozhi device compatibility (aggregates text deltas)
+        sentence_provider = SimpleSentenceAggregatorProviderCN(
+            min_sentence_length=5,
+            enable_conjunction_check=False,
+            enable_punctuation_pairing=True,
+            enable_incomplete_start_check=True,
+        )
+        await sentence_provider.initialize()
         
-        logger.debug("✓ DAG created with isolated providers")
+        dag.add_node("sentence_aggregator", SentenceAggregatorStation(
+            provider=sentence_provider
+        ))
+        
+        # Define edges:
+        # 1. transport_in -> realtime
+        dag.add_edge("transport_in", "realtime")
+        
+        # 2. realtime -> transport_out (for Audio and Events)
+        # AUDIO and Events go directly to transport_out
+        dag.add_edge("realtime", "transport_out")
+        
+        # 3. realtime -> sentence_aggregator -> transport_out (for TEXT_DELTA -> TEXT)
+        # TEXT_DELTA goes through aggregator to become complete sentences
+        dag.add_edge("realtime", "sentence_aggregator")
+        dag.add_edge("sentence_aggregator", "transport_out")
+        
+        logger.debug("✓ DAG created with realtime provider and text aggregator")
         
         return dag
     
@@ -192,7 +220,8 @@ async def run_realtime_server(
     logger.info(f"  - OTA interface:   http://{local_ip}:{transport.port}/xiaozhi/ota/")
     logger.info(f"  - Vision analysis: http://{local_ip}:{transport.port}/mcp/vision/explain")
     logger.info("")
-    logger.info(f"DAG: RealtimeStation (VAD + ASR + LLM + TTS integrated)")
+    logger.info(f"DAG: transport_in -> RealtimeStation -> transport_out")
+    logger.info(f"     (with SentenceAggregator for text display)")
     logger.info("=" * 70)
     
     await manager.start()

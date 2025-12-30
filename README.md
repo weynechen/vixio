@@ -1,20 +1,34 @@
 # Vixio
 
-A streaming voice-powered agent framework based on pipeline architecture
+**A framework for quickly adding voice interaction to AI Agents**
 
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Status: Alpha](https://img.shields.io/badge/status-alpha-orange.svg)]()
 
 **[中文文档](docs/README_zh.md)**
 
+## Why Vixio?
+
+Add voice capabilities to any Agent with a single command — no need to handle complex audio processing details.
+
 ## Features
 
-- **Pipeline Architecture**: Chain multiple stations to form a complete processing flow
-- **Station-based Processing**: Each station handles specific tasks (VAD/ASR/Agent/TTS)
-- **Streaming Support**: Real-time audio processing with async queue chains
-- **Modular Design**: Install only what you need with optional dependencies
-- **Multiple Providers**: Support for both local inference and cloud services
+### 🎯 Core Advantages
+
+- **One-line startup**: `uvx vixio run xiaozhi-server --preset qwen-realtime` gives you a complete voice Agent
+- **Flexible DAG architecture**: Data flow design based on directed acyclic graph, nodes can be freely combined
+- **Three operating modes**:
+  - **Pipeline** - Traditional cascade (VAD→ASR→Agent→TTS), maximum control
+  - **Streaming** - Bidirectional streaming, low latency
+  - **Realtime** - End-to-end model, simplest
+- **Ready to use**: Built-in Xiaozhi hardware protocol support
+
+### 🔧 Technical Features
+
+- **Modular design**: Install VAD / ASR / Agent / TTS on demand
+- **Multiple providers**: Local inference (Silero, Sherpa-ONNX, Kokoro) or cloud services (Qwen, Doubao, Edge-TTS)
+- **Multi-purpose**: Voice conversation, transcription, real-time translation, etc.
+- **Session isolation**: Independent provider instances per connection, supports high concurrency
 
 ## Requirements
 
@@ -64,7 +78,15 @@ python run.py
 
 ## Installation
 
-### Using uv (Recommended)
+### Install from source (Recommended)
+
+```bash
+git clone https://github.com/weynechen/vixio.git
+cd vixio
+uv sync --extra dev-qwen  # or dev-local-cn, dev-grpc, etc.
+```
+
+### Using uv
 
 1. Install with core dependencies only:
 
@@ -94,6 +116,7 @@ pip install vixio
 pip install "vixio[dev-local-cn]"
 ```
 
+
 ## Available Components
 
 ### Transports
@@ -107,34 +130,18 @@ pip install "vixio[dev-local-cn]"
 - `sherpa-onnx-asr-grpc` - Sherpa-ONNX ASR via gRPC service
 - `sherpa-onnx-asr-local` - Sherpa-ONNX ASR local inference
 - `qwen` - Qwen platform ASR
+...
 
 ### TTS (Text-to-Speech)
 - `kokoro-cn-tts-grpc` - Kokoro TTS via gRPC service
 - `kokoro-cn-tts-local` - Kokoro TTS local inference
 - `edge-tts` - Microsoft Edge TTS (cloud)
 - `qwen` - Qwen platform TTS
+...
 
 ### Agent
 - `openai-agent` - OpenAI-compatible LLM via LiteLLM
 
-### docker 
-CPU version
-```bash
-docker compose -f inference/docker-compose-inference.yml up -d --build
-```
-for China user
-```bash
-docker compose -f inference/docker-compose-inference.yml -f inference/docker-compose-inference-cn.yml up -d --build
-```
-
-GPU version
-```bash
-docker compose -f inference/docker-compose-inference-gpu.yml up -d --build
-```
-for china user:
-```bash
-docker compose -f inference/docker-compose-inference-gpu.yml -f inference/docker-compose-inference-gpu-cn.yml up -d --build
-```
 
 ## Getting Started
 
@@ -142,13 +149,10 @@ docker compose -f inference/docker-compose-inference-gpu.yml -f inference/docker
 2. Configure your providers in a YAML config file
 3. Run your voice agent application
 
-For detailed configuration and usage guide, see the [documentation](docs/).
-
-
 
 ## Project Status
 
-**Current Version: v0.1.0 (Alpha)**
+**Current Version: v0.1.x (Alpha)**
 
 > **Note**: This project is under active development. APIs may change.
 

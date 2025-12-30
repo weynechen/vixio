@@ -173,20 +173,6 @@ Error: Address already in use
 uv run python run.py --port 9000
 ```
 
-## 相关文档
-
-- [Vixio 官方文档](https://github.com/weynechen/vixio)
-- [DashScope 文档](https://help.aliyun.com/zh/model-studio/)
-- [Qwen 模型文档](https://help.aliyun.com/zh/model-studio/getting-started/models)
-
-## 技术支持
-
-遇到问题？
-
-1. 查看 [常见问题](https://github.com/weynechen/vixio/wiki/FAQ)
-2. 提交 [Issue](https://github.com/weynechen/vixio/issues)
-3. 加入社区讨论
-
 ## 许可证
 
-MIT License
+Apache License
