@@ -82,7 +82,7 @@ async def run_pipeline_server(
     
     # Load raw config for transport
     import yaml
-    with open(config_path) as f:
+    with open(config_path, encoding='utf-8') as f:
         raw_config = yaml.safe_load(f)
     
     # If env is specified and config is multi-env, use that env

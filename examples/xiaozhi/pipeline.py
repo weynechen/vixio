@@ -161,7 +161,7 @@ async def main():
     
     # Load raw config for transport (contains server settings, providers, etc.)
     import yaml
-    with open(config_path) as f:
+    with open(config_path, encoding='utf-8') as f:
         raw_config = yaml.safe_load(f)
     
     try:

@@ -265,7 +265,7 @@ def run_server_command(args) -> int:
         if not prompt_path.exists():
             print(f"Error: Prompt file not found: {prompt_path}")
             return 1
-        with open(prompt_path) as f:
+        with open(prompt_path, encoding='utf-8') as f:
             custom_prompt = f.read().strip()
             os.environ["VIXIO_PROMPT"] = custom_prompt
             print(f"   Using custom prompt from file: {prompt_path}")

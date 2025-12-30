@@ -36,7 +36,7 @@ if not API_KEY:
 # Load prompt from file if exists
 PROMPT_FILE = CURRENT_DIR / "prompt.txt"
 if PROMPT_FILE.exists() and not os.getenv("VIXIO_PROMPT"):
-    with open(PROMPT_FILE) as f:
+    with open(PROMPT_FILE, encoding='utf-8') as f:
         CUSTOM_PROMPT = f.read().strip()
     os.environ["VIXIO_PROMPT"] = CUSTOM_PROMPT
     print(f"✓ Loaded prompt from: {PROMPT_FILE}")
@@ -60,7 +60,7 @@ if __name__ == "__main__":
     
     # Detect mode from config
     import yaml
-    with open(config_path) as f:
+    with open(config_path, encoding='utf-8') as f:
         config_data = yaml.safe_load(f)
     
     # Check if it's a multi-env config or single config
