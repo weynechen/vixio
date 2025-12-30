@@ -20,10 +20,10 @@ Usage:
     export DASHSCOPE_API_KEY="your-api-key"
     
     # Run with dev-realtime environment
-    uv run python examples/realtime_chat.py --env dev-realtime
+    uv run python examples/xiaozhi/realtime_chat.py --env dev-qwen-realtime
     
     # Or specify config directly
-    uv run python examples/realtime_chat.py --config config/providers.yaml --env dev-realtime
+    uv run python examples/xiaozhi/realtime_chat.py --config config/providers.yaml --env dev-qwen-realtime
 
 Reference:
     https://help.aliyun.com/zh/model-studio/realtime

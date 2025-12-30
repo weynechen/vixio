@@ -97,3 +97,5 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+.stignore

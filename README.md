@@ -1,6 +1,6 @@
 # Vixio
 
-**A framework for quickly adding voice interaction to AI Agents**
+**Quickly add voice interaction capabilities to AI Agents, with Xiaozhi protocol compatibility for seamless hardware integration**
 
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![Status: Alpha](https://img.shields.io/badge/status-alpha-orange.svg)]()
@@ -9,26 +9,25 @@
 
 ## Why Vixio?
 
-Add voice capabilities to any Agent with a single command — no need to handle complex audio processing details.
+- Vixio is Agent-centric — quickly add voice capabilities to any Agent without dealing with complex audio processing details.
+- Compatible with Xiaozhi protocol for rapid hardware integration.
+- Can serve as a Xiaozhi server — start with just one command.
 
 ## Features
 
 ### 🎯 Core Advantages
 
-- **One-line startup**: `uvx --from "vixio[dev-qwen-streaming]" vixio run xiaozhi-server --preset qwen-realtime` gives you a complete voice Agent
-- **Flexible DAG architecture**: Data flow design based on directed acyclic graph, nodes can be freely combined
-- **Three operating modes**:
+- **Flexible DAG Architecture**: Data flow design based on directed acyclic graphs, nodes can be freely combined. Beyond voice conversation, supports transcription, real-time translation, digital humans, and more.
+
+- **Three Operating Modes**:
   - **Pipeline** - Traditional cascade (VAD→ASR→Agent→TTS), maximum control
   - **Streaming** - Bidirectional streaming, low latency
-  - **Realtime** - End-to-end model, simplest
-- **Ready to use**: Built-in Xiaozhi hardware protocol support
+  - **Realtime** - End-to-end model, lowest latency
+- **Multiple Providers**: Support for OpenAI, Qwen, Doubao and more, continuously expanding.
+- **Ready to Use**: Built-in Xiaozhi hardware protocol support
+- **Interface Agnostic**: Interfaces abstracted as transports, can be replaced with any protocol.
+- **Local Inference Support**: Unified gRPC abstraction with local inference for various common models.
 
-### 🔧 Technical Features
-
-- **Modular design**: Install VAD / ASR / Agent / TTS on demand
-- **Multiple providers**: Local inference (Silero, Sherpa-ONNX, Kokoro) or cloud services (Qwen, Doubao, Edge-TTS)
-- **Multi-purpose**: Voice conversation, transcription, real-time translation, etc.
-- **Session isolation**: Independent provider instances per connection, supports high concurrency
 
 ## Requirements
 
@@ -37,22 +36,31 @@ Add voice capabilities to any Agent with a single command — no need to handle 
 
 ## 🚀 Quick Start
 
-Get started with Vixio in just one command! Experience real-time voice conversation powered by Qwen Omni:
+### Step 1: Get API Key
+Visit: [DashScope Console](https://dashscope.console.aliyun.com/) to obtain your key.
+
+### Step 2: Start Xiaozhi Voice Chat Service with One Command!
 
 ```bash
-# Install and run in one step (requires DashScope API key)
 uvx --from "vixio[dev-qwen-streaming]" vixio run xiaozhi-server \
   --preset qwen-realtime \
   --dashscope-key sk-your-key-here
 ```
 
 **What you get:**
-- 🎙️ WebSocket server running at `http://localhost:8000`
-- 🤖 End-to-end voice AI with Qwen Omni Realtime
-- ⚡ Low latency, integrated VAD + ASR + LLM + TTS
-- 📱 Ready for xiaozhi devices or custom clients
+- WebSocket server running at `http://localhost:8000`
+- End-to-end voice AI (Qwen Omni Realtime)
+- Low latency
+- Ready for Xiaozhi devices or custom clients
 
-**Get your API key:** [DashScope Console](https://dashscope.console.aliyun.com/)
+### Step 3: Recompile Xiaozhi Firmware
+- Run `idf.py menuconfig`
+- Select Xiaozhi Assistant
+- Change the OTA address to the address shown in the console.
+
+You have now configured the server address in your Xiaozhi device. You can start chatting!
+
+If the default configuration doesn't meet your needs, try customizing:
 
 ### Customize Your Bot
 
@@ -61,7 +69,7 @@ uvx --from "vixio[dev-qwen-streaming]" vixio run xiaozhi-server \
 uvx --from "vixio[dev-qwen-streaming]" vixio run xiaozhi-server \
   --preset qwen-realtime \
   --dashscope-key sk-xxx \
-  --prompt "你是一个专业的编程助手"
+  --prompt "You are a professional programming assistant"
 
 # Use pipeline mode (more control)
 uvx --from "vixio[dev-qwen-streaming]" vixio run xiaozhi-server \
@@ -74,11 +82,11 @@ cd xiaozhi-server
 python run.py
 ```
 
----
+## Try the Examples
 
-## Installation
+For more advanced customization, refer to the examples in the examples directory.
 
-### Install from source (Recommended)
+### Install from Source
 
 ```bash
 git clone https://github.com/weynechen/vixio.git
@@ -86,68 +94,76 @@ cd vixio
 uv sync --extra dev-qwen  # or dev-local-cn, dev-grpc, etc.
 ```
 
-### Using uv
+### Browse Configurations
+In config/provider.yaml, there are multiple default configurations:
+- `dev-in-process`: With this configuration, all local inference runs in a single process. No need to start complex microservices, but each connection starts its own inference service, consuming more resources. Suitable for quick local inference testing.
 
-1. Install with core dependencies only:
+- `dev-grpc`: With this configuration, local inference runs as individual microservices. The main process connects to microservices via gRPC. You need to manually start each microservice first. You can go to the inference directory and start them individually (uv run each), or use docker compose.
 
-```bash
-uv pip install vixio
-```
+- `dev-qwen-xxx`: This configuration uses Alibaba Cloud services. Configure your key and run — minimal local dependencies.
 
-2. Install with specific providers:
+### Run Examples
 
-```bash
-# For Chinese local development (VAD + ASR + TTS + Agent)
-uv pip install "vixio[dev-local-cn]"
-
-# For Qwen platform integration
-uv pip install "vixio[dev-qwen]"
-
-# Or install individual components
-uv pip install "vixio[xiaozhi,openai-agent,silero-vad-grpc]"
-```
-
-### Using pip
+- Bidirectional streaming ASR and TTS usage:
 
 ```bash
-pip install vixio
-
-# With optional dependencies
-pip install "vixio[dev-local-cn]"
+uv run python examples/xiaozhi/streaming.py
 ```
+With cloud-based bidirectional streaming, you can achieve 1-2s first response latency. Maintains autonomous agent with full tool calling capability. Recommended for regular use.
 
+
+- Realtime:
+```bash
+uv run python examples/xiaozhi/realtime_chat.py --env dev-qwen-realtime
+```
+Using end-to-end realtime models, you can achieve < 1s first response latency. However, due to model limitations, tool calling is not available (for now).
+
+- Traditional cascade mode:
+```bash
+  # Development mode - In-process inference (no external services needed)
+  uv run python examples/xiaozhi/pipeline.py --env dev-local-cn
+  
+  # Development mode - with gRPC microservices
+  uv run python examples/xiaozhi/pipeline.py --env dev-grpc 
+```
+This mode offers the highest flexibility, but latency is 1.5-3s.
 
 ## Available Components
 
-### Transports
+### Transport
 - `xiaozhi` - Xiaozhi protocol transport (WebSocket + HTTP)
+
+Other protocols are being designed and developed...
 
 ### VAD (Voice Activity Detection)
 - `silero-vad-grpc` - Silero VAD via gRPC service
 - `silero-vad-local` - Silero VAD local inference
 
+More coming...
+
 ### ASR (Automatic Speech Recognition)
 - `sherpa-onnx-asr-grpc` - Sherpa-ONNX ASR via gRPC service
 - `sherpa-onnx-asr-local` - Sherpa-ONNX ASR local inference
 - `qwen` - Qwen platform ASR
-...
+
+More coming...
 
 ### TTS (Text-to-Speech)
 - `kokoro-cn-tts-grpc` - Kokoro TTS via gRPC service
 - `kokoro-cn-tts-local` - Kokoro TTS local inference
 - `edge-tts` - Microsoft Edge TTS (cloud)
 - `qwen` - Qwen platform TTS
-...
+
+More coming...
 
 ### Agent
 - `openai-agent` - OpenAI-compatible LLM via LiteLLM
 
+More coming...
 
-## Getting Started
 
-1. Check out the `examples/` directory for usage examples
-2. Configure your providers in a YAML config file
-3. Run your voice agent application
+## Reference
+https://github.com/78/xiaozhi-esp32
 
 
 ## Project Status

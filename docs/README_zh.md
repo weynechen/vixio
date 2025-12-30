@@ -1,6 +1,6 @@
 # Vixio
 
-**为 AI Agent 快速添加语音交互能力的框架**
+**为 AI Agent 快速添加语音交互能力，同时兼容xiaozhi协议，利用众多的xiaozhi设备，快速接入硬件**
 
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![Status: Alpha](https://img.shields.io/badge/status-alpha-orange.svg)]()
@@ -9,26 +9,25 @@
 
 ## Why Vixio?
 
-Vixio 让你用一条命令就能为任何 Agent 添加语音能力，无需关心复杂的音频处理细节。借助xiaozhi客户端，可以快速的完成和硬件交互。
+- Vixio 以Agent为核心，快速为任何 Agent 添加语音能力，无需关心复杂的音频处理细节。
+- 兼容xiaozhi协议，快速接入硬件。
+- 同时可作为xiaozhi的server ，一行代码即可快速启动。
 
 ## 特性
 
 ### 🎯 核心优势
 
-- **一行代码启动**：`uvx --from "vixio[dev-qwen-streaming]" vixio run xiaozhi-server --preset qwen-realtime` 即可拥有完整语音 Agent
-- **灵活的 DAG 架构**：基于有向无环图的数据流设计，节点可自由组合
+- **灵活的 DAG 架构**：基于有向无环图的数据流设计，节点可自由组合。除语音对话外，还有转录、实时翻译、数字人等的功能。
+
 - **三种工作模式**：
   - **Pipeline** - 传统级联 (VAD→ASR→Agent→TTS)，最大控制力
   - **Streaming** - 双向流式，低延迟
-  - **Realtime** - 端到端模型，最简单
+  - **Realtime** - 端到端模型，延迟最低
+- **提供多个服务商**。提供包括openai,qwen,doubao等的服务商的支持，持续更新中。
 - **开箱即用**：内置小志 (Xiaozhi) 硬件协议支持
+- **接口无关**: 接口抽象为transport,可替换成其他任意协议。
+- **支持本地推理** : 提供grpc的统一抽象，同时提供多种常用的模型的本地inference。
 
-### 🔧 技术特性
-
-- **模块化设计**：VAD / ASR / Agent / TTS 按需安装
-- **多 Provider 支持**：本地推理 (Silero, Sherpa-ONNX, Kokoro) 或云服务 (Qwen, Doubao, Edge-TTS)
-- **多场景适用**：语音对话、语音转录、实时翻译等
-- **Session 隔离**：每个连接独立的 Provider 实例，支持高并发
 
 ## 环境要求
 
@@ -37,22 +36,31 @@ Vixio 让你用一条命令就能为任何 Agent 添加语音能力，无需关�
 
 ## 🚀 快速开始
 
-一条命令启动语音对话服务！
+### Step1 : 获取 API Key
+访问： [DashScope 控制台](https://dashscope.console.aliyun.com/) ，获得密钥。
+
+### Step2 : 一条命令启动`xiaozhi`语音对话服务！
 
 ```bash
-# 安装并运行（需要 DashScope API Key）
 uvx --from "vixio[dev-qwen-streaming]" vixio run xiaozhi-server \
   --preset qwen-realtime \
   --dashscope-key sk-your-key-here
 ```
 
 **启动后你将获得：**
-- 🎙️ WebSocket 服务运行在 `http://localhost:8000`
-- 🤖 端到端语音 AI（Qwen Omni Realtime）
-- ⚡ 低延迟，集成 VAD + ASR + LLM + TTS
-- 📱 支持小志设备或自定义客户端
+- WebSocket 服务运行在 `http://localhost:8000`
+- 端到端语音 AI（Qwen Omni Realtime）
+- 低延迟
+- 支持小志设备或自定义客户端
 
-**获取 API Key：** [DashScope 控制台](https://dashscope.console.aliyun.com/)
+### Step3 : 重新编译xiaozhi固件
+- 执行 `idf.py menuconfig` 
+- 选择 Xiaozhi Asssistant 
+- 将OTA地址修改为控制台显示的地址。 
+
+你完成了将服务器地址填写到xiaozhi的设备中。由此，即可开始对话。
+
+如果不满足与默认的配置，可以尝试自定义 ： 
 
 ### 自定义你的 Bot
 
@@ -74,78 +82,86 @@ cd xiaozhi-server
 python run.py
 ```
 
-## 安装
+## 尝试示例
 
-### 从源码安装（推荐）
+如果有更进一步的自定义需求，可参考example中的示例
+
+### 从源码安装
 
 ```bash
 git clone https://github.com/weynechen/vixio.git
 cd vixio
 uv sync --extra dev-qwen  # 或 dev-local-cn, dev-grpc 等
 ```
+### 浏览配置
+config/provider.yaml中，有多种默认配置：
+- `dev-in-process` ： 使用此配置，将所有的本地推理放在单个进程内进行。此方式无需启动复杂的微服务，但每个连接会启动一个推理服务，资源损耗大。适合快速进行本地推理测试。
 
-### 使用 uv
+- `dev-grpc` : 使用此配置，将本地推理作为单个微服务启动。主进程通过grpc连接微服务。此方式，需要先手动启动每个微服务。 可以进入到 inference 目录逐个启动(逐个uv run)，或者使用docker compose 。
 
-1. 仅安装核心依赖：
+- `dev-qwen-xxx` : 此配置使用阿里云端的服务。配置好自己的密钥即可运行，本地依赖较小。
 
-```bash
-uv pip install vixio
-```
+### 运行example
 
-2. 安装特定 Provider：
-
-```bash
-# 中文本地开发环境（VAD + ASR + TTS + Agent）
-uv pip install "vixio[dev-local-cn]"
-
-# Qwen 平台集成
-uv pip install "vixio[dev-qwen]"
-
-# 或单独安装各组件
-uv pip install "vixio[xiaozhi,openai-agent,silero-vad-grpc]"
-```
-
-### 使用 pip
+- 双向流式ASR和TTS的使用：
 
 ```bash
-pip install vixio
-
-# 安装可选依赖
-pip install "vixio[dev-local-cn]"
+uv run python examples/xiaozhi/streaming.py
 ```
+借助云端双向流式，可以做到 1～2s 的首句回复延时。同时保持自主的agent ， 完整的工具调用能力。平时建议使用该方式。
+
+
+- realtime : 
+```bash
+uv run python examples/xiaozhi/realtime_chat.py --env dev-qwen-realtime
+```
+使用端到端的时时模型，可以做到 < 1S 的首句回复延时。但受限于模型的能力，无法调用工具。（暂时）
+
+- 传统集联模式。
+```bash
+  # Development mode - In-process inference (no external services needed)
+  uv run python examples/pipeline.py --env dev-local-cn
+  
+  # Development mode - with gRPC microservices
+  uv run python examples/pipeline.py --env dev-grpc 
+```
+此模式的自由度最高，但延时为 1.5 ~ 3S 。
 
 ## 可用组件
 
 ### 传输层（Transport）
 - `xiaozhi` - 小智协议传输（WebSocket + HTTP）
 
+其他协议正在制定和开发中 ...
+
 ### VAD（语音活动检测）
 - `silero-vad-grpc` - 通过 gRPC 服务使用 Silero VAD
 - `silero-vad-local` - Silero VAD 本地推理
-...
+
+持续补充中...
 
 ### ASR（自动语音识别）
 - `sherpa-onnx-asr-grpc` - 通过 gRPC 服务使用 Sherpa-ONNX ASR
 - `sherpa-onnx-asr-local` - Sherpa-ONNX ASR 本地推理
 - `qwen` - 通义千问平台 ASR
-...
+
+持续补充中...
 
 ### TTS（语音合成）
 - `kokoro-cn-tts-grpc` - 通过 gRPC 服务使用 Kokoro TTS
 - `kokoro-cn-tts-local` - Kokoro TTS 本地推理
 - `edge-tts` - 微软 Edge TTS（云服务）
 - `qwen` - 通义千问平台 TTS
-...
+
+持续补充中...
 
 ### Agent
 - `openai-agent` - 通过 LiteLLM 使用 OpenAI 兼容的 LLM
 
-## 快速开始
+持续补充中...
 
-1. 查看 `examples/` 目录获取使用示例
-2. 在 YAML 配置文件中配置你的 Provider
-3. 运行你的语音 Agent 应用
-
+## 参考
+https://github.com/78/xiaozhi-esp32
 
 ## 项目状态
 
