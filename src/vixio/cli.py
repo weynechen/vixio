@@ -256,6 +256,10 @@ def run_server_command(args) -> int:
     # Disable LiteLLM model cost map download to avoid startup delay
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     
+    # Set log mode (must be before importing vixio modules)
+    if args.enable_logs:
+        os.environ["VIXIO_LOG_MODE"] = "file"
+    
     # Set prompt
     if args.prompt:
         os.environ["VIXIO_PROMPT"] = args.prompt
@@ -290,6 +294,7 @@ def run_server_command(args) -> int:
     print(f"   Mode:   {mode}")
     print(f"   Host:   {args.host}")
     print(f"   Port:   {args.port}")
+    print(f"   Logs:   {'enabled (logs/)' if args.enable_logs else 'disabled (use --enable-logs to enable)'}")
     print("")
     
     # Import and run
@@ -448,6 +453,11 @@ def main(args: Optional[list] = None) -> int:
         type=float,
         default=30.0,
         help="Turn timeout in seconds (default: 30.0, 0 to disable)"
+    )
+    run_parser.add_argument(
+        "--enable-logs",
+        action="store_true",
+        help="Enable file logging to logs/ directory (disabled by default)"
     )
     
     # init command - Create project from template

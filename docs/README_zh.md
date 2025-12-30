@@ -119,13 +119,17 @@ uv run python examples/xiaozhi/realtime_chat.py --env dev-qwen-realtime
 
 - 传统集联模式。
 ```bash
-  # Development mode - In-process inference (no external services needed)
-  uv run python examples/pipeline.py --env dev-local-cn
+# Development mode - In-process inference (no external services needed) . 
+  uv run python examples/xiaozhi/pipeline.py --env dev-in-process
   
   # Development mode - with gRPC microservices
-  uv run python examples/pipeline.py --env dev-grpc 
+  uv run python examples/xiaozhi/pipeline.py --env dev-grpc 
+
+  # Or use qwen 
+  uv run python examples/xiaozhi/pipeline.py --env dev-qwen-pipeline
 ```
 此模式的自由度最高，但延时为 1.5 ~ 3S 。
+注意，此模式下，需要下载模型文件。可能需要较久的启动时间。
 
 ## 可用组件
 

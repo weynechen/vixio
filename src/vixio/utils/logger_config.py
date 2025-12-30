@@ -2,10 +2,15 @@
 Loguru configuration for Vixio framework
 
 Provides centralized logger configuration with:
-- File logging to logs/ directory
+- File logging to logs/ directory (when VIXIO_LOG_MODE=file)
 - Console output
 - Automatic log rotation
 - Default INFO level
+
+Log Mode Control:
+    Set environment variable VIXIO_LOG_MODE to control file logging:
+    - VIXIO_LOG_MODE=file: Enable file logging (for development/debugging)
+    - VIXIO_LOG_MODE=none or not set: Console only (default, for quick start)
 """
 
 import os
@@ -15,11 +20,26 @@ from typing import Optional, List
 from loguru import logger
 
 
+# Environment variable to control log mode
+LOG_MODE_ENV = "VIXIO_LOG_MODE"
+LOG_MODE_FILE = "file"
+LOG_MODE_NONE = "none"
+
 # Global flag to ensure configuration only happens once
 _configured = False
 
 # Store last configuration for reconfiguration (e.g., after third-party library resets logger)
 _last_config = {}
+
+
+def is_file_logging_enabled() -> bool:
+    """
+    Check if file logging is enabled via environment variable.
+    
+    Returns:
+        True if VIXIO_LOG_MODE=file, False otherwise
+    """
+    return os.environ.get(LOG_MODE_ENV, "").lower() == LOG_MODE_FILE
 
 
 def configure_logger(
@@ -134,28 +154,32 @@ def configure_logger(
         colorize=True,
     )
     
-    # Ensure log directory exists
-    log_path = Path(log_dir)
-    log_path.mkdir(parents=True, exist_ok=True)
-    
-    # Add file handler with rotation and filter
-    log_file = log_path / "vixio_{time:YYYY-MM-DD}.log"
-    logger.add(
-        str(log_file),
-        format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | [{extra[session_id]}] | {name}:{function}:{line} | {message}",
-        level="DEBUG" if debug_components else file_level,  # Allow DEBUG if any components need it
-        filter=make_component_filter(file_level),
-        rotation=rotation,
-        retention=retention,
-        compression="zip",  # Compress rotated logs
-        encoding="utf-8",
-    )
+    # Only add file handler if file logging is enabled
+    file_logging_enabled = is_file_logging_enabled()
+    if file_logging_enabled:
+        # Ensure log directory exists
+        log_path = Path(log_dir)
+        log_path.mkdir(parents=True, exist_ok=True)
+        
+        # Add file handler with rotation and filter
+        log_file = log_path / "vixio_{time:YYYY-MM-DD}.log"
+        logger.add(
+            str(log_file),
+            format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | [{extra[session_id]}] | {name}:{function}:{line} | {message}",
+            level="DEBUG" if debug_components else file_level,  # Allow DEBUG if any components need it
+            filter=make_component_filter(file_level),
+            rotation=rotation,
+            retention=retention,
+            compression="zip",  # Compress rotated logs
+            encoding="utf-8",
+        )
     
     # Mark as configured
     _configured = True
     
     debug_info = f" (DEBUG components: {', '.join(debug_components)})" if debug_components else ""
-    logger.info(f"Logger configured: console={console_level}, file={file_level}, log_dir={log_dir}{debug_info}")
+    file_info = f", file={file_level}, log_dir={log_dir}" if file_logging_enabled else " (file logging disabled)"
+    logger.info(f"Logger configured: console={console_level}{file_info}{debug_info}")
 
 
 def reset_logger() -> None:

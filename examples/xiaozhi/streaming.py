@@ -22,8 +22,11 @@ Configuration:
     - Agent: xxx-agent (via OpenAI-compatible API)
     - TTS: xxx-tts-flash-realtime (server_commit mode, streaming)
 Logger Configuration:
-    Logger is auto-configured on import with INFO level, logging to logs/ directory.
-    To customize, call configure_logger() before other imports:
+    File logging is controlled by VIXIO_LOG_MODE environment variable:
+    - VIXIO_LOG_MODE=file: Enable file logging (set by default in examples)
+    - VIXIO_LOG_MODE=none or not set: Console only (default for CLI/uvx)
+    
+    To customize log level, call configure_logger() before other imports:
     
     from vixio.utils.logger_config import configure_logger, reset_logger
     

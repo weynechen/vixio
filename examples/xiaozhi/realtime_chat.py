@@ -27,6 +27,11 @@ Usage:
 
 Reference:
     https://help.aliyun.com/zh/model-studio/realtime
+
+Logger Configuration:
+    File logging is controlled by VIXIO_LOG_MODE environment variable:
+    - VIXIO_LOG_MODE=file: Enable file logging (set by default in examples)
+    - VIXIO_LOG_MODE=none or not set: Console only (default for CLI/uvx)
 """
 
 import dotenv

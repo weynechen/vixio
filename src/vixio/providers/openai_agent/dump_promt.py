@@ -1,4 +1,8 @@
 # Setup LiteLLM callback to capture prompts
+#
+# Log Mode Control:
+#     Set environment variable VIXIO_LOG_MODE=file to enable prompt capture.
+#     When not set or set to 'none', prompt capture is disabled.
 import litellm
 from datetime import datetime as dt
 import json
@@ -6,6 +10,12 @@ from pathlib import Path
 import inspect
 import threading
 from typing import Optional
+import os
+
+
+def _is_file_logging_enabled() -> bool:
+    """Check if file logging is enabled via environment variable."""
+    return os.environ.get("VIXIO_LOG_MODE", "").lower() == "file"
 
 
 # Global state for prompt capture
@@ -16,10 +26,12 @@ _prompt_capture_state = {
     "session_start_time": None,
     "session_calls": [],  # List of calls for current session
     "lock": threading.Lock(),
+    "enabled": _is_file_logging_enabled(),  # Check at module load time
 }
 
-# Create output directory
-_prompt_capture_state["output_dir"].mkdir(parents=True, exist_ok=True)
+# Only create output directory if file logging is enabled
+if _prompt_capture_state["enabled"]:
+    _prompt_capture_state["output_dir"].mkdir(parents=True, exist_ok=True)
 
 
 def configure_session(session_id: str, agent_name: str = "agent"):
@@ -218,6 +230,10 @@ def _format_prompt(messages: list, tools: Optional[list] = None) -> str:
 async def prompt_capture_callback(kwargs, response_obj, start_time, end_time):
     """Async callback function to capture and aggregate prompts by session."""
     try:
+        # Skip if prompt capture is disabled
+        if not _prompt_capture_state["enabled"]:
+            return
+        
         # Skip incomplete streaming events
         # Only capture when we have usage info (indicates complete response)
         if not response_obj or not hasattr(response_obj, "usage") or not response_obj.usage:
@@ -302,17 +318,18 @@ async def prompt_capture_callback(kwargs, response_obj, start_time, end_time):
         traceback.print_exc()
 
 
-# Register callback with litellm - support both sync and async
-# For async callbacks (used by openai-agents)
-if not hasattr(litellm, "success_callback") or litellm.success_callback is None:
-    litellm.success_callback = []
-if prompt_capture_callback not in litellm.success_callback:
-    litellm.success_callback.append(prompt_capture_callback)
+# Register callback with litellm only if file logging is enabled
+if _prompt_capture_state["enabled"]:
+    # For async callbacks (used by openai-agents)
+    if not hasattr(litellm, "success_callback") or litellm.success_callback is None:
+        litellm.success_callback = []
+    if prompt_capture_callback not in litellm.success_callback:
+        litellm.success_callback.append(prompt_capture_callback)
 
-# Also register as async callback
-if not hasattr(litellm, "_async_success_callback") or litellm._async_success_callback is None:
-    litellm._async_success_callback = []
-if prompt_capture_callback not in litellm._async_success_callback:
-    litellm._async_success_callback.append(prompt_capture_callback)
+    # Also register as async callback
+    if not hasattr(litellm, "_async_success_callback") or litellm._async_success_callback is None:
+        litellm._async_success_callback = []
+    if prompt_capture_callback not in litellm._async_success_callback:
+        litellm._async_success_callback.append(prompt_capture_callback)
 
-print(f"[INFO] Prompt capture callback registered (sync and async). Prompts will be aggregated by session_id to 'logs/prompt_logs' directory.")
+    print(f"[INFO] Prompt capture callback registered (sync and async). Prompts will be aggregated by session_id to 'logs/prompt_logs' directory.")

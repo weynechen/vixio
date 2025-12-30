@@ -120,11 +120,14 @@ Using end-to-end realtime models, you can achieve < 1s first response latency. H
 
 - Traditional cascade mode:
 ```bash
-  # Development mode - In-process inference (no external services needed)
-  uv run python examples/xiaozhi/pipeline.py --env dev-local-cn
+  # Development mode - In-process inference (no external services needed) . 
+  uv run python examples/xiaozhi/pipeline.py --env dev-in-process
   
   # Development mode - with gRPC microservices
   uv run python examples/xiaozhi/pipeline.py --env dev-grpc 
+
+  # Or use qwen 
+  uv run python examples/xiaozhi/pipeline.py --env dev-qwen-pipeline
 ```
 This mode offers the highest flexibility, but latency is 1.5-3s.
 

@@ -2,12 +2,18 @@
 Latency monitoring for voice AI pipeline
 
 Tracks timing of key events to measure first-response latency
+
+Log Mode Control:
+    Set environment variable VIXIO_LOG_MODE=file to enable latency JSON logging.
+    When not set or set to 'none', latency data is only kept in memory.
 """
 
 import time
 from typing import Dict, Optional, Any
 from loguru import logger
 import os
+
+from vixio.utils.logger_config import is_file_logging_enabled
 
 
 class LatencyMonitor:
@@ -43,12 +49,12 @@ class LatencyMonitor:
         self.sessions: Dict[str, Dict[int, Dict[str, float]]] = {}
         self.log_dir = log_dir
         self._handler_id: Optional[int] = None
+        self._file_logging_enabled = is_file_logging_enabled()
         
-        # Ensure log directory exists
-        os.makedirs(log_dir, exist_ok=True)
-        
-        # Add latency JSON handler
-        self._ensure_handler()
+        # Only create log directory and handler if file logging is enabled
+        if self._file_logging_enabled:
+            os.makedirs(log_dir, exist_ok=True)
+            self._ensure_handler()
     
     def _check_handler_exists(self) -> bool:
         """
@@ -80,7 +86,12 @@ class LatencyMonitor:
         
         This method is idempotent - it only adds the handler if it doesn't exist.
         This handles the case where logger.remove() is called elsewhere (e.g., in logger_config).
+        Only creates handler if file logging is enabled.
         """
+        # Skip if file logging is disabled
+        if not self._file_logging_enabled:
+            return
+        
         # Check if handler already exists and is valid
         if self._check_handler_exists():
             return
