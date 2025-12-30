@@ -485,7 +485,15 @@ class TestCompiledDAGExecution:
 
     @pytest.mark.asyncio
     async def test_control_signals_go_to_controlbus(self):
-        """Test that CONTROL signals don't go through DAG"""
+        """Test that CONTROL signals don't go through DAG.
+        
+        CONTROL_STATE_RESET behavior:
+        1. Sends interrupt to ControlBus
+        2. Clears all DAG queues (discards pending chunks)
+        3. Does NOT pass through to stations
+        
+        So chunks queued BEFORE the CONTROL signal may be discarded.
+        """
         from vixio.core.control_bus import ControlBus
 
         dag = DAG("test")
@@ -505,8 +513,13 @@ class TestCompiledDAGExecution:
         async for chunk in compiled.run(input_stream()):
             outputs.append(chunk)
 
-        # Only 2 text chunks should be processed (CONTROL goes to ControlBus)
-        assert counter.count == 2
+        # text is queued but then cleared by CONTROL_STATE_RESET
+        # Only text2 (after interrupt) is actually processed
+        # This is correct behavior: interrupt discards pending data
+        assert counter.count == 1
+        
+        # Verify interrupt was sent
+        assert control_bus.get_current_turn_id() >= 1
 
     @pytest.mark.asyncio
     async def test_to_dict(self):

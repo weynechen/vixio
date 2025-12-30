@@ -16,7 +16,7 @@
 #   - Install: pip install vixio[quickstart]
 #
 # Usage:
-#   uvx vixio run xiaozhi-server --dashscope-key sk-xxx
+#   uvx --from "vixio[dev-qwen-streaming]" vixio run xiaozhi-server --dashscope-key sk-xxx
 
 providers:
   # VAD Provider (Local - Silero ONNX)

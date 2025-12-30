@@ -46,6 +46,7 @@ xiaozhi = [
     "PyJWT>=2.10.0",
     "aiohttp>=3.13.0",
     "aiohttp-cors>=0.8.0",
+    "numpy>=1.26.0,<2.0.0",  # for audio conversion (resample, format conversion)
 ]
 
 # ------------ gRPC providers (lightweight clients) ------------

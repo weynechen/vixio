@@ -15,7 +15,7 @@ Add voice capabilities to any Agent with a single command — no need to handle 
 
 ### 🎯 Core Advantages
 
-- **One-line startup**: `uvx vixio run xiaozhi-server --preset qwen-realtime` gives you a complete voice Agent
+- **One-line startup**: `uvx --from "vixio[dev-qwen-streaming]" vixio run xiaozhi-server --preset qwen-realtime` gives you a complete voice Agent
 - **Flexible DAG architecture**: Data flow design based on directed acyclic graph, nodes can be freely combined
 - **Three operating modes**:
   - **Pipeline** - Traditional cascade (VAD→ASR→Agent→TTS), maximum control
@@ -41,7 +41,7 @@ Get started with Vixio in just one command! Experience real-time voice conversat
 
 ```bash
 # Install and run in one step (requires DashScope API key)
-uvx vixio run xiaozhi-server \
+uvx --from "vixio[dev-qwen-streaming]" vixio run xiaozhi-server \
   --preset qwen-realtime \
   --dashscope-key sk-your-key-here
 ```
@@ -58,17 +58,17 @@ uvx vixio run xiaozhi-server \
 
 ```bash
 # Use custom prompt
-uvx vixio run xiaozhi-server \
+uvx --from "vixio[dev-qwen-streaming]" vixio run xiaozhi-server \
   --preset qwen-realtime \
   --dashscope-key sk-xxx \
   --prompt "你是一个专业的编程助手"
 
 # Use pipeline mode (more control)
-uvx vixio run xiaozhi-server \
+uvx --from "vixio[dev-qwen-streaming]" vixio run xiaozhi-server \
   --dashscope-key sk-xxx
 
 # Export template for full customization
-uvx vixio init xiaozhi-server
+uvx --from "vixio[xiaozhi]" vixio init xiaozhi-server
 cd xiaozhi-server
 # Edit .env, config.yaml, prompt.txt
 python run.py

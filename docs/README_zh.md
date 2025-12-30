@@ -15,7 +15,7 @@ Vixio 让你用一条命令就能为任何 Agent 添加语音能力，无需关�
 
 ### 🎯 核心优势
 
-- **一行代码启动**：`uvx vixio run xiaozhi-server --preset qwen-realtime` 即可拥有完整语音 Agent
+- **一行代码启动**：`uvx --from "vixio[dev-qwen-streaming]" vixio run xiaozhi-server --preset qwen-realtime` 即可拥有完整语音 Agent
 - **灵活的 DAG 架构**：基于有向无环图的数据流设计，节点可自由组合
 - **三种工作模式**：
   - **Pipeline** - 传统级联 (VAD→ASR→Agent→TTS)，最大控制力
@@ -41,7 +41,7 @@ Vixio 让你用一条命令就能为任何 Agent 添加语音能力，无需关�
 
 ```bash
 # 安装并运行（需要 DashScope API Key）
-uvx vixio run xiaozhi-server \
+uvx --from "vixio[dev-qwen-streaming]" vixio run xiaozhi-server \
   --preset qwen-realtime \
   --dashscope-key sk-your-key-here
 ```
@@ -58,17 +58,17 @@ uvx vixio run xiaozhi-server \
 
 ```bash
 # 使用自定义提示词
-uvx vixio run xiaozhi-server \
+uvx --from "vixio[dev-qwen-streaming]" vixio run xiaozhi-server \
   --preset qwen-realtime \
   --dashscope-key sk-xxx \
   --prompt "你是一个专业的编程助手"
 
 # 使用 pipeline 模式（更多控制）
-uvx vixio run xiaozhi-server \
+uvx --from "vixio[dev-qwen-streaming]" vixio run xiaozhi-server \
   --dashscope-key sk-xxx
 
 # 导出模板进行完全自定义
-uvx vixio init xiaozhi-server
+uvx --from "vixio[xiaozhi]" vixio init xiaozhi-server
 cd xiaozhi-server
 # 编辑 .env, config.yaml, prompt.txt
 python run.py
