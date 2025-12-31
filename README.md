@@ -131,6 +131,13 @@ Using end-to-end realtime models, you can achieve < 1s first response latency. H
 ```
 This mode offers the highest flexibility, but latency is 1.5-3s.
 
+## Using vixio in Your Project
+You can use it directly after installation:
+```
+pip install vixio[xiaozhi]
+```
+
+
 ## Available Components
 
 ### Transport

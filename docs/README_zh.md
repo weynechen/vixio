@@ -131,6 +131,12 @@ uv run python examples/xiaozhi/realtime_chat.py --env dev-qwen-realtime
 此模式的自由度最高，但延时为 1.5 ~ 3S 。
 注意，此模式下，需要下载模型文件。可能需要较久的启动时间。
 
+## 在你的项目中使用vixio
+直接安装后即可使用
+```
+pip install vixio[xiaozhi]
+```
+
 ## 可用组件
 
 ### 传输层（Transport）
